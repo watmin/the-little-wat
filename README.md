@@ -20,8 +20,10 @@ reproduced.
 ## Layout
 
 ```
-books/<book>/chNN-<topic>.wat   one program per chapter: its functions, then a main of checks
-probes/*.wat                    small programs that isolate one question each (repros for FINDINGS)
+books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
+books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main. Libs never load each other;
+                                    each program loads what it needs, in chapter order.
+probes/*.wat                        small programs that isolate one question each (repros for FINDINGS)
 FINDINGS.md                     the ledger: every place wat fell short, or didn't
 run.sh                          runs every chapter and reports PASS/FAIL per file
 wat-tests/, tests/, build.rs    a minimal cargo consumer, kept only to reproduce F-001 to F-003

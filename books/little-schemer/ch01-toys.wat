@@ -1,39 +1,10 @@
 ;; The Little Schemer, chapter 1 (Toys): atoms, lists, and the five primitives
-;; car, cdr, cons, null?, eq?, plus atom?.
-;;
-;; S-expressions are wat's own quoted forms (WatAST). A quoted list is a list; every
-;; other node (symbol, number, string, …) is an atom. Our own code and examples, not
-;; the book's text.
-;;
-;; The empty list cannot be written as '() in wat (FINDINGS.md, F-004), so it is built
-;; once, as the rest of a one-element list.
+;; car, cdr, cons, null?, eq?, plus atom?. The definitions live in lib/ch01-toys.wat; this
+;; program checks them. Our own code and examples, not the book's text.
 ;;
 ;; Run: wat books/little-schemer/ch01-toys.wat   (exit 0 and a final "ok" line = pass)
 
-(wat.core/defn ls/empty-list [] :- :wat::WatAST
-  (wat.core/rest (wat.core/quote (x))))
-
-(wat.core/defn ls/atom? [x :- :wat::WatAST] :- wat.type/bool
-  (wat.core/not (wat.core/= (wat.core/ast-kind x) "list")))
-
-(wat.core/defn ls/car [l :- :wat::WatAST] :- :wat::WatAST
-  (wat.core/first l))
-
-(wat.core/defn ls/cdr [l :- :wat::WatAST] :- :wat::WatAST
-  (wat.core/rest l))
-
-(wat.core/defn ls/cons [a :- :wat::WatAST
-                        l :- :wat::WatAST]
-  :- :wat::WatAST
-  (wat.core/quasiquote (~a ~@l)))
-
-(wat.core/defn ls/null? [l :- :wat::WatAST] :- wat.type/bool
-  (wat.core/empty? l))
-
-(wat.core/defn ls/eq? [a :- :wat::WatAST
-                       b :- :wat::WatAST]
-  :- wat.type/bool
-  (wat.core/= a b))
+(:wat::load-file! "lib/ch01-toys.wat")
 
 (wat.core/defn user/main [] :- wat.type/nil
   (wat.core/do

@@ -32,7 +32,7 @@ while IFS= read -r f; do
     echo "FAIL  $f  (exit $rc)"
     printf '%s\n' "$out" | sed 's/^/      /'
   fi
-done < <(find books -name '*.wat' | sort)
+done < <(find books -name '*.wat' -not -path '*/lib/*' | sort)   # lib/ files are definitions only, no main
 
 echo "---"
 echo "$pass passed, $fail failed"

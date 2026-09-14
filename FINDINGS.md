@@ -243,6 +243,26 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 - **Class:** REFUSAL.
 - **Repro:** `probes/letrec-named-fn.wat`.
 
+### C-006: letcc's escape use (early exit) ports cleanly via `Result/try`
+
+- **Where:** Seasoned Schemer ch 13–14. The book's main use of `letcc` is to abandon all
+  pending work and answer now.
+- **How:** `:wat::core::Result/try` works like Rust's `?`. An `Ok` unwraps; an `Err`
+  returns from the innermost enclosing function, which must be declared to return a
+  `Result` (`check.rs` `infer_try`). A recursive helper that returns a `Result` therefore
+  propagates an `Err` through every frame, skipping each frame's pending work. The caller
+  that matches on the `Result` is the letcc point.
+- **What happened** (2026-09-14): `probes/letcc-early-exit.wat` multiplies a vector by
+  non-tail recursion. Each frame prints its element only after its `Result/try` returns.
+  - `[2 3 4]` prints `4 3 2` and returns 24.
+  - `[2 3 0 5]` prints nothing and returns 0: the `Err` from the 0 skipped both pending
+    multiplications, and the 5 was never visited.
+- **Not covered:** Seasoned Schemer ch 19 saves continuations and re-enters them
+  (generator-style). That is not an escape and has no Clojure analogue. The wat candidates
+  are a stream or a service. Untested.
+- **Class:** CLEAN (escape use).
+- **Repro:** `probes/letcc-early-exit.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
@@ -252,6 +272,7 @@ each of these stays unverified until a repro runs against the current substrate.
 |---|---|---|---|
 | ~~Little Schemer ch 9~~ | Y combinator (anonymous recursion via self-application) | no anonymous local recursion (ITERATION-PATTERNS.md) | **overturned: Z works through a self-referential struct, see C-005** |
 | ~~Seasoned Schemer ch 12~~ | `letrec` | "NOT IN WAT" (ITERATION-PATTERNS.md) | **verified: named fn refused (R-001); let-bound self-reference fails only at runtime (F-007)** |
-| Seasoned Schemer ch 13–14 | `letcc` / call/cc | not mentioned anywhere in the docs | GAP or REFUSAL |
+| ~~Seasoned Schemer ch 13–14~~ | `letcc` / call/cc, escape use | not mentioned anywhere in the docs | **verified CLEAN via `Result/try` (C-006)** |
+| Seasoned Schemer ch 19 | re-entrant continuations (generators) | no call/cc; state lives on services | untested: stream or service |
 | Seasoned Schemer ch 15–17 | `set!`, closures carrying state | "mutation-free by construction" (CLOJURE-ROSETTA.md) | REFUSAL |
 | ~~Little Schemer throughout~~ | lists mixing atoms and lists | collections are monomorphic; `:Any` is banned | **resolved: quoted forms (`:wat::WatAST`) are the route, see C-004** |
