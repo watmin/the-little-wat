@@ -7,7 +7,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | Book | Chapters | State |
 |---|---|---|
 | The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
-| The Seasoned Schemer | 0 / 10 | next. Routes already proven: letrec via top-level defn (R-001, C-008); letcc's escape use via `Result/try` (C-006); `set!` via services (untested) |
+| The Seasoned Schemer | 10 / 10 | all pass. letrec via Y (C-012); letcc via `Result/try`, with the abandoned work measured (C-013, C-015); `set!` on Cell services (C-014); mutable, shared and cyclic lists on an Arena (C-016); generators as lazy streams (C-017); the ch 20 interpreter with a store and escaping letcc (C-018). Refused by design: Y-bang (R-002) and re-entrant continuations (R-003) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -23,6 +23,10 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-005:** there is no symbol spelling for types outside `wat::core` (e.g. `:wat::WatAST`).
 - **F-009:** a `wat.type/HashMap` constructor passes the checker and fails at runtime.
 - **F-010:** inside `wat.core/fn`, a function-typed parameter is misread as a vector literal.
+- **F-017:** `wat.core/match` misreads its `[pattern body]` arms as vector literals, so every
+  match breaks (loudly, with a misleading message).
+- **F-018:** `(wat.core/def u/x …)` defines nothing, and reports its own name as an unresolved
+  reference.
 
 **Other defects:**
 - **F-001:** every debug build panics during startup (`Option`/`Result` registered twice).
@@ -808,6 +812,29 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   `'(pear (plum fig) (kiwi))` produced **4**.
 - **Class:** CLEAN.
 - **Repro:** `books/seasoned-schemer/ch19-absconding.wat`.
+
+### C-018: an interpreter with a store gives its language what wat itself lacks
+
+- **Where:** Seasoned Schemer ch 20 (What's in Store?).
+- **How:**
+  - The store is a global Arena: a box is a node id, and `setbox` is `set-kar!`.
+  - Tables are data, `((name id) …)`, with a global table in a Cell that `define` extends.
+  - The language's closures and continuations are data too.
+  - Every `meaning` returns a `Result`. Calling a continuation returns `Err (id value)`,
+    which the `letcc` with that id catches.
+- **What happened** (2026-09-14): all 15 checks pass on the first run. They cover:
+  - `define` and `set!` on a global;
+  - a counter closure with **private mutable state**: `(c)` → 1, then 2, while a second
+    counter `d` starts at its own 1;
+  - recursion through `define`;
+  - `letcc` escaping out of a `cons` (→ 2), an outer continuation called from inside an
+    inner `letcc` (→ 5), and a `letcc` whose continuation is never called answering its
+    body.
+- **Why it matters:** `set!`, state inside closures and escaping continuations are exactly
+  what wat itself moves to services or leaves out (C-014, R-002, R-003). An interpreter
+  whose memory is one service gives all three to its guest language.
+- **Class:** CLEAN.
+- **Repro:** `books/seasoned-schemer/ch20-whats-in-store.wat`.
 
 ## Predicted, unverified
 
