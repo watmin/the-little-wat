@@ -1,0 +1,11 @@
+# Carried over from ../wat-rs/.cargo/config.toml. Cargo reads .cargo/config.toml only from
+# the invocation directory and its ancestors, so a sibling crate does not inherit wat-rs's.
+#
+# wat's evaluator recurses one Rust frame per nested form; the default 2 MiB thread stack
+# overflows on deep programs. wat-rs runs at 8 MiB, so this crate does too.
+[env]
+RUST_MIN_STACK = "8388608"  # 8 MiB
+
+# wat-rs links with mold; keep the same linker so link behaviour matches.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

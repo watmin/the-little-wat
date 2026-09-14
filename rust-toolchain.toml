@@ -1,0 +1,6 @@
+# Same pin as ../wat-rs/rust-toolchain.toml. wat is compiled here as a path dependency, so
+# a different toolchain would mean building the same crate with two compilers. Bump both
+# together.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]

@@ -1,0 +1,11 @@
+[package]
+name = "wat-friedman"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The Friedman books (The Little Schemer and its siblings) worked through in wat, to find where wat is lacking."
+
+# wat-rs is consumed exactly the way any outside project would consume it: as a sibling
+# path dependency. Nothing in this repo writes into ../wat-rs.
+[dependencies]
+wat = { path = "../wat-rs" }
