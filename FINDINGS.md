@@ -758,6 +758,57 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - The stdlib's `:wat::cache::lru-svc :- [K V]` is a generic `defservice`, so a generic
   `Cell :- [T]` may remove the duplication. **Untested.**
 
+### C-016: mutable, shared and cyclic lists work on an Arena service
+
+- **Where:** Seasoned Schemer ch 18 (We Change, Therefore We Are the Same!). The book's
+  `set-kdr` lets lists share structure and form cycles. wat's values are immutable trees,
+  and a Cell cannot hold another Cell's live Handle (R-002's rule).
+- **How:** `books/seasoned-schemer/lib/arena.wat`, one service holding a node table
+  (`HashMap`s from id to `kar` and from id to `kdr`). Integer ids are the pointers, and
+  `-1` is `()`.
+- **What happened** (2026-09-14): 17 checks pass on the first run. They cover:
+  - `add-at-end`, which copies, against `add-at-end-too`, which mutates;
+  - `same?`, decided by mutation and then restored;
+  - two lists **sharing one tail**, where growing one grows the other;
+  - `finite-lenkth` (tortoise and hare, escaping through `Result/try`), which answers `4`,
+    then `-1` once the list is made **cyclic** (`probes/arena-cycle.wat` checks the cycle
+    directly).
+- **Cost** (friction): `arena.wat` is 122 lines of code for four operations (`kons!`,
+  `kar`, `kdr`, `set-kdr!`), and every list function takes the arena explicitly, because
+  memory is a value you pass around.
+- **Class:** CLEAN, with the cost noted.
+- **Repro:** `books/seasoned-schemer/ch18-the-same.wat`.
+
+### R-003: no first-class continuations; a captured "rest of the computation" returns to its caller
+
+- **Where:** Seasoned Schemer ch 19 (Absconding with the Jewels). The book saves
+  continuations with `letcc` and re-enters them later: `toppings` rebuilds a pizza around a
+  new filling, and `get-first` / `get-next` walk leaves one at a time.
+- **What wat does instead** (all 11 ch 19 checks pass on the first run):
+  - **Continuation-passing style.** `ss/deep-k` reaches its bottom and *returns* its
+    continuation. The result is reusable: `(toppings 'cake)` → `(((cake)))`, and
+    `(toppings 'mozzarella)` → `(((mozzarella)))`.
+  - **The observable divergence.** In the book, calling the continuation inside
+    `(cons (toppings 'cake) '())` abandons the `cons`, and the answer is `(((cake)))`. A wat
+    function returns to its caller, so the same expression answers `((((cake))))`, one
+    level more. The chapter asserts wat's answer and documents the book's.
+  - **Generators** become lazy streams (C-017).
+- **Doctrine:** there is no call/cc. Escapes are `Result/try` (C-006, C-013, C-015). State
+  lives on services, and a continuation could not be service state anyway (R-002).
+- **Class:** REFUSAL.
+- **Repro:** `books/seasoned-schemer/ch19-absconding.wat`.
+
+### C-017: generators port to lazy streams, and the laziness is measured
+
+- **How:** `ss/leaves` turns a nested list into a `(:wat::stream::Stream :- [:wat::WatAST])`
+  of its leaves, using `:wat::stream::lazy` / `cons` / `empty`. `get-first` and
+  `two-in-a-row*?` pull from it with `:wat::stream::next`.
+- **Measured:** a Counter service counts leaf work. Asking for the first leaf of
+  `'(((pear)) plum (fig (kiwi)))` produced exactly **1** leaf. A full walk of
+  `'(pear (plum fig) (kiwi))` produced **4**.
+- **Class:** CLEAN.
+- **Repro:** `books/seasoned-schemer/ch19-absconding.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

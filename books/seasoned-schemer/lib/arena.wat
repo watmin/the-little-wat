@@ -1,9 +1,10 @@
-;; The Seasoned Schemer, ch 18 (mutable lists): an Arena. The book's konses have a kdr that
-;; set-kdr can change in place, so lists can share structure and even form cycles. wat's
-;; values are immutable trees, and a Cell cannot hold another Cell's live Handle (FINDINGS.md,
-;; R-002's rule). So memory is modelled the way wat allows: ONE service holding a table of
-;; nodes, where a pointer is an integer id, -1 is the empty list, and set-kdr! rewrites one
-;; table entry. Needs nothing else loaded. No main here. Keyword spelling throughout.
+;; The Seasoned Schemer, ch 18 and 20 (mutable memory): an Arena. The book's konses have a kdr
+;; that set-kdr can change in place, so lists can share structure and even form cycles; ch 20's
+;; boxes change their contents with setbox. wat's values are immutable trees, and a Cell cannot
+;; hold another Cell's live Handle (FINDINGS.md, R-002's rule). So memory is modelled the way
+;; wat allows: ONE service holding a table of nodes, where a pointer is an integer id, -1 is
+;; the empty list, and set-kar! / set-kdr! rewrite one table entry. Needs nothing else
+;; loaded. No main here. Keyword spelling throughout.
 
 (:wat::core::defsurface :ss::Arena :nature :wat::kernel::Peer
   :messages
@@ -22,6 +23,11 @@
      :Ok               [value <- :wat::core::i64]
      :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
      :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
+   (:wat::core::defrecord :ss::Arena::SetKarRequest [id <- :wat::core::i64  kar <- :wat::WatAST])
+   (:wat::core::defenum :ss::Arena::SetKarResponse :wat::enum::Pure
+     :Ok               [id <- :wat::core::i64]
+     :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
+     :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
    (:wat::core::defrecord :ss::Arena::SetKdrRequest [id <- :wat::core::i64  kdr <- :wat::core::i64])
    (:wat::core::defenum :ss::Arena::SetKdrResponse :wat::enum::Pure
      :Ok               [id <- :wat::core::i64]
@@ -31,6 +37,7 @@
   [(kons    [self <- :ss::Arena  req <- :ss::Arena::KonsRequest]   -> :ss::Arena::KonsResponse   :max-request-bytes 524288)
    (kar     [self <- :ss::Arena  req <- :ss::Arena::KarRequest]    -> :ss::Arena::KarResponse    :max-request-bytes 524288)
    (kdr     [self <- :ss::Arena  req <- :ss::Arena::KdrRequest]    -> :ss::Arena::KdrResponse    :max-request-bytes 524288)
+   (set-kar [self <- :ss::Arena  req <- :ss::Arena::SetKarRequest] -> :ss::Arena::SetKarResponse :max-request-bytes 524288)
    (set-kdr [self <- :ss::Arena  req <- :ss::Arena::SetKdrRequest] -> :ss::Arena::SetKdrResponse :max-request-bytes 524288)])
 
 (:wat::service::defservice :ss::arena
@@ -63,6 +70,16 @@
                                                      (:ss::Arena::KdrRequest/id req))
                    [:wat::core::Option.Some {:value v} v]
                    [:wat::core::Option.None {} (:wat::kernel::assertion-failed! :message "arena kdr: no such node")])})}))
+   (set-kar [s ctx req]
+     (:wat::core::let [r (:ss::arena::State/durable s)]
+       (:wat::service::Outcome.Reply
+         {:state (:ss::arena::State :durable
+                   (:ss::arena::Record :next (:ss::arena::Record/next r)
+                                       :kars (:wat::core::assoc (:ss::arena::Record/kars r)
+                                                                (:ss::Arena::SetKarRequest/id req)
+                                                                (:ss::Arena::SetKarRequest/kar req))
+                                       :kdrs (:ss::arena::Record/kdrs r)))
+          :reply (:ss::Arena::SetKarResponse.Ok {:id (:ss::Arena::SetKarRequest/id req)})})))
    (set-kdr [s ctx req]
      (:wat::core::let [r (:ss::arena::State/durable s)]
        (:wat::service::Outcome.Reply
@@ -122,6 +139,18 @@
         [:ss::Arena::KdrResponse.Ok {:value v} v]
         [:ss::Arena::KdrResponse.RequestTooLarge {:bytes b :cap cp} (:wat::kernel::assertion-failed! :message "arena kdr: too large")]
         [:ss::Arena::KdrResponse.RequestMalformed {:path mp :expected me :got mg} (:wat::kernel::assertion-failed! :message "arena kdr: malformed")])]
+    [:wat::kernel::RecvOutcome.Lost {:cause x} (:wat::kernel::assertion-failed! :message (:wat::kernel::LociDiedError/message x))]
+    [:wat::kernel::RecvOutcome.Stopped {} (:wat::kernel::assertion-failed! :message "arena: stopped")]
+    [:wat::kernel::RecvOutcome.Closed {} (:wat::kernel::assertion-failed! :message "arena: closed")]))
+
+;; set-kar!: replace node id's kar; answers id
+(:wat::core::defn :ss::set-kar! [a <- :ss::ArenaRef id <- :wat::core::i64 kar <- :wat::WatAST] -> :wat::core::i64
+  (:wat::core::match (:ss::Arena/set-kar (:ss::ArenaRef/peer a) (:ss::Arena::SetKarRequest :id id :kar kar))
+    [:wat::kernel::RecvOutcome.Message {:msg m}
+      (:wat::core::match m
+        [:ss::Arena::SetKarResponse.Ok {:id i} i]
+        [:ss::Arena::SetKarResponse.RequestTooLarge {:bytes b :cap cp} (:wat::kernel::assertion-failed! :message "arena set-kar: too large")]
+        [:ss::Arena::SetKarResponse.RequestMalformed {:path mp :expected me :got mg} (:wat::kernel::assertion-failed! :message "arena set-kar: malformed")])]
     [:wat::kernel::RecvOutcome.Lost {:cause x} (:wat::kernel::assertion-failed! :message (:wat::kernel::LociDiedError/message x))]
     [:wat::kernel::RecvOutcome.Stopped {} (:wat::kernel::assertion-failed! :message "arena: stopped")]
     [:wat::kernel::RecvOutcome.Closed {} (:wat::kernel::assertion-failed! :message "arena: closed")]))
