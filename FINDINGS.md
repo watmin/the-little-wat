@@ -157,7 +157,10 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   - `(wat.core/quote ())` is refused.
   - `(wat.core/quote (a () b))` is refused. So is `()` anywhere inside symbol-quoted data.
   - `(:wat::core::quote ())`, the keyword spelling, **works**: `ast-kind` is `"list"` and
-    `empty?` is `true`. So only the Clojure spelling of quote is affected.
+    `empty?` is `true`.
+  - `(:wat::core::quote (fig ()))`, with `()` **nested** in keyword-spelled quote, also
+    works: 2 elements, the second a `"list"` (`probes/quote-empty-keyword-nested.wat`).
+  - So only the Clojure spelling of quote is affected, top level and nested alike.
 - **Root cause** (partly read):
   - `infer_quote` (`src/intrinsic/special/quote.rs:97–99`) states its argument "is DATA, not an
     expression — the type checker does not recurse into it."
@@ -299,6 +302,17 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   diagnostic has no file or line.
 - **Here:** the book's `<` is named `ls/less?`.
 - **Repro:** `probes/name-lt.wat` (refused), `probes/name-gt.wat` (works).
+
+### C-008: mutually recursive top-level functions work, including forward references
+
+- **Where:** Little Schemer ch 5. `eqlist?` and `equal?` call each other.
+- **What happened** (2026-09-14): `ls/eqlist?` is defined first and calls `ls/equal?`,
+  which is defined after it; `ls/equal?` calls back into `ls/eqlist?`. Both check and run.
+  All 14 ch 5 checks pass, including equality of nested lists that contain numbers.
+- **Why it matters:** this completes R-001's canonical route. With no `letrec` or `letfn`,
+  top-level `defn`s carry both self-recursion and mutual recursion, in any order.
+- **Class:** CLEAN.
+- **Repro:** `books/little-schemer/lib/ch05-full-of-stars.wat`.
 
 ## Predicted, unverified
 
