@@ -296,12 +296,44 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   (`crates/wat-reader/src/parser.rs:201`), not the user's file. The program loaded two
   files, and nothing said which one held byte 1015; it turned out to be the entry file.
   This is the same class as F-006.
-- **Why:** arc 109 retired `Name<T>` type syntax. The lexer still refuses any `<` after name
-  characters, to catch the old spelling, which also catches legitimate names.
+- **Why:** arc 109 retired `Name<T>` type syntax and turbofish (`name::<T>`). The lexer
+  still refuses any `<` after name characters, to catch the old spellings, which also
+  catches legitimate names. The builder's diagnosis, 2026-09-14: this is very likely
+  fallout from making turbofish illegal.
 - **Class:** GAP, in two parts: the lexer rule is broader than its purpose, and the
   diagnostic has no file or line.
 - **Here:** the book's `<` is named `ls/less?`.
 - **Repro:** `probes/name-lt.wat` (refused), `probes/name-gt.wat` (works).
+
+### F-009: two collection-constructor spellings pass the checker and fail at runtime
+
+- **Where:** generic ("data parametric") functions. The builder's example, 2026-09-14:
+  ```
+  (wat.core/defn u/kv-fn :- [K V] [k :- K  v :- V] :- (wat.type/HashMap :- [K V])
+    (wat.type/HashMap :- [K V]))   ;; empty typed hash-map
+  ```
+- **What happened** (wat-rs `a3218644d`). Every case passes startup (the type check). Results:
+
+  | constructor in the body | runtime |
+  |---|---|
+  | `(wat.type/HashMap :- [K V])` (the builder's example) | `unknown function: :wat::type::HashMap` (`probes/generic-kv-fn.wat`) |
+  | `(wat.type/HashMap :- [wat.type/keyword wat.type/i64])`, no generics | `unknown function: :wat::type::HashMap` (`probes/ctor-wat-type-concrete.wat`) |
+  | `(:wat::core::HashMap :- [K V])`, the keyword spelling, over the fn's type variables | `malformed :wat::core::HashMap form: first two arguments must be type keywords or (Head :- [args]) type forms (K, V); first argument is not one` (`probes/generic-kv-fn-kwctor.wat`) |
+  | `(:wat::core::HashMap :- [:wat::core::keyword :wat::core::i64])`, keyword, concrete | **works**: `0` (`probes/ctor-kw-concrete.wat`) |
+  | `{}` typed by the fn's return annotation, inside the generic fn | **works**: `0`, `true` (`probes/generic-kv-fn-literal.wat`) |
+
+- **Two separate defects:**
+  1. `wat.type/X` in **constructor** (value) position is not callable at runtime. In type
+     position the same spelling resolves (F-005: `wat.type/X` means `:wat::core::X`). The
+     runtime looks up `:wat::type::HashMap` literally.
+  2. A constructor applied to the enclosing function's **type variables** fails at runtime.
+     `K` and `V` are not concrete there, and the constructor needs them to be.
+- **Class:** GAP ×2 (checker/runtime disagreement, like F-007). ⚠ Relay to the codemod
+  work: respelling `:wat::core::HashMap` constructors as `wat.type/HashMap` turns working
+  code into failures that only show up at runtime; the startup check stays clean.
+- **Workaround:** an empty literal (`{}`, `[]`, `#{}`) typed by the surrounding
+  annotation, as in ch 4's `[]` and `probes/generic-kv-fn-literal.wat`.
+- **Repro:** the five probes named in the table.
 
 ### C-008: mutually recursive top-level functions work, including forward references
 
