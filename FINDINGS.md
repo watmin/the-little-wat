@@ -12,7 +12,12 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 
 ### Relay to wat-rs
 
-**Codemod hazards** (for the Clojure/EDN syntax migration):
+**Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
+- **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
+  arity nor argument types. Definitions still are. Converting to the Clojure/EDN spelling
+  silently turns off call checking everywhere.
+- **F-012:** `(wat/load-file! …)` is a silent no-op: no load, no error, even for a missing
+  file.
 - **F-003:** a `wat.test/deftest` is silently skipped (zero tests, still green).
 - **F-004:** `()` inside `wat.core/quote` is refused; the keyword quote is fine.
 - **F-005:** there is no symbol spelling for types outside `wat::core` (e.g. `:wat::WatAST`).
@@ -28,6 +33,12 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-008:** a `<` in a name is a lex error (fallout from retiring turbofish).
 - **F-009 (second defect):** a constructor applied to a function's own type variables fails
   at runtime.
+- **F-011:** a failing `assert-eq` on quoted data shows `<WatAST>` for both values.
+- **F-013:** the reader does not implement `#_` (EDN's discard).
+- **F-015:** `defn` with a docstring is refused. When the fn is called, the only error is
+  "unresolved" at the call site.
+- **F-016:** a flat Clojure `cond` crashes inside the cond macro, with no hint about the
+  clause syntax.
 
 ## Classes
 
@@ -428,6 +439,153 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   top-level `defn`s carry both self-recursion and mutual recursion, in any order.
 - **Class:** CLEAN.
 - **Repro:** `books/little-schemer/lib/ch05-full-of-stars.wat`.
+
+---
+
+## Round 2: Clojure idioms and debugging ergonomics (`probes/annoy/`, 2026-09-14)
+
+The things that were annoying while writing Little Schemer, now tested. All against wat-rs
+`a3218644d`.
+
+### F-011: a failing `assert-eq` on quoted data shows `<WatAST>` for both values
+
+- **What happened:** `probes/annoy/assert-eq-watast-fail.wat` compares `'(pear (plum 1))`
+  with `'(pear (fig 1))` and fails as it should (exit 2), but reports
+  `:actual "<WatAST>" :expected "<WatAST>"`. The failure names the file and line, and
+  hides both values.
+- **Why it matters:** `println` renders the same value readably, as `(pear (plum 1))`
+  (`probes/annoy/println-watast.wat`), so the renderer `assert-eq` uses is the gap.
+  Debugging S-expression code, and macros, which are WatAST all the way down, is blind at
+  exactly the moment it matters.
+- **Scope:** specific to quoted data. The same failure on Vectors renders both sides
+  (`"[1, 2, 3]"` vs `"[1, 2, 4]"`, `probes/annoy/assert-eq-vector-fail.wat`), and so it
+  does on `i64` (`"42"` vs `"43"`, C-002).
+- **Class:** GAP (diagnostics).
+- **Repro:** `probes/annoy/assert-eq-watast-fail.wat`.
+
+### F-012: the Clojure-spelled `(wat/load-file! …)` is a silent no-op
+
+- **What happened:**
+  - `probes/annoy/load-clj-missing.wat` loads a file that **does not exist** with
+    `(wat/load-file! "no-such-file.wat")`. It exits 0 and prints `"ran"`: no error.
+  - `probes/annoy/load-clj.wat` loads a real library that way. It then fails only at a
+    later call: `unresolved reference :u::twice`.
+  - The keyword spelling `(:wat::load-file! …)` loads correctly, and is idempotent
+    (C-011).
+- **Reading:** the symbol spelling resolves as a name, so nothing complains, but the load
+  pass recognises only the keyword head. The same pattern as F-003.
+- **Class:** GAP. ⚠ **Codemod hazard, silent:** converting `:wat::load-file!` to
+  `wat/load-file!` drops every load without a word at the load site.
+- **Repro:** `probes/annoy/load-clj-missing.wat` (exit 0), `probes/annoy/load-clj.wat`.
+
+### F-013: the reader does not implement `#_` (EDN's discard)
+
+- **What happened:**
+  - `'(a #_b c)` prints back as `(a #_b c)`. `#_b` is kept as one token rather than
+    discarding `b` (`probes/annoy/discard-inside-quote.wat`).
+  - `(println #_(anything) 1)` therefore passes three arguments, and dies at runtime:
+    `println: expected 1 arguments, got 3` (`probes/annoy/discard-reader.wat`).
+- **Why it matters:** `#_` is how Clojure and EDN users comment out a form in place. The
+  migration is to Clojure/EDN.
+- **Class:** GAP (EDN conformance).
+- **Repro:** the two probes above.
+
+### F-015: `defn` with a docstring is refused, and when the fn is called the error points at the call
+
+- **What happened:** `(wat.core/defn u/add1 "adds one" [x :- wat.type/i64] …)`:
+  - **Never called** (`probes/annoy/docstring-defn-uncalled.wat`): a clear startup error at
+    the `defn`, though it says `fn`, not `defn`:
+    `malformed :wat::core::fn form: fn signature: expected a vector [name <- :T ...] as the args-vector; got string`.
+  - **Called**, the usual case (`probes/annoy/docstring-defn.wat`): the only error is
+    `unresolved reference :u::add1` **at the call site**. The resolver runs before the
+    checker, so the real cause, at the definition, is never shown.
+- **Class:** GAP. Docstrings are idiomatic Clojure, and the diagnostic order misleads.
+- **Repro:** the two probes above.
+
+### F-016: a flat Clojure `cond` crashes inside the cond macro's implementation
+
+- **What happened:** `(wat.core/cond test1 "a" test2 "b" :else "c")`, Clojure's shape,
+  fails at startup with the macro's internals: `macro :wat::core::cond — program body eval
+  failed` → `macro_eval: runtime::eval failed` → `malformed :wat::core::rest form: cannot
+  take rest of empty Vec`, located in `wat/core.wat:1488`.
+- **Why it matters:** wat's `cond` takes parenthesised clauses, `((test) expr)`, unlike
+  Clojure. The error tells the user nothing about that; it reports an empty-`rest` inside
+  the stdlib.
+- **Class:** GAP (diagnostic). Also a divergence from Clojure.
+- **Repro:** `probes/annoy/cond-flat.wat`.
+
+### F-014: calls in the Clojure/EDN spelling are not type-checked at startup; definitions are
+
+- **Where:** every chapter. All ten Little Schemer chapters are written in this spelling,
+  so **none of their call sites was checked at startup**. They pass because the code is
+  correct and the runtime assertions confirm it, not because a checker vetted the calls.
+- **What happened** (each row is a probe under `probes/annoy/`):
+
+  | same mistake | keyword spelling | Clojure/EDN spelling |
+  |---|---|---|
+  | wrong arity, user fn `(add1 1 2)` | startup `ArityMismatch` (`arity-user-fn-kw.wat`) | runtime only (`arity-user-fn.wat`) |
+  | wrong arity, core fn `(length [1 2] [3])` | startup (`arity-core-fn-kw.wat`) | runtime only (`arity-core-fn.wat`) |
+  | wrong arity, `(println 1 2)` | not probed | runtime only (`println-arity.wat`) |
+  | wrong argument type, `(add1 "pear")` | startup `TypeMismatch`: `parameter #1 expects :wat::core::i64; got :wat::core::String` (`argtype-user-fn-kw.wat`) | runtime only, and not at the call: `"pear"` flows into `add1` and fails inside `+` (`argtype-user-fn-clj.wat`) |
+  | wrong arity, a let-bound lambda `(f 1 2)` | startup, but only when **both** `let` and `fn` are keyword-spelled (`arity-local-lambda-kwlet-kwfn.wat`) | runtime only if **either** the `let` or the `fn` is Clojure-spelled (`arity-local-lambda-cljlet-kwfn.wat`, `-kwlet-cljfn.wat`, `arity-local-lambda-clj.wat`) |
+
+- **What IS still checked at startup**, Clojure spelling included:
+  - A `wat.core/defn` **body**: a keyword-spelled bad call inside it is caught
+    (`clj-defn-body-kwcall.wat`).
+  - Its **signature**: a keyword-spelled call to it with a wrong type is caught
+    (`kwcall-to-clj-defn.wat`).
+  - Its **return type**: `body produces :wat::core::String; signature declares
+    :wat::core::i64` (`clj-defn-bad-return.wat`).
+  - That namespaced names **exist** (the arc 251 resolver).
+- **Mechanism** (read in wat-rs source this session):
+  - `infer_list` dispatches a call by name only when its head is a **keyword**
+    (`src/check.rs:2623`).
+  - A symbol head falls to the value-head path (`src/check.rs:6214–6272`), which infers the
+    head as a value. It checks arity and argument types (lines 6247–6269) only if the head
+    infers to a `Fn` type.
+  - Otherwise it returns a fresh type and skips every check. Both branches are marked
+    `silent-by-intent`, assuming the failure was "already reported elsewhere" (lines 6226
+    and 6242).
+  - For a named function nothing reports it, and the symbol is never mapped to the
+    function's declared signature. For local lambdas, a Clojure-spelled `let` or `fn`
+    evidently does not carry the `Fn` type that path needs.
+- **F-007 is the same path**, seen for names that do not exist at all.
+- **Diagnostics:** the runtime errors for local lambdas are located at
+  `src/runtime.rs:10746`, not the user's file (the F-006 class).
+- **A correction, for the record:** from reading lines 6214–6272 I predicted the
+  Clojure-spelled local lambda would be caught at startup. It was not. The 2×2 of `let` and
+  `fn` spellings shows why.
+- **Class:** GAP, and the most serious in this ledger. ⚠ **Relay first:** converting the
+  corpus to the Clojure/EDN spelling would silently turn off startup checking of calls
+  everywhere, while every run still reports a clean startup. A likely fix: resolve a
+  symbol head to its keyword path (`u/add1` → `:u::add1`) before the keyword dispatch, and
+  give `wat.core/let` and `wat.core/fn` the types their keyword twins produce.
+
+### Friction: Clojure core forms that do not exist
+
+- `when` and `if-let`: both are `unresolved reference` (`probes/annoy/when.wat`,
+  `probes/annoy/if-let.wat`).
+- `(:a {:a 1})` returns `#wat.core/Option.Some {:value 1}` where Clojure returns `1`
+  (`probes/annoy/keyword-as-fn.wat`). This is a deliberate divergence (wat has no nil and
+  no nil-punning), not a bug. It is still a surprise for a Clojure reader.
+- A symbol-named `typealias` is refused: `name must be a keyword; got symbol`
+  (`probes/annoy/typealias-clj.wat`). This is F-005's gap (no symbol names for types),
+  reached from the declaration side. The keyword name works (C-011).
+
+### C-011: `'x`, `'()`, keyword-named typealias and double loads all work
+
+- **`'x` works, including `'()`.** `(= 'pear (wat.core/quote pear))` is `true`, and
+  `'(fig ())` has 2 elements with a `"list"` second (`probes/annoy/quote-shorthand.wat`,
+  `probes/annoy/quote-shorthand-empty.wat`). **This is the ergonomic workaround for
+  F-004.** The shorthand takes the keyword-quote path, so `'()` is fine where
+  `(wat.core/quote ())` is refused.
+- **A keyword-named typealias inside the Clojure form works.**
+  `(wat.core/typealias :u::Sexp :wat::WatAST)`, then `:- :u::Sexp`
+  (`probes/annoy/typealias-kwname.wat`).
+- **Loading the same library twice is idempotent** (`probes/annoy/double-load.wat`: `42`).
+  So a lib can load its own dependencies.
+- Variadic `+` works (`(wat.core/+ 1 2 3)` = `6`), and `println` renders WatAST readably.
+- **Class:** CLEAN. The chapters could be much shorter with `'` and a `Sexp` alias.
 
 ## Predicted, unverified
 
