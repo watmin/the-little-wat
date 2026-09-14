@@ -335,6 +335,29 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   annotation, as in ch 4's `[]` and `probes/generic-kv-fn-literal.wat`.
 - **Repro:** the five probes named in the table.
 
+### C-009: first-class functions are clean: values, closures, currying, multi-argument types
+
+- **Where:** Little Schemer ch 8 (Lambda the Ultimate): functions passed in, returned,
+  and used as collectors.
+- **What happened** (2026-09-14). All in the Clojure/EDN spelling; each probe exits 0:
+  - A two-argument function type, `[:wat::WatAST :wat::WatAST :-> wat.type/bool]`, as a
+    parameter and called with `(col x y)` (`probes/fn-type-two-args.wat`). Live wat-rs uses
+    the same shape, e.g. `[U T :-> U]`.
+  - A named function passed as a value by its symbol, `(u/apply2 u/same? …)`
+    (`probes/named-fn-as-value.wat`).
+  - `(wat.core/fn [x :- T] :- R …)` returning a closure over the enclosing argument, the
+    curried `eq?-c`, prints `true` then `false` (`probes/curried-closure.wat`).
+  - Calling a call's result directly, `((u/eq?-c 'pear) 'pear)`
+    (`probes/call-result-as-head.wat`).
+  - `&` is legal inside a name, `u/a&b`, although a bare `&` marks rest arguments
+    (`probes/name-ampersand.wat`).
+- **In use:** all 20 checks of Little Schemer ch 8 pass on the first run. They include
+  collectors generic over their result type `T`, closures nested two deep inside generic
+  functions, named functions returned from `cond` arms, and `quasiquote` building a result
+  inside a collector.
+- **Class:** CLEAN.
+- **Repro:** the probes above, and `books/little-schemer/ch08-lambda-the-ultimate.wat`.
+
 ### C-008: mutually recursive top-level functions work, including forward references
 
 - **Where:** Little Schemer ch 5. `eqlist?` and `equal?` call each other.
