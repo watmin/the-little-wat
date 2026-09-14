@@ -2,6 +2,33 @@
 
 Every place wat fell short of what a chapter needs, and every place it didn't.
 
+## Status (2026-09-14, wat-rs `a3218644d`)
+
+| Book | Chapters | State |
+|---|---|---|
+| The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
+| The Seasoned Schemer | 0 / 10 | next. Routes already proven: letrec via top-level defn (R-001, C-008); letcc's escape use via `Result/try` (C-006); `set!` via services (untested) |
+| The others | — | not started; see README |
+
+### Relay to wat-rs
+
+**Codemod hazards** (for the Clojure/EDN syntax migration):
+- **F-003:** a `wat.test/deftest` is silently skipped (zero tests, still green).
+- **F-004:** `()` inside `wat.core/quote` is refused; the keyword quote is fine.
+- **F-005:** there is no symbol spelling for types outside `wat::core` (e.g. `:wat::WatAST`).
+- **F-009:** a `wat.type/HashMap` constructor passes the checker and fails at runtime.
+- **F-010:** inside `wat.core/fn`, a function-typed parameter is misread as a vector literal.
+
+**Other defects:**
+- **F-001:** every debug build panics during startup (`Option`/`Result` registered twice).
+- **F-002:** a newly added `wat-tests/` file is never discovered (a false green).
+- **F-006 / F-008:** some diagnostics point into wat-rs's own Rust source, with no user
+  file or line.
+- **F-007:** an unknown *bare* call name passes the checker and fails only at runtime.
+- **F-008:** a `<` in a name is a lex error (fallout from retiring turbofish).
+- **F-009 (second defect):** a constructor applied to a function's own type variables fails
+  at runtime.
+
 ## Classes
 
 - **GAP**: wat cannot express something it arguably should. A candidate for wat-rs work.

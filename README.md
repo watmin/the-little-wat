@@ -17,6 +17,9 @@ Each book leans on a different part of a language:
 The code here is our own implementation of what each chapter builds. The books' text is not
 reproduced.
 
+**Status:** The Little Schemer is complete, and all 10 chapters pass. FINDINGS.md opens with a
+status table and the list of findings to relay to wat-rs.
+
 After the Friedman books, the queue of further acceptance tests (Clojure Koans, Make-a-Lisp,
 SICP, Advent of Code, PAIP, and a slice of a real packet detector) is in [NEXT.md](NEXT.md).
 
