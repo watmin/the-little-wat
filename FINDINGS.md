@@ -511,7 +511,10 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Why it matters:** wat's `cond` takes parenthesised clauses, `((test) expr)`, unlike
   Clojure. The error tells the user nothing about that; it reports an empty-`rest` inside
   the stdlib.
-- **Class:** GAP (diagnostic). Also a divergence from Clojure.
+- **Builder, 2026-09-14:** wat's `cond` is a known point. It will become like wat's
+  `match`: a vector of `[truthy user-form]` pairs. The clause shape is an intended
+  divergence ("clojure dialect != clojure impl"), so what stands here is the diagnostic.
+- **Class:** GAP, for the diagnostic only.
 - **Repro:** `probes/annoy/cond-flat.wat`.
 
 ### F-014: calls in the Clojure/EDN spelling are not type-checked at startup; definitions are
