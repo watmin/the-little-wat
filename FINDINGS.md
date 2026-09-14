@@ -358,6 +358,39 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 - **Class:** CLEAN.
 - **Repro:** the probes above, and `books/little-schemer/ch08-lambda-the-ultimate.wat`.
 
+### F-010: in `wat.core/fn`, a function-typed parameter is misread as a vector literal
+
+- **Where:** Little Schemer ch 9. Y's argument is a lambda that takes a function; so is
+  any Clojure-spelled lambda with a function parameter.
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/fn-typed-param-clj.wat` is
+  refused at startup, at the bracketed type (line 5, col 48):
+  > `:wat::core::vec: parameter #4 expects :wat::core::keyword; got (:wat::core::Vector :- [:wat::core::keyword])`
+  with a remedy about renaming the retired `:wat::core::vec`.
+- **Controls:**
+  - The same lambda as `(:wat::core::fn [f <- [:wat::core::i64 :-> :wat::core::i64]] …)`
+    works and prints `2` (`probes/fn-typed-param-kw.wat`).
+  - A function-typed parameter in `wat.core/defn` works (ch 8's `test? :- [...]`).
+- **Reading** (inferred from the message): inside `wat.core/fn`'s parameter vector, the
+  bracketed function type `[A :-> B]` is treated as a vector-literal expression and routed
+  to the retired `:wat::core::vec`. The diagnostic names a verb the user never wrote.
+- **Class:** GAP, in the syntax-migration surface. ⚠ Relay to the codemod work: converting
+  `:wat::core::fn` to `wat.core/fn` breaks every lambda that takes a function. The failure
+  is loud, at startup.
+- **Here:** lambdas with a function-typed parameter use the keyword spelling.
+- **Repro:** `probes/fn-typed-param-clj.wat` (refused), `probes/fn-typed-param-kw.wat` (works).
+
+### C-010: a struct that is generic and self-referential works, so Y is polymorphic
+
+- **What happened** (2026-09-14): `probes/y-generic-kwfn.wat` declares
+  `(:wat::core::defstruct :u::Knot :- [A B] [unroll <- [(:u::Knot :- [A B]) :-> [A :-> B]]])`
+  and a `(wat.core/defn u/Y :- [A B] …)` over it. The same `Y` computes:
+  - `length` of `'(pear plum fig)` = `3` (list → `i64`)
+  - `5!` = `120` (`i64` → `i64`)
+- This extends C-005, which was Z at one concrete type, to a polymorphic Y.
+- **Class:** CLEAN. (The first attempt, `probes/y-generic.wat`, hit F-010 in its lambdas,
+  not in the struct.)
+- **Repro:** `probes/y-generic-kwfn.wat`.
+
 ### C-008: mutually recursive top-level functions work, including forward references
 
 - **Where:** Little Schemer ch 5. `eqlist?` and `equal?` call each other.
