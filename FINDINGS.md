@@ -700,6 +700,36 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   points at the definition as if it were a reference.
 - **Repro:** `probes/cell-global-def-clj.wat`.
 
+### R-002: a function cannot be a service's durable state or ride in a request, so Y-bang does not port
+
+- **Where:** Seasoned Schemer ch 16 (Ready, Set, Bang!) derives Y-bang: recursion by
+  `set!`-ing a name to a function that calls through that same name. In wat that means a
+  service holding a function, and replacing it after the service starts.
+- **What happened** (2026-09-14, wat-rs `a3218644d`). Every attempt is refused at startup:
+  - **A `Pure` response enum holding a function**
+    (`probes/service-fn-state.wat`):
+    > `containment rule (arc 293.W.2b): :wat::enum::Pure enum ":u::FnCell::GetResponse" may only hold pure variant fields — variant "Ok" field "value" has impure type "[:wat::WatAST :-> :wat::core::i64]", which cannot be reconstructed from EDN bytes across an address-space boundary. Declare the enum :wat::enum::Impure if it must hold a live resource (it then stays in shared memory and never crosses).`
+  - **With that enum made `Impure`, the durable state itself**
+    (`probes/service-fn-state-impure.wat`):
+    > `containment rule (arc 293.W): pure aggregate ":u::fncell::Record" may only hold pure fields — field "f" has impure (struct) type "[:wat::WatAST :-> :wat::core::i64]". A struct cannot be reconstructed from EDN bytes across a comms boundary; a record or holon holding a struct field could never cross — it must not exist.`
+  - **A request record carrying a function**: the same rule, on
+    `:u::FnBox::PutRequest` (`probes/service-fn-put.wat`).
+- **Doctrine:** the containment rule (arc 293.W). Durable state and request records must
+  be rebuildable from EDN bytes, because a service may run in another process. These are
+  the most precise diagnostics in this ledger: each names the rule, the reason, and a way
+  out. Their locations, though, are `src/check.rs:15104` and `:15086`, not the user's file
+  (the F-006 class).
+- **Open, untested:**
+  - `defservice`'s `:ephemeral` fields "never cross" (`wat/service.wat:175`). They live in
+    the `State` struct beside the pure `Record` (`:761`), and need an `:init` clause
+    (`:613`). A function known at start might live there.
+  - A function supplied *later* still has no request to ride in, unless a request can be
+    an `Impure` enum.
+- **Routes:** recursion without names is Y (C-010). Memo tables and other data state are
+  Cells (C-014).
+- **Class:** REFUSAL (principled).
+- **Repro:** the three probes above.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
