@@ -590,6 +590,34 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - Variadic `+` works (`(wat.core/+ 1 2 3)` = `6`), and `println` renders WatAST readably.
 - **Class:** CLEAN. The chapters could be much shorter with `'` and a `Sexp` alias.
 
+---
+
+## The Seasoned Schemer
+
+### C-012: letrec's job ports via Y, including curried two-argument helpers
+
+- **Where:** Seasoned Schemer ch 12 (Take Cover). The book uses letrec to hide a recursive
+  helper that closes over an argument that never changes.
+- **What happened** (2026-09-14): all 10 checks pass on the first run.
+  - `multirember`, `member?` and `union` each hide a helper closed over `a` or `set2`.
+    `ls/Y` (Little Schemer ch 9) ties the recursion, and no name refers to itself.
+  - `two-in-a-row?` and `sum-of-prefixes` have two-argument helpers, so they are curried,
+    and Y's result type `B` is itself a function type (`[lat :-> bool]`, `[tup :-> tup]`).
+  - The top-level-helper version (R-001's canonical route) agrees with the Y version.
+- **Class:** CLEAN. This extends C-010: Y works when instantiated with a function type too.
+- **Repro:** `books/seasoned-schemer/ch12-take-cover.wat`.
+
+### Friction: without letrec or letfn, a hidden helper costs its full type, written twice
+
+- The Y version of `ss/sum-of-prefixes` writes out its helper's type
+  `[:wat::core::i64 :-> [(:wat::core::Vector :- [:wat::core::i64]) :-> (:wat::core::Vector :- [:wat::core::i64])]]`
+  twice, once for the Y lambda's parameter and once for its return, plus the inner
+  lambdas' own types. The ch 11 top-level version of the same function needs none of that.
+- A `letfn` whose local recursion is type-inferred would bring this back to the book's size.
+  Whether to add one is the builder's call; this is the cost that call weighs.
+- **Repro:** `books/seasoned-schemer/lib/ch12-take-cover.wat` against
+  `lib/ch11-welcome-back.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
