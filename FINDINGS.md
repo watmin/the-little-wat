@@ -176,6 +176,73 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 - **Repro:** `probes/quote-empty-symbol.wat` and `probes/quote-empty-nested.wat` (refused);
   `probes/quote-empty-keyword.wat` (works).
 
+### C-005: the Y combinator works (Z, typed through a self-referential struct)
+
+- **Where:** Little Schemer ch 9 derives Y; the applicative-order form is Z.
+- **What happened** (2026-09-14): `probes/z-combinator.wat` exits 0 and prints `120`,
+  factorial of 5 through Z. No function in it refers to itself by name.
+- **How:** `(:wat::core::defstruct :u::Knot [unroll <- [:u::Knot :-> [i64 :-> i64]]])`
+  is a struct whose only field is a function that takes the struct itself. This is the
+  standard typed stand-in for self-application (Haskell: `newtype Mu a = In (Mu a -> a)`).
+  wat accepts the self-referential type, function-typed fields, closures and higher-order
+  calls.
+- The textbook `(lambda (x) (x x))` cannot be written directly. A `fn` parameter must be
+  annotated, and `x` would need an infinite type. That is true of every
+  annotation-required typed language, so it is not a wat gap.
+- This **overturns the prediction** made from ITERATION-PATTERNS.md: anonymous recursion
+  works.
+- **Class:** CLEAN.
+- **Repro:** `probes/z-combinator.wat`.
+
+### F-007: an unknown bare call name passes the checker and fails only at runtime (found via a self-calling let-bound fn)
+
+- **Where:** Seasoned Schemer ch 12's `letrec` job: a local helper that recurses.
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/letrec-let-bound-fn.wat`
+  binds `fact` to a `fn` whose body calls `fact`. Startup (type check) **accepts** it. The
+  run then dies, exit 1:
+  ```
+  #wat.runtime/UnboundSymbol {:message "unbound symbol: fact" :location … {:file "probes/letrec-let-bound-fn.wat" :line 10 :col 33 …} :name "fact"}
+  ```
+- **Why it matters:** local self-recursion being refused is doctrine
+  (ITERATION-PATTERNS.md: "Anonymous local recursion — NOT SUPPORTED"). The problem is
+  where it is refused. The checker lets through a program the runtime cannot run. An
+  unresolved name should be a startup error; the checker and runtime disagree on it.
+- **Scope: wider than letrec.** A call to a name that exists *nowhere* behaves the same
+  way. Probed 2026-09-14:
+
+  | where the unknown call sits | caught |
+  |---|---|
+  | bare `(zzz 5)` directly in `main` | only at runtime, exit 1 (`probes/unknown-bare-in-main.wat`) |
+  | bare `(zzz n)` in a top-level `defn` body | only at runtime (`probes/unknown-bare-in-defn.wat`) |
+  | bare `(zzz n)` in a let-bound `fn` body | only at runtime (`probes/let-fn-unknown-symbol.wat`) |
+  | bare `(h n)`, `h` bound *later* in the same `let` | only at runtime (`probes/let-fn-later-binding.wat`) |
+  | namespaced `(u/zzz n)` in a let-bound `fn` body | **at startup**: `namespaced symbol ref — not a builtin, not a registered function (arc 251)` (`probes/unknown-ns-in-fn.wat`) |
+
+  So a **bare** (non-namespaced) call head is not resolved at startup anywhere, while a
+  namespaced one is resolved everywhere. The `letrec` case is one instance. A typo in any
+  bare call passes the check and fails only when that line runs. Mechanism (unverified):
+  an unknown bare head likely gets a fresh type variable, not an error.
+- **The fix is independent of `letfn`:** a bare call head must name something in scope (a
+  `let` binding or a `fn` parameter), or startup fails, as namespaced references already do.
+  Under the Clojure/EDN syntax bare names are *only* ever locals, so every unresolved bare
+  head is a typo.
+- **Class:** GAP (checker/runtime disagreement). Refusing local self-recursion is doctrine;
+  refusing it (and every other unbound bare name) only at runtime is the gap.
+- **Repro:** `probes/letrec-let-bound-fn.wat`, plus the four scope probes above.
+
+### R-001: a named fn, `(fn fact [n] …)`, is refused
+
+- **What happened:** refused at startup, located:
+  `malformed :wat::core::fn form: fn signature: expected a vector [name <- :T ...] as the args-vector; got symbol`
+  (`probes/letrec-named-fn.wat`, line 6).
+- **Doctrine:** ITERATION-PATTERNS.md, "Anonymous local recursion — NOT SUPPORTED …
+  If your function deserves to recurse, it deserves a name." There is no `letrec` or `letfn`
+  either (none appears in the checker or stdlib).
+- **Canonical route:** a top-level `defn`, taking as parameters whatever the local helper
+  would have closed over. Or Z (C-005), now proven.
+- **Class:** REFUSAL.
+- **Repro:** `probes/letrec-named-fn.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
@@ -183,8 +250,8 @@ each of these stays unverified until a repro runs against the current substrate.
 
 | Book / chapter | Needs | wat-rs doc says | Expected class |
 |---|---|---|---|
-| Little Schemer ch 9 | Y combinator (anonymous recursion via self-application) | no anonymous local recursion (ITERATION-PATTERNS.md); self-application also needs a recursive type | REFUSAL + possibly GAP |
-| Seasoned Schemer ch 12 | `letrec` | "NOT IN WAT" (ITERATION-PATTERNS.md) | REFUSAL |
+| ~~Little Schemer ch 9~~ | Y combinator (anonymous recursion via self-application) | no anonymous local recursion (ITERATION-PATTERNS.md) | **overturned: Z works through a self-referential struct, see C-005** |
+| ~~Seasoned Schemer ch 12~~ | `letrec` | "NOT IN WAT" (ITERATION-PATTERNS.md) | **verified: named fn refused (R-001); let-bound self-reference fails only at runtime (F-007)** |
 | Seasoned Schemer ch 13–14 | `letcc` / call/cc | not mentioned anywhere in the docs | GAP or REFUSAL |
 | Seasoned Schemer ch 15–17 | `set!`, closures carrying state | "mutation-free by construction" (CLOJURE-ROSETTA.md) | REFUSAL |
 | ~~Little Schemer throughout~~ | lists mixing atoms and lists | collections are monomorphic; `:Any` is banned | **resolved: quoted forms (`:wat::WatAST`) are the route, see C-004** |
