@@ -278,6 +278,28 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 - **Class:** CLEAN.
 - **Repro:** `probes/num-to-ast.wat`, `probes/ast-to-num-eval.wat`.
 
+### F-008: a `<` anywhere in a name is a lex error, and the error names no file or line
+
+- **Where:** Little Schemer ch 4, which names its less-than `<`. Written in wat as `ls/o<`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`): the whole program was refused at
+  startup:
+  > `lex error at byte 1015: angle-bracket type parameters are illegal in a name (arc 109, "annihilate the angle bracket"): `<` may not open a type head.`
+- **Scope** (verified):
+  - `u/o>` lexes and runs (`probes/name-gt.wat`: `true`).
+  - `u/o<` is refused (`probes/name-lt.wat`).
+  - Clojure allows `<` in symbols (`<!!`, `<=`, `a<b`). So this is also a migration
+    concern: a Clojure name containing `<` will not lex.
+- **The diagnostic** gives only a byte offset. Its `:location` is the lexer's own source
+  (`crates/wat-reader/src/parser.rs:201`), not the user's file. The program loaded two
+  files, and nothing said which one held byte 1015; it turned out to be the entry file.
+  This is the same class as F-006.
+- **Why:** arc 109 retired `Name<T>` type syntax. The lexer still refuses any `<` after name
+  characters, to catch the old spelling, which also catches legitimate names.
+- **Class:** GAP, in two parts: the lexer rule is broader than its purpose, and the
+  diagnostic has no file or line.
+- **Here:** the book's `<` is named `ls/less?`.
+- **Repro:** `probes/name-lt.wat` (refused), `probes/name-gt.wat` (works).
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
