@@ -651,6 +651,55 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Here:** matches are keyword-spelled.
 - **Repro:** `probes/annoy/match-clj.wat` (refused), `probes/annoy/match-kw.wat` (works).
 
+### C-014: `set!`-style state ports to services, in all four of the book's forms
+
+- **Where:** Seasoned Schemer ch 15 (The Difference Between Men and Boys...). wat has no
+  `set!`; the builder: "mutable state is placed on services".
+- **How:** a **Cell** (`books/seasoned-schemer/lib/cell.wat`) is the smallest stateful
+  service. It holds one S-expression and answers `get` and `put`. Wrappers `new-cell`,
+  `cell-get` and `cell-put!` hide the per-call outcome matching.
+- **What happened** (2026-09-14): all 17 ch 15 checks pass. They cover:
+  - a **shared** `x` that functions read and reassign, passed in as a Cell;
+  - a **private** `x` per closure (`omnivore`, `gobbler`), each owning a Cell. The state
+    persists between calls and stays separate: `(pizza soup)`, `(kale bread)`, then
+    `(pasta pizza)` (`probes/cell-closures.wat`);
+  - a **per-call** `x` (`nibbler`), a fresh Cell on each call;
+  - two shared Cells **swapped** (`chez-nous`).
+- **A real global works as well.** A keyword-named top-level `def` holding a started Cell,
+  `(:wat::core::def :u::x (:ss::new-cell 'pizza))`, starts the service when the program
+  starts. `main` then reads it, sets it and reads it again: `pizza`, `onion`
+  (`probes/cell-global-def.wat`). So the book's `(define x …)` plus `(set! x …)` ports
+  literally.
+- **Class:** CLEAN.
+- **Repro:** `books/seasoned-schemer/ch15-men-and-boys.wat` and the probes named above.
+
+### Friction: one mutable variable costs about 60 lines, and a dropped Handle closes it
+
+- `lib/cell.wat` is 75 lines, 60 of them code: 28 for the protocol (`defsurface`) and state
+  (`defservice`), and 32 for the helpers that make each use a one-liner. Scheme's
+  equivalent is `(set! x v)`. Without the helpers, every call site repeats a four-way
+  outcome match (`Message` / `Lost` / `Stopped` / `Closed`) plus the response's own
+  variants, as in wat-rs's `wat-tests/service-locus-parity.wat`.
+- **A service's lifetime is its `Handle`'s.** Keeping only the connected peer and dropping
+  the Handle closes the service: the next call gets `Closed`
+  (`probes/cell-handle-drop.wat`). A closure that owns state therefore has to hold the
+  Handle, not just the connection. It fails loudly, but it is easy to get wrong.
+- Classed as friction, not a gap: this is the cost of the builder's deliberate design
+  choice to put state on services. It is recorded so the cost is visible.
+
+### F-018: `(wat.core/def u/x …)` does not define `u/x`; its own name is reported unresolved
+
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/cell-global-def-clj.wat` is the
+  working global of C-014 in the Clojure/EDN spelling. It is refused at startup with
+  `4 unresolved references`, all `:u::x`, each with
+  `namespaced symbol ref — not a builtin, not a registered function (arc 251)`. One of the
+  four is the `def`'s own name (line 4), so the definition is treated as a use.
+- **Control:** the keyword-named `(:wat::core::def :u::x …)` works (C-014).
+- **Class:** GAP (migration surface). It is the same family as F-005 (no symbol names for
+  types) and the symbol-named `typealias` refusal, and its diagnostic is misleading: it
+  points at the definition as if it were a reference.
+- **Repro:** `probes/cell-global-def-clj.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
