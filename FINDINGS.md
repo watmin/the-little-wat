@@ -618,6 +618,39 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Repro:** `books/seasoned-schemer/lib/ch12-take-cover.wat` against
   `lib/ch11-welcome-back.wat`.
 
+### C-013: letcc's skip (abandon and restart) also ports via `Result/try`
+
+- **Where:** Seasoned Schemer ch 13 (Hop, Skip, and Jump).
+- **What happened** (2026-09-14): all 9 checks pass.
+  - **The hop:** `intersectall` returns `()` as soon as any set is empty, wherever that set
+    sits in the list.
+  - **The skip:** `rember-upto-last` throws away every cons pending so far and restarts
+    after the `a`: `'(pear plum fig plum kiwi lime)` → `'(kiwi lime)`. Finding an `a`
+    returns an `Err` carrying the answer for the rest of the list. Every pending
+    `(cons …)` frame is waiting in a `Result/try`, so the `Err` passes through all of
+    them, and their conses never happen.
+- **Class:** CLEAN. This extends C-006 from "escape with an answer" to "escape with a
+  restarted computation".
+- **Repro:** `books/seasoned-schemer/ch13-hop-skip-jump.wat`.
+
+### F-017: `wat.core/match` reads its arm vectors as vector literals
+
+- **Where:** Seasoned Schemer ch 13. Both of its matches on a `Result` failed at startup
+  (4 errors).
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/annoy/match-clj.wat`, a
+  `Result` match in the Clojure/EDN spelling, is refused at startup with errors like:
+  > `:wat::core::vec: parameter #3 expects [:?540 :-> (:wat::core::Result.Ok :- [:?540 :?541])]; got (:wat::core::HashMap :- [:wat::core::keyword :?543])`
+- **Control:** the identical match keyword-spelled, `(:wat::core::match …)`, inside a
+  Clojure-spelled `defn`, prints `5` (`probes/annoy/match-kw.wat`).
+- **Reading:** the same class as F-010. Inside a Clojure-spelled special form, bracketed
+  syntax (here the `[pattern body]` arms) is inferred as a vector-literal expression and
+  routed to the retired `:wat::core::vec`. The diagnostic names `vec`, a `HashMap` and
+  "parameter #3", none of which the user wrote, so it cannot lead anyone to the cause.
+- **Class:** GAP. ⚠ **Codemod hazard:** converting `:wat::core::match` to
+  `wat.core/match` breaks every match. It fails loudly, at startup, but misleadingly.
+- **Here:** matches are keyword-spelled.
+- **Repro:** `probes/annoy/match-clj.wat` (refused), `probes/annoy/match-kw.wat` (works).
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
