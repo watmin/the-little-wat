@@ -263,6 +263,21 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 - **Class:** CLEAN (escape use).
 - **Repro:** `probes/letcc-early-exit.wat`.
 
+### C-007: numbers convert both ways between `i64` and quoted-AST nodes
+
+- **Where:** Little Schemer ch 4. Tuples are quoted lists of numbers, and each element is
+  an AST node (syntax), not an `i64`.
+- **What happened** (2026-09-14):
+  - `i64` → node: `` `~n `` with `n` = 5 equals `'5`, and `` `(~n ~@'(6 7)) `` equals
+    `'(5 6 7)` (`probes/num-to-ast.wat`: `true true`).
+  - node → `i64`: `(Result/expect (:wat::eval-ast! node) "…")` on the `5` of `'(5 6)`,
+    plus 7, prints `12` (`probes/ast-to-num-eval.wat`).
+- **Note:** the stdlib does node → `i64` by printing and re-parsing:
+  `(:wat::string::to-i64 (:wat::core::write-forms n))` (`wat/core.wat:536`). There is no
+  dedicated accessor, but `eval-ast!` makes one unnecessary.
+- **Class:** CLEAN.
+- **Repro:** `probes/num-to-ast.wat`, `probes/ast-to-num-eval.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
