@@ -730,6 +730,34 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** REFUSAL (principled).
 - **Repro:** the three probes above.
 
+### C-015: an escape measurably abandons its pending work (0 conses against 5)
+
+- **Where:** Seasoned Schemer ch 17 (We Change, Therefore We Are!). `consC` bumps a global
+  counter `N`. `N` is a keyword-named top-level `def` of a started Counter service: C-014's
+  global route, used in a real chapter.
+- **What happened** (2026-09-14): 12 checks pass on the first run.
+
+  | `rember1*` on `'((food) more (food))` | conses counted |
+  |---|---|
+  | escaping version (ch 14's `Result/try`), atom **absent** | **0** |
+  | naive version, rebuilding as it goes, atom absent | **5**, for the same answer |
+  | escaping version, atom **present** | **1**, on the way back out |
+
+  `deep-C 5` counts 5 conses, and `supercounter` over 10…0 counts 55.
+- **Why it matters:** C-006 and C-013 showed `Result/try` gives the right *answers*. This
+  counts the *work*, and shows the pending conses never run.
+- **Class:** CLEAN.
+- **Repro:** `books/seasoned-schemer/ch17-we-change.wat`.
+
+### Friction: every shape of state needs its own service
+
+- Counting needed an `i64` twin of the Cell: `lib/counter.wat`, 82 lines of code for three
+  operations, on top of `lib/cell.wat`'s 60 for an S-expression. The protocol, the service,
+  the Handle-keeping struct and the per-call outcome matching are written out again for
+  each payload type.
+- The stdlib's `:wat::cache::lru-svc :- [K V]` is a generic `defservice`, so a generic
+  `Cell :- [T]` may remove the duplication. **Untested.**
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
