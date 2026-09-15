@@ -77,6 +77,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   (`wat-edn/src/value.rs:328`, `Keyword::new("0")`): its field is named `0`.
 - **F-031:** the checker accepts `:wat::core::length` on a String, even in the keyword
   spelling; only the runtime refuses it, naming the six types it accepts.
+- **F-032:** the lexer rejects `λ`, `Π`, `Σ`, `→` in symbols but accepts `é`, and its
+  error is located in `crates/wat-reader/src/parser.rs` with a byte offset, not in the
+  user's file and line.
 
 ## Classes
 
@@ -1392,6 +1395,29 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** GAP (a defect), in F-007's family: a type error a checker should see, found
   only by running the code.
 - **Repro:** `probes/length-of-string.wat`.
+
+## The Little Typer
+
+### F-032: wat's lexer rejects λ, Π, Σ and → in symbols but accepts é; the error points into the reader's Rust source
+
+- **Where:** The Little Typer. Pie prints its results with `λ`, `Π`, `Σ` and `→`, and
+  wat-Pie reads Pie source with wat's reader.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), with `read-string`:
+  - `λ` alone: `lex error at byte 0: unexpected character 'λ'`
+    (`probes/typer/read-pie-unicode-lambda-symbol.wat`).
+  - `courgetté` reads as a symbol (`probes/typer/read-pie-unicode-accented-symbol.wat`).
+  - `"→"` inside a string reads fine (`probes/typer/read-pie-unicode-arrow-string.wat`).
+  - A source file whose own text holds `(:wat::core::quote λ)` fails at startup
+    (`probes/typer/unicode-in-source.wat`). The error is located in wat-rs itself, not the
+    user's file, and gives a byte offset, not a line:
+    > `#wat.parse/Lex {:message "lex error: lex error at byte 153: unexpected character 'λ'" :location #wat.core/Span {:file "crates/wat-reader/src/parser.rs" :line 201 :col 28 …}`
+- **So:** some letters beyond ASCII are symbol characters and others are not. Clojure and
+  EDN allow `λ` in symbols. The location is F-006's and F-008's class: a Rust file and a
+  byte count, where the user needs their own file and line.
+- **Route:** Pie accepts ASCII spellings (`lambda`, `Pi`, `Sigma`, `->`), so the chapter
+  files use those, and the oracle's output is mapped to them.
+- **Class:** GAP (friction for mathematical code, and a diagnostic defect).
+- **Repro:** the probes above.
 
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 

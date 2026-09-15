@@ -1,0 +1,35 @@
+#lang pie
+;; The Little Typer, chapter 1 (The More Things Change, the More They Stay the Same):
+;; atoms, the, Pair, car and cdr, Nat, normal forms, U, claim and define.
+;; Our own examples on the chapter's topics. Racket's Pie prints each expression's
+;; (the TYPE NORMAL-FORM); wat-Pie reads this same file and must print the same. A bare
+;; (cons 'a 'b) is left out: Pie cannot determine its type without a the, and any error
+;; stops a Pie file.
+
+'ratatouille
+(the Atom 'courgette)
+(the (Pair Atom Atom) (cons 'ratatouille 'baguette))
+(car (the (Pair Atom Atom) (cons 'ratatouille 'baguette)))
+(cdr (the (Pair Atom Atom) (cons 'ratatouille 'baguette)))
+(the (Pair Atom (Pair Atom Atom)) (cons 'olive (cons 'oil 'vinegar)))
+(car (cdr (the (Pair Atom (Pair Atom Atom)) (cons 'olive (cons 'oil 'vinegar)))))
+zero
+(add1 zero)
+(add1 (add1 (add1 zero)))
+4
+(the Nat (add1 (add1 zero)))
+(the (Pair Nat Atom) (cons (add1 zero) 'pea))
+Atom
+Nat
+(Pair Atom Nat)
+(the U (Pair Atom Atom))
+
+(claim one Nat)
+(define one (add1 zero))
+one
+(claim vegetables (Pair Atom Atom))
+(define vegetables (cons 'celery 'carrot))
+vegetables
+(car vegetables)
+(check-same Nat one (add1 zero))
+(check-same (Pair Atom Atom) vegetables (cons (car vegetables) (cdr vegetables)))
