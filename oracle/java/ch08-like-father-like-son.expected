@@ -1,0 +1,12 @@
+(Add 1 (Add 2 (Add 3 (Empty))))
+(Add 1 (Add 2 (Add 3 (Empty))))
+true
+false
+(Add 3 (Add 1 (Add 2 (Add 4 (Empty)))))
+(Add 1 (Add 3 (Empty)))
+(Add 2 (Empty))
+27
+5
+(Add 3 (Add 1 (Add 2 (Add 4 (Empty)))))
+(Add 1 (Add 3 (Empty)))
+(Add 2 (Empty))
