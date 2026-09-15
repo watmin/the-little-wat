@@ -16,14 +16,17 @@ language, and each assumes the one before it works.
 | The Reasoned Schemer | logic programming: unification, interleaving streams, `conde` | 10/10, 201 checks |
 | The Little MLer | algebraic datatypes, pattern matching, exceptions, modules | 10/10, 139 checks |
 | The Little Prover | rewriting and proof over S-expressions | 9/9 chapters, all 49 transcript entries match the book's own prover |
-| The Little Typer | dependent types (Pie) | |
+| The Little Typer | dependent types (Pie) | 16/16 chapters: all 290 printed results match Racket's Pie, and all 108 forms it refuses are refused |
 | The Little Learner | tensors and gradient descent | |
 
-49 chapters and 677 checks pass (`./run.sh`). The code is our own implementation of what
+65 chapters and 1,075 checks pass (`./run.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
 and translated into wat by a wat program (`tools/jbob2wat.wat`). The book's proofs then run
-in wat and are checked against guile running the original.
+in wat and are checked against guile running the original. The Little Typer's language,
+Pie, is written anew in wat (`books/little-typer/lib/pie.wat`, a type checker by
+normalization by evaluation), and Racket's Pie is its oracle, run as a black box and never
+read.
 
 ## A reflection, from the model that wrote the ports
 
@@ -69,20 +72,36 @@ docs a few months behind the code.
 - Constructors turned out to be function values.
 - Mutually recursive generic enums just worked.
 
+**The Little Typer was the biggest test.** wat-Pie, a dependent type checker of about a
+thousand lines, grew one chapter at a time against Racket's Pie. Two rules kept it honest.
+- Every chapter's printed normal forms must match Pie's string for string, subscripted
+  renamings and all.
+- A checker that accepts a wrong program fails silently, so every chapter also carries
+  forms Pie refuses, and wat-Pie must refuse them too. A refusal is a failed assertion
+  deep in the checker, so each one runs in a thread, and its death comes back as a value
+  (`:wat::test::run-thread`, C-026).
+
+The oracle refused my own examples several times. Once that exposed a wat-Pie bug: it
+accepted `(the U (Pi ((A U)) …))`, and U has no type. Three of the last five chapters
+(12, 15 and 16) passed without a change to the checker.
+
 **What remains is speed.** The interpreter runs the miniKanren search at about 0.35 ms per
 answer, roughly 300 to 430 times slower than the JVM on the same algorithm. The two
 quadratic costs we found along the way were ours or the data structures', not the
-interpreter's (F-023).
+interpreter's (F-023). The Little Typer found one that is wat's own. Taking a WatAST apart
+copies every subtree below it (F-033), and a checker whose closures hold environments
+pays for that exponentially. Binding definitions as syntax instead took its slowest
+chapter from 43 s to 2 s.
 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-030 are gaps and defects.
+  - F-001 to F-033 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-023 are clean ports.
+  - C-001 to C-026 are clean ports.
 
   It opens with a status table and the list to relay to wat-rs.
-- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-013).
+- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-014).
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -91,9 +110,10 @@ interpreter's (F-023).
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             187 small programs, each isolating one question (the repros behind FINDINGS)
-oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob
+probes/                             207 small programs, each isolating one question (the repros behind FINDINGS)
+oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
+tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
 run.sh                              runs every chapter and reports PASS/FAIL per file
@@ -110,6 +130,7 @@ Chapters are plain programs run by wat-rs's release binary. Clone
 ./run.sh                                                         # every chapter; exit 0 = all pass
 ../wat-rs/target/release/wat books/little-schemer/ch01-toys.wat  # one chapter
 clojure -M oracle/ch07.clj                                        # one Reasoned Schemer chapter's expected values
+tools/pie-oracle.sh books/little-typer/ch08-pick-a-number-any-number.pie   # one Typer chapter's expected results
 ```
 
 A chapter passes when it exits 0 and prints its final `ok` line. Its checks stop at the

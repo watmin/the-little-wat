@@ -2,7 +2,7 @@
 
 Every place wat fell short of what a chapter needs, and every place it didn't.
 
-## Status (2026-09-14, wat-rs `a3218644d`)
+## Status (2026-09-15, wat-rs `a3218644d`)
 
 | Book | Chapters | State |
 |---|---|---|
@@ -11,7 +11,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Reasoned Schemer | 10 / 10 | all pass, 201 checks (C-020). The book's surface (`run`, `fresh`, `conde`, `defrel`, `conda`, `condu`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Speed: about 100 times slower than the JVM on ch 8's queries, and about 430 times slower on the deepest searches (F-023, C-020) |
 | The Little MLer | 10 / 10 | all pass, 139 checks. Datatypes are enums (generic, recursive and mutually recursive, C-021), constructors are function values (C-022), exceptions are Results, and functors are dictionaries (C-023). Every match names every variant, and the book shows what that costs: tuple matches (F-027) and nested coverage (F-028). F-029 blocks functors over surfaces; F-030, a newtype, panics when printed |
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
-| The Little Typer | 4 / 16 | in progress. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 95 printed results and refuses all 30 forms Pie refuses (C-025, C-026). A handled thread death still prints to stderr (Friction, below) |
+| The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -1441,11 +1441,11 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 
 ### C-025: wat-Pie, a dependent type checker written in wat, matches Racket's Pie
 
-- **Where:** The Little Typer, ch 1–4.
+- **Where:** The Little Typer, all 16 chapters.
 - **What the chapters need:** Pie, the book's dependently typed language. Types compute,
   evaluation runs under binders, and results print as normal forms, the way Pie prints them.
 - **What was done** (2026-09-15, wat-rs `a3218644d`):
-  - `books/little-typer/lib/pie.wat` (788 lines, keyword spelling) uses normalization by
+  - `books/little-typer/lib/pie.wat` (1,287 lines, 1,045 of them code, keyword spelling) uses normalization by
     evaluation with a bidirectional, elaborating checker. Synth gives a type and a core
     term, so a stuck eliminator carries its base's type.
   - Terms, values, closures and neutrals are all `:wat::WatAST`, built with `with-children`
@@ -1453,19 +1453,21 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   - Each chapter is a `.pie` file that both implementations read. Racket's Pie reads it
     through `tools/pie-oracle.sh`, as a black box (AGPL, never read or copied); wat-Pie
     reads it through the chapter's runner.
-- **Result:** all 95 printed results match string for string (ch 1: 24, ch 2: 18, ch 3: 25,
-  ch 4: 28). They include:
+- **Result:** all 290 printed results match string for string, across 16 chapters. They
+  include:
   - stuck `which-Nat`, `iter-Nat` and `rec-Nat` forms;
   - eta-expanded functions and pairs;
   - Pie's renaming of a shadowed binder (`(-> U (Pi ((A₁ U)) (-> A₁ A₁)))`);
-  - types that are not a U, which Pie prints by themselves.
+  - types that are not a U, which Pie prints by themselves;
+  - proofs, from incr=add1 and twice=double to list->vec->list=, even-or-odd and nat=?.
 
-  Ch 3 runs in 1.5 s.
+  Each chapter runs in 0.8 to 2.8 s (after F-033's route). Ch 12, 15 and 16 needed no change
+  to the checker.
 - **The oracle earned its keep:** my first ch 4 draft held `(the U (Pi ((A U)) …))`, and wat-Pie
   accepted it. Racket's Pie refused it: U has no type, so a Pi over U is a type but not a
   U. That silent acceptance is why every chapter now also has refusal tests (C-026).
 - **Class:** CLEAN.
-- **Repro:** `wat books/little-typer/chNN-….wat` for NN = 01..04.
+- **Repro:** `wat books/little-typer/chNN-….wat` for NN = 01..16.
 
 ### C-026: a failed assertion deep in a checker comes back as a value, through `:wat::test::run-thread`
 
@@ -1481,7 +1483,7 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   ```
   - The thread shares the loaded definitions and captures the let-bound checker state.
   - The Failure carries wat-Pie's message, its location in `lib/pie.wat`, and the frames.
-  - 30 of 30 refused forms die, and each death comes back as data.
+  - 108 of 108 refused forms die, and each death comes back as data.
 - **Note:** `spawn-program` is capability-restricted to `:wat::spawn::` and `:wat::test::`
   (wat-rs `wat/test.wat`, arc 170). So the door a program has for watching a computation
   die is a test verb. That's fine for tests. A non-test program supervising a risky
