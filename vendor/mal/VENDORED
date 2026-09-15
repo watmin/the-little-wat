@@ -1,0 +1,9 @@
+vendor/mal: from Make-a-Lisp (https://github.com/kanaka/mal), commit 2bbfaa5, by Joel Martin
+and contributors, under the MPL 2.0 (LICENSE, here). Unmodified copies of:
+
+  runtest.py            the test runner: drives an implementation through its REPL, form by
+                        form, and compares what it prints
+  tests/stepN_*.mal     each step's tests: the forms, and what each must print
+
+Our wat implementation (mal/) is our own code, written from the process guide's steps
+(process/guide.md in the mal repository), not from any implementation there.

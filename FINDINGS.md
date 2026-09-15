@@ -15,6 +15,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
+| Make-a-Lisp (NEXT.md §2) | 1 / 11 steps | in progress. mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). Step 0: 24/24 (C-031) |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -24,11 +25,11 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
 | **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · a String's `reverse`, `index-of` and characters · PROVIDE.md's P-001–P-017 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · a String's `reverse`, `index-of` and characters · PROVIDE.md's P-001–P-017 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -139,6 +140,11 @@ give each one's detail.
   not compared.
 - **F-048:** a record's accessor passed to a generic function binds T to `:wat::core::Record`,
   so a call that also passes a `HashMap` of the record is refused.
+- **F-049:** a wat program can't write raw text to stdout. `println` writes EDN (a String
+  comes out quoted), always ends the line, and the raw writers are restricted to the kernel.
+  So no prompt and no plain text.
+- **F-050:** stdin is read by EDN frame. A line that opens more than it closes swallows the
+  lines after it, and end of input then panics ("disconnected") instead of answering `Eof`.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -2220,6 +2226,69 @@ name. Rows blocked are counted once per row.
   `~(second form)` evaluated the macro's argument as code ("malformed int form"), so the
   form is taken apart by `let` first.
 - **Class:** friction. Improve: allow `cond` in a macro body.
+
+## Make-a-Lisp
+
+### F-049: a wat program can't write raw text to stdout: `println` writes EDN, a line at a time, and the raw writers are the kernel's
+
+- **Where:** Make-a-Lisp (NEXT.md §2). mal's test runner (`vendor/mal/runtest.py`) drives an
+  implementation as a REPL. It waits for a prompt (`user> `, with no newline), sends a line,
+  and matches what comes back.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `:wat::kernel::println` "serializes `v` to compact EDN and writes the line to stdout" (its
+    doc). So a String comes out quoted and escaped: `probes/mal/read-frame-raw.wat` prints
+    `"frame 1: abc"`, quotes and all. Every chapter's "ok" line in this repository prints that
+    way.
+  - `:wat::io::IOWriter/from-fd` is restricted to `:wat::kernel::`
+    (`probes/mal/stdin-repl.wat`), and so is `IOReader/from-fd`:
+    > `` `:wat::io::IOWriter/from-fd` has a restricted caller whitelist [:wat::kernel::]; the enclosing fn `:user::main` does not match any entry ``
+  - A three-argument `:user::main` taking stdin, stdout and stderr is refused at freeze
+    (wat-rs `tests/program/wat_arc170_slice_1e_user_main_nil.rs`).
+- **So:** no wat program can print a prompt, a line without its newline, or a String without
+  quotes. That rules out mal's REPL, a CSV file, a report, or any line of plain text. Every
+  other language on mal's scoreboard can do it. Here a 40-line Python shim
+  (`tools/mal-shim.py`) stands in: it prints the prompt, and turns each EDN string the
+  program prints back into text.
+- **Class:** GAP. Extend: a raw write to stdout (a String, no newline, no EDN).
+- **Repro:** the probes.
+
+### F-050: stdin is read by EDN frame, so a line that opens more than it closes swallows the lines after it, and end of input then panics
+
+- **Where:** Make-a-Lisp step 1. Its tests send `(1 2`, `"abc` and the like, each on its own
+  line, and expect an "unbalanced" error for that line alone.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/mal/read-frame-raw.wat`: balanced lines come back one frame each, raw, even when
+    they aren't EDN (`[]{}"'* ;:()`).
+  - `probes/mal/read-frame-unbalanced.wat`, given `(+ 1 2`, then `abc`, then `(x`: no frame
+    comes back at all. The reader keeps reading while its buffer is incomplete EDN, and at end
+    of input it dies:
+    > `#wat.kernel/LociDiedError.Panic {:message "disconnected" … :frames [#wat.kernel/Frame {… :symbol ":wat::kernel::stdio-read-frame"} …]}`
+
+    `wat/repl.wat` says EOF comes back "as a VALUE (`ReadFrameOutcome::Eof`)".
+- **So:** a program can't read a line as a line. wat's own REPL names part of this limit ("a
+  multi-line form … reaches read-string truncated", `wat/repl.wat:121`). An unbalanced line
+  is worse, because it takes the following input with it. The shim sends each line as one EDN
+  string, which the program decodes with `:wat::edn::read`.
+- **Class:** GAP. Fix: at end of input, answer `Eof` (or the partial frame), not a panic.
+  Extend: a plain `read-line` for user programs.
+- **Repro:** the probes.
+
+### Friction: the user guide's first stdin program is refused
+
+- **Where:** USER-GUIDE.md §2, "Your first real program — stdin echo".
+- **What happened** (2026-09-15): copied verbatim (`probes/mal/user-guide-stdin-echo.wat`), the
+  program is refused at startup, twice over:
+  > `bare unit type '()' is retired (arc 109 slice 1d); canonical FQDN form is ':wat::core::nil'`
+
+  It is also written with the retired `:wat::core::define`, with `(Some line)` patterns, and
+  with the three-argument main that freeze now refuses. The route that works,
+  `:wat::kernel::read-frame` and `println`, has to be found in `wat/repl.wat`.
+- **Class:** Clean.
+
+### C-031: Make-a-Lisp step 0 passes mal's own tests
+
+- `mal/step0_repl.wat`, driven by mal's unmodified runner through the shim
+  (`tools/mal-test.sh step0_repl`), passes 24 of 24.
 
 ## Predicted, unverified
 

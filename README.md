@@ -142,9 +142,9 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-048 are gaps and defects.
+  - F-001 to F-050 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-030 are clean ports and acceptance results.
+  - C-001 to C-031 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -159,7 +159,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             243 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             247 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
@@ -170,6 +170,9 @@ koans/src/NN-<topic>.clj            the Clojure Koans' topics: our own filled-in
 koans/literal/, koans/keyword/      each koan's verdict in each of wat's spellings, with wat's message
 koans/idiom/NN-<topic>.wat          the koans that don't port literally, said the way wat says it (run by run.sh)
 tools/koan-tiers.sh                 every koan's tier: literal, wat idiom, missing, or refused
+mal/stepN_<name>.wat                Make-a-Lisp in wat, one program per step
+tools/mal-test.sh, tools/mal-shim.py  a step against mal's own tests; the shim is the terminal a wat program can't be
+vendor/mal/                         Make-a-Lisp's test runner and step tests, MPL 2.0, unmodified
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
