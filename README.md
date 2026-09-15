@@ -17,9 +17,14 @@ Each book leans on a different part of a language:
 The code here is our own implementation of what each chapter builds. The books' text is not
 reproduced.
 
-**Status:** The Little Schemer and The Seasoned Schemer are complete, and all 20 chapters pass
-(`./run.sh`). FINDINGS.md opens with a status table and the list of findings to relay to
-wat-rs.
+**Status:** The Little Schemer, The Seasoned Schemer and The Reasoned Schemer are complete,
+and all 30 chapters pass (`./run.sh`). FINDINGS.md opens with a status table and the list
+of findings to relay to wat-rs.
+
+The Reasoned Schemer's miniKanren engine is `books/reasoned-schemer/lib/ch10-under-the-hood.wat`,
+with the book's `run`, `fresh`, `conde`, `defrel`, `conda` and `condu` as wat macros. Its
+expected values come from `oracle/`, the book's engine transliterated to Clojure, so the
+order answers come out in is checked too: `clojure -M oracle/ch07.clj` prints ch 7's.
 
 State in The Seasoned Schemer lives on small services under `books/seasoned-schemer/lib/`:
 `cell.wat` (one S-expression), `counter.wat` (one `i64`) and `arena.wat` (a node table with
@@ -35,6 +40,7 @@ books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main. Libs never load each other;
                                     each program loads what it needs, in chapter order.
 probes/*.wat                        small programs that isolate one question each (repros for FINDINGS)
+oracle/                             the Reasoned Schemer's engine in Clojure: expected values, answer order included
 FINDINGS.md                     the ledger: every place wat fell short, or didn't
 run.sh                          runs every chapter and reports PASS/FAIL per file
 wat-tests/, tests/, build.rs    a minimal cargo consumer, kept only to reproduce F-001 to F-003

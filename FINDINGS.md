@@ -8,7 +8,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 |---|---|---|
 | The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
 | The Seasoned Schemer | 10 / 10 | all pass. letrec via Y (C-012); letcc via `Result/try`, with the abandoned work measured (C-013, C-015); `set!` on Cell services (C-014); mutable, shared and cyclic lists on an Arena (C-016); generators as lazy streams (C-017); the ch 20 interpreter with a store and escaping letcc (C-018). Refused by design: Y-bang (R-002) and re-entrant continuations (R-003) |
-| The Reasoned Schemer | 7 / 10 | ch 1–6 and the ch 10 engine pass, 128 checks. The book's surface (`run`, `fresh`, `conde`, `defrel`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Measured: the search is linear, about 0.35 ms per answer against 1.1 µs on the JVM (F-023) |
+| The Reasoned Schemer | 10 / 10 | all pass, 201 checks (C-020). The book's surface (`run`, `fresh`, `conde`, `defrel`, `conda`, `condu`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Speed: about 100 times slower than the JVM on ch 8's queries, and about 430 times slower on the deepest searches (F-023, C-020) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -1078,6 +1078,35 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   `let` → `wat.core/let` rewrite turns off checking of every binding and body.
 - **Repro:** the probes in the table.
 
+### C-020: The Reasoned Schemer ports completely, and a Clojure oracle checks every answer's order
+
+- **Where:** all ten chapters, `books/reasoned-schemer/`.
+- **How:**
+  - The ch 10 engine was built first, and the book's surface as macros (C-019).
+  - For the answers, `oracle/mk.clj` transliterates the book's ch 10 algorithm to Clojure,
+    and `oracle/rels.clj` holds a twin of every relation. For each chapter,
+    `oracle/chNN.clj` prints the expected values, and the wat chapter asserts them.
+  - Which answers a miniKanren query gives, and in what order, depends only on that
+    algorithm. So the check covers interleaving, not just answer sets. On ch 1–2, written
+    before the oracle, the two agree on all 51 queries.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - 201 checks pass. Every chapter from 1 to 9 passed on its first run.
+  - Ch 10 needed four fixes first. Three were my own mistakes. The fourth became F-020
+    (unit variants).
+  - The arithmetic is right in decimal as well: 7 × 63 = 441, 68 = 7 × 9 + 5,
+    3⁵ = 243, and the book's nine ways to write 68 as bᵠ + r
+    (`probes/mk/logo-heavy.wat`).
+  - A mutant copy of ch 9, with one wrong expectation, fails at that check
+    (`probes/mk/ch09-mutant.wat`).
+- **What it cost:**
+  - Speed. Ch 8's chapter queries take 19.4 s in wat against about 150 ms on the JVM. The
+    two deepest searches (`logo-heavy.wat`) take 610 s against 1.37 s, about 430 times
+    slower. So the chapter programs stay with queries the JVM answers in about 25 ms or
+    less, and the rest are probes.
+  - Along the way: F-019 to F-024 and R-004/R-005.
+- **Class:** CLEAN, with the cost noted.
+- **Repro:** `./run.sh`; `clojure -M oracle/chNN.clj` for any chapter's expected values.
+
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 
 - **What happened** (2026-09-14, wat-rs `a3218644d`): `timeout 180 wat
@@ -1103,6 +1132,6 @@ each of these stays unverified until a repro runs against the current substrate.
 | ~~Little Schemer ch 9~~ | Y combinator (anonymous recursion via self-application) | no anonymous local recursion (ITERATION-PATTERNS.md) | **overturned: Z works through a self-referential struct, see C-005** |
 | ~~Seasoned Schemer ch 12~~ | `letrec` | "NOT IN WAT" (ITERATION-PATTERNS.md) | **verified: named fn refused (R-001); let-bound self-reference fails only at runtime (F-007)** |
 | ~~Seasoned Schemer ch 13–14~~ | `letcc` / call/cc, escape use | not mentioned anywhere in the docs | **verified CLEAN via `Result/try` (C-006)** |
-| Seasoned Schemer ch 19 | re-entrant continuations (generators) | no call/cc; state lives on services | untested: stream or service |
-| Seasoned Schemer ch 15–17 | `set!`, closures carrying state | "mutation-free by construction" (CLOJURE-ROSETTA.md) | REFUSAL |
+| ~~Seasoned Schemer ch 19~~ | re-entrant continuations (generators) | no call/cc; state lives on services | **verified: no call/cc (R-003); generators port to lazy streams (C-017)** |
+| ~~Seasoned Schemer ch 15–17~~ | `set!`, closures carrying state | "mutation-free by construction" (CLOJURE-ROSETTA.md) | **overturned: set! ports to Cell services (C-014)** |
 | ~~Little Schemer throughout~~ | lists mixing atoms and lists | collections are monomorphic; `:Any` is banned | **resolved: quoted forms (`:wat::WatAST`) are the route, see C-004** |
