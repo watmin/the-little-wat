@@ -189,6 +189,35 @@
     (:wat::stream::lazy
       (:wat::stream::cons :wat::core::Option.None (:wat::stream::lazy ((body) st))))))
 
+;; ---- ch 9's impure operators
+
+;; If g1 has an answer, run g2 on all of g1's answers; otherwise run g3. Suspensions before
+;; g1's first answer pass through, so a slow g1 does not block its siblings.
+(wat.core/defn rs/ifte-loop [s :- :rs::Stream st :- :rs::State g2 :- :rs::Goal g3 :- :rs::Goal] :- :rs::Stream
+  (:wat::stream::lazy
+    (:wat::core::match (:wat::stream::next s)
+      [:wat::stream::NextOutcome.Exhausted {} (g3 st)]
+      [:wat::stream::NextOutcome.Item {:value v :rest r}
+        (:wat::core::match v
+          [:wat::core::Option.Some {:value _a} (rs/bind (:wat::stream::cons v r) g2)]
+          [:wat::core::Option.None {} (:wat::stream::cons v (rs/ifte-loop r st g2 g3))])])))
+
+(wat.core/defn rs/ifte [g1 :- :rs::Goal g2 :- :rs::Goal g3 :- :rs::Goal] :- :rs::Goal
+  (wat.core/fn [st :- :rs::State] :- :rs::Stream (rs/ifte-loop (g1 st) st g2 g3)))
+
+;; At most g's first answer.
+(wat.core/defn rs/once-loop [s :- :rs::Stream] :- :rs::Stream
+  (:wat::stream::lazy
+    (:wat::core::match (:wat::stream::next s)
+      [:wat::stream::NextOutcome.Exhausted {} (:wat::stream::empty)]
+      [:wat::stream::NextOutcome.Item {:value v :rest r}
+        (:wat::core::match v
+          [:wat::core::Option.Some {:value _a} (:wat::stream::cons v (:wat::stream::empty))]
+          [:wat::core::Option.None {} (:wat::stream::cons v (rs/once-loop r))])])))
+
+(wat.core/defn rs/once [g :- :rs::Goal] :- :rs::Goal
+  (wat.core/fn [st :- :rs::State] :- :rs::Stream (rs/once-loop (g st))))
+
 ;; ---- running and reification
 
 ;; Up to n answers (n < 0: all of them), skipping suspensions.
@@ -346,3 +375,26 @@
       `(:wat::core::defn ~name [~@ps ~a <- :rs::Term] -> :rs::Goal
          (rs/delay (:wat::core::fn [] -> :rs::Goal (rs/conj [~@goals]))))
       `(:rs::defrel-params ~name (params ~@ps ~a <- :rs::Term) ~more ~@goals))))
+
+;; (conda (g0 g …) …): the first line whose g0 succeeds is the only line tried.
+(:wat::core::defmacro :rs::conda
+  [& lines <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::let [line (:wat::core::first lines)
+                    more (:wat::core::rest lines)
+                    g0 (:wat::core::first line)
+                    gs (:wat::core::rest line)]
+    (:wat::core::if (:wat::core::empty? more)
+      `(rs/conj [~@line])
+      `(rs/ifte ~g0 (rs/conj [~@gs]) (:rs::conda ~@more)))))
+
+;; (condu (g0 g …) …): conda, with each g0 limited to its first answer.
+(:wat::core::defmacro :rs::condu
+  [& lines <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::let [onced (:wat::core::foldl
+                            (:wat::core::fn [acc <- (:wat::core::Vector :- [:wat::WatAST]) line <- :wat::WatAST]
+                              -> (:wat::core::Vector :- [:wat::WatAST])
+                              (:wat::core::let [g0 (:wat::core::first line)
+                                                gs (:wat::core::rest line)]
+                                (:wat::core::conj acc `((rs/once ~g0) ~@gs))))
+                            [] lines)]
+    `(:rs::conda ~@onced)))
