@@ -57,6 +57,12 @@
 (wat.core/defn rs/list [xs :- (wat.type/Vector :- [:rs::Term])] :- :rs::Term
   (rs/list* xs (rs/nil)))
 
+;; Quoted elements ending in the term d: (rs/q* '(a b) d) is the book's `(a b . ,d).
+(wat.core/defn rs/q* [xs :- :wat::WatAST d :- :rs::Term] :- :rs::Term
+  (wat.core/if (ls/null? xs)
+    d
+    (rs/cons (rs/q (ls/car xs)) (rs/q* (ls/cdr xs) d))))
+
 ;; ---- substitution
 
 (wat.core/defn rs/walk [t :- :rs::Term s :- :rs::Subst] :- :rs::Term

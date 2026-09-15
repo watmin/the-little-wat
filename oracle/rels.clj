@@ -35,3 +35,35 @@
 (defrel (proper-membero x l)
   (conde ((caro l x) (fresh (d) (cdro l d) (listo d)))
          ((fresh (d) (cdro l d) (proper-membero x d)))))
+
+;; ch 4
+(defrel (appendo l t out)
+  (conde ((nullo l) (== t out))
+         ((fresh (a d res) (conso a d l) (conso a res out) (appendo d t res)))))
+
+(defrel (swappendo l t out)
+  (conde ((fresh (a d res) (conso a d l) (conso a res out) (swappendo d t res)))
+         ((nullo l) (== t out))))
+
+(defrel (unwrapo x out)
+  (conde ((fresh (a) (caro x a) (unwrapo a out)))
+         ((== x out))))
+
+;; ch 5
+(defrel (memo x l out)
+  (conde ((caro l x) (== l out))
+         ((fresh (d) (cdro l d) (memo x d out)))))
+
+(defrel (rembero x l out)
+  (conde ((nullo l) (== () out))
+         ((conso x out l))
+         ((fresh (a d res) (conso a d l) (conso a res out) (rembero x d res)))))
+
+(defrel (surpriseo s)
+  (rembero s (quo '(a b c)) (quo '(a b c))))
+
+;; ch 6
+(defrel (alwayso) (conde (succeed) ((alwayso))))
+(defrel (nevero) (nevero))
+(defrel (very-recursiveo)
+  (conde ((nevero)) ((very-recursiveo)) ((alwayso)) ((very-recursiveo)) ((nevero))))

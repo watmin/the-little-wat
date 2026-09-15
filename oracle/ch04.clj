@@ -1,0 +1,26 @@
+;; oracle/ch04.clj: the queries of books/reasoned-schemer/ch04-double-your-fun.wat, in the
+;; oracle. Its output is the wat chapter's expected values.
+;; Run: clojure -M oracle/ch04.clj
+(load-file "oracle/mk.clj")
+(in-ns 'mk)
+(load-file "oracle/rels.clj")
+
+(println "== ch04")
+(show "cake" (run* x (appendo (quo '(cake)) (quo '(tastes yummy)) x)))
+(show "cake-y" (run* x (fresh (y) (appendo (lst 'cake '+ 'ice y) (quo '(tastes yummy)) x))))
+(show "cake-open" (run* x (fresh (y) (appendo (quo '(cake + ice cream)) y x))))
+(show "open-l-1" (run 1 x (fresh (y) (appendo (lst* '[cake + ice] y) (quo '(d t)) x))))
+(show "open-l-5" (run 5 x (fresh (y) (appendo (lst* '[cake + ice] y) (quo '(d t)) x))))
+(show "open-l-y-5" (run 5 y (fresh (x) (appendo (lst* '[cake + ice] y) (quo '(d t)) x))))
+(show "open-both-5" (run 5 x (fresh (y) (appendo (lst* '[cake + ice] y) (lst* '[d t] y) x))))
+(show "open-t" (run* x (fresh (z) (appendo (quo '(cake + ice cream)) (lst* '[d t] z) x))))
+(show "split-x-6" (run 6 x (fresh (y) (appendo x y (quo '(cake + ice d t))))))
+(show "split-y-6" (run 6 y (fresh (x) (appendo x y (quo '(cake + ice d t))))))
+(show "split-xy" (run* (x y) (appendo x y (quo '(cake + ice d t)))))
+(show "swappendo-xy" (run* (x y) (swappendo x y (quo '(cake + ice d t)))))
+(show "unwrap-pizza" (run* x (unwrapo (quo '(((pizza)))) x)))
+(show "unwrap-1" (run 1 x (unwrapo x 'pizza)))
+(show "unwrap-nested-1" (run 1 x (unwrapo (lst (lst x)) 'pizza)))
+(show "unwrap-5" (run 5 x (unwrapo x 'pizza)))
+(show "unwrap-5-pp" (run 5 x (unwrapo x (quo '((pizza))))))
+(show "unwrap-nested-5" (run 5 x (unwrapo (lst (lst x)) 'pizza)))
