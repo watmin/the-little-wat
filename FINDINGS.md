@@ -11,6 +11,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Reasoned Schemer | 10 / 10 | all pass, 201 checks (C-020). The book's surface (`run`, `fresh`, `conde`, `defrel`, `conda`, `condu`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Speed: about 100 times slower than the JVM on ch 8's queries, and about 430 times slower on the deepest searches (F-023, C-020) |
 | The Little MLer | 10 / 10 | all pass, 139 checks. Datatypes are enums (generic, recursive and mutually recursive, C-021), constructors are function values (C-022), exceptions are Results, and functors are dictionaries (C-023). Every match names every variant, and the book shows what that costs: tuple matches (F-027) and nested coverage (F-028). F-029 blocks functors over surfaces; F-030, a newtype, panics when printed |
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
+| The Little Typer | 4 / 16 | in progress. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 95 printed results and refuses all 30 forms Pie refuses (C-025, C-026). A handled thread death still prints to stderr (Friction, below) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -1433,6 +1434,72 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   repository since then uses it.
 - **Class:** REFUSAL (a principled protocol: "stopping is a protocol", arc 170). A program
   can poll `stopped?` itself; the evaluator does not.
+
+### C-025: wat-Pie, a dependent type checker written in wat, matches Racket's Pie
+
+- **Where:** The Little Typer, ch 1–4.
+- **What the chapters need:** Pie, the book's dependently typed language. Types compute,
+  evaluation runs under binders, and results print as normal forms, the way Pie prints them.
+- **What was done** (2026-09-15, wat-rs `a3218644d`):
+  - `books/little-typer/lib/pie.wat` (788 lines, keyword spelling) uses normalization by
+    evaluation with a bidirectional, elaborating checker. Synth gives a type and a core
+    term, so a stuck eliminator carries its base's type.
+  - Terms, values, closures and neutrals are all `:wat::WatAST`, built with `with-children`
+    and taken apart with `ast->children`, as in the J-Bob port (C-024).
+  - Each chapter is a `.pie` file that both implementations read. Racket's Pie reads it
+    through `tools/pie-oracle.sh`, as a black box (AGPL, never read or copied); wat-Pie
+    reads it through the chapter's runner.
+- **Result:** all 95 printed results match string for string (ch 1: 24, ch 2: 18, ch 3: 25,
+  ch 4: 28). They include:
+  - stuck `which-Nat`, `iter-Nat` and `rec-Nat` forms;
+  - eta-expanded functions and pairs;
+  - Pie's renaming of a shadowed binder (`(-> U (Pi ((A₁ U)) (-> A₁ A₁)))`);
+  - types that are not a U, which Pie prints by themselves.
+
+  Ch 3 runs in 1.5 s.
+- **The oracle earned its keep:** my first ch 4 draft held `(the U (Pi ((A U)) …))`, and wat-Pie
+  accepted it. Racket's Pie refused it: U has no type, so a Pi over U is a type but not a
+  U. That silent acceptance is why every chapter now also has refusal tests (C-026).
+- **Class:** CLEAN.
+- **Repro:** `wat books/little-typer/chNN-….wat` for NN = 01..04.
+
+### C-026: a failed assertion deep in a checker comes back as a value, through `:wat::test::run-thread`
+
+- **Where:** The Little Typer's refusal tests (`chNN-…-refusals.pie`).
+- **What they need:** to test that a form is refused. In wat-Pie a refusal is an
+  `assertion-failed!` up to ten frames deep. Without a way to observe a death, every
+  checker function would have to return a Result.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): this worked the first time.
+  ```clojure
+  (:wat::core::match (:wat::test::run-thread (:pie::run-form st form))
+    [:wat::kernel::RunResult.Passed {} (:pie::fail "accepted a form Pie refuses: …")]
+    [:wat::kernel::RunResult.Failed {:failure f} (:wat::kernel::Failure/message f)])
+  ```
+  - The thread shares the loaded definitions and captures the let-bound checker state.
+  - The Failure carries wat-Pie's message, its location in `lib/pie.wat`, and the frames.
+  - 30 of 30 refused forms die, and each death comes back as data.
+- **Note:** `spawn-program` is capability-restricted to `:wat::spawn::` and `:wat::test::`
+  (wat-rs `wat/test.wat`, arc 170). So the door a program has for watching a computation
+  die is a test verb. That's fine for tests. A non-test program supervising a risky
+  computation would have to borrow it; that isn't explored here.
+- **Class:** CLEAN.
+- **Repro:** the refusal half of any `books/little-typer/chNN-….wat` runner.
+
+### Friction: a thread death handled as data still prints its full failure record to stderr
+
+- **Where:** the refusal tests of C-026.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): ch 1's run exits 0, and its stdout
+  holds only the verdict lines. Its stderr holds 9 failure records, one for each refused
+  case, although the parent handles every one of them as a value:
+  > `#wat.kernel/AssertionFailure {:thread "wat-thread-peer::<anon>" :message "wat-Pie: 5 has type Nat but should have type Atom" :location #wat.kernel/Location {:file "books/little-typer/lib/pie.wat" :line 607 :col 13} … :frames [… ":pie::fail" … ":pie::synth-form" … ":pie::run-form" … ":wat::core::Fn"] :upstream-chain nil}`
+- **Cost:** a person reading a green run sees nine failures. Nothing marks a death as
+  expected (compare Erlang's `normal` exit reason, or deftest's `should-panic`, which is
+  for a whole test). This may be doctrine, since a dying thread declares its death; I
+  have not checked that against wat-rs's conventions.
+- **Route:** live with it. The runners put their verdict on stdout, and `run.sh` judges
+  by exit code.
+- **Class:** GAP (minor, output noise).
+- **Repro:** `wat books/little-typer/ch01-the-more-things-change.wat 2>&1 >/dev/null | grep -c AssertionFailure` prints 9.
 
 ## Predicted, unverified
 

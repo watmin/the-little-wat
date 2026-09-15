@@ -1,0 +1,34 @@
+#lang pie
+;; The Little Typer, chapter 5: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; nil by itself: the type of its entries cannot be determined
+nil
+
+;; the entry is a Nat, not an Atom
+(the (List Atom) (:: 1 nil))
+
+;; the tail must be a list
+(the (List Nat) (:: 1 2))
+
+;; entries must all have the same type
+(:: 1 (:: 'two nil))
+
+;; List needs a type
+(List 5)
+
+;; rec-List's target must be a list
+(rec-List 5 0 (lambda (e es n) n))
+
+;; rec-List's step takes three arguments
+(rec-List (the (List Nat) nil) 0 (lambda (e n) n))
+
+;; the step must give the base's type
+(rec-List (the (List Nat) (:: 1 nil)) 0 (lambda (e es n) 'more))
+
+;; a List of U is not a U
+(the U (List U))
+
+;; :: only synthesizes: its head must have a determinable type even where the list's type is given
+(the (List (List Nat)) (:: nil nil))

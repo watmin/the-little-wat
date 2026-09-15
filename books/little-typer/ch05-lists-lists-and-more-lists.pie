@@ -1,0 +1,55 @@
+#lang pie
+;; The Little Typer, chapter 5 (Lists, Lists, and More Lists): List, nil and ::, rec-List,
+;; and length, append, snoc and reverse by elimination. Our own examples on the chapter's
+;; topics. Racket's Pie prints each expression's (the TYPE NORMAL-FORM); wat-Pie reads this
+;; same file and must print the same.
+
+(the (List Atom) nil)
+(the (List Atom) (:: 'rye (:: 'bread nil)))
+(:: 1 (:: 2 nil))
+(:: (the (Pair Atom Nat) (cons 'a 1)) nil)
+(the (List (List Nat)) (:: (:: 1 nil) (:: (the (List Nat) nil) nil)))
+(List Nat)
+(List U)
+(the U (List (-> Nat Atom)))
+
+(claim rugbrød (List Atom))
+(define rugbrød (:: 'rye-flour (:: 'rye-kernels (:: 'water (:: 'sourdough (:: 'salt nil))))))
+rugbrød
+
+;; rec-List: nil gives the base; (:: e es) gives (step e es (rec-List es base step))
+(rec-List (the (List Atom) nil) 0 (lambda (e es n) (add1 n)))
+(rec-List rugbrød 'nothing (lambda (e es first) e))
+
+(claim step-length (Pi ((E U)) (-> E (List E) Nat Nat)))
+(define step-length (lambda (E) (lambda (e es length-es) (add1 length-es))))
+(claim length (Pi ((E U)) (-> (List E) Nat)))
+(define length (lambda (E) (lambda (es) (rec-List es 0 (step-length E)))))
+(length Atom rugbrød)
+(length Nat nil)
+(claim length-Atom (-> (List Atom) Nat))
+(define length-Atom (length Atom))
+length-Atom
+(the (-> (List Atom) Nat) (lambda (es) (length Atom (:: 'a es))))
+length
+
+(claim step-append (Pi ((E U)) (-> E (List E) (List E) (List E))))
+(define step-append (lambda (E) (lambda (e es append-es) (:: e append-es))))
+(claim append (Pi ((E U)) (-> (List E) (List E) (List E))))
+(define append (lambda (E) (lambda (start end) (rec-List start end (step-append E)))))
+(append Atom (:: 'a (:: 'b nil)) (:: 'c nil))
+(append Nat nil nil)
+(the (-> (List Nat) (List Nat)) (lambda (end) (append Nat (:: 1 (:: 2 nil)) end)))
+(the (-> (List Nat) (List Nat)) (lambda (start) (append Nat start (:: 3 nil))))
+
+(claim snoc (Pi ((E U)) (-> (List E) E (List E))))
+(define snoc (lambda (E) (lambda (start e) (rec-List start (:: e nil) (step-append E)))))
+(snoc Atom rugbrød 'butter)
+
+(claim step-reverse (Pi ((E U)) (-> E (List E) (List E) (List E))))
+(define step-reverse (lambda (E) (lambda (e es reverse-es) (snoc E reverse-es e))))
+(claim reverse (Pi ((E U)) (-> (List E) (List E))))
+(define reverse (lambda (E) (lambda (es) (rec-List es (the (List E) nil) (step-reverse E)))))
+(reverse Atom rugbrød)
+(reverse Nat (:: 1 (:: 2 (:: 3 nil))))
+(check-same (List Nat) (reverse Nat (reverse Nat (:: 1 (:: 2 nil)))) (:: 1 (:: 2 nil)))

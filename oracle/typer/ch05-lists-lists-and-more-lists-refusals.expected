@@ -1,0 +1,10 @@
+refused: Can't determine a type
+refused: Expected (List Atom) but given (List Nat)
+refused: Expected (List Nat) but given Nat
+refused: Expected (List Nat) but given (List Atom)
+refused: Expected U but given Nat
+refused: Not List: Nat
+refused: Expected (-> Nat Nat) but given (List Nat)
+refused: Expected Nat but given Atom
+refused: U is a type, but it does not have a type.
+refused: Can't determine a type

@@ -4,16 +4,17 @@
 ;; is AGPL-3.0; it is run as the oracle (tools/pie-oracle.sh) and never read into this.
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
-;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, claim,
-;; define, check-same.
+;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
+;; ::, rec-List, claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
 ;;             (VPi x dom clos) (VSigma x car-type clos) (VLam x clos) (VCons a d)
-;;             (VNeu type neutral)
+;;             (VList elem-type) (VNil) (VLCons e es) (VNeu type neutral)
 ;; - closures: (CLOS env x body): an environment, a variable, and a body in core form
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
 ;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
+;;             (NRecList target elem-type base-type base step)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -129,6 +130,7 @@
   (:wat::core::let [k (:wat::core::ast-kind e)]
     (:wat::core::cond
       ((:wat::core::= k "int") (:pie::numeral (:ls::ast->i64 e)))
+      ((:wat::core::= k "nil") (:pie::t0 "VNil"))
       ((:wat::core::= k "symbol") (:pie::eval-var env (:wat::core::ast-name e)))
       ((:pie::list? e) (:pie::eval-form env e (:pie::head e)))
       (:else (:pie::fail (:wat::string::concat "cannot evaluate " (:wat::core::ast->source e)))))))
@@ -157,6 +159,14 @@
     ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "List") (:pie::t1 "VList" (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "::") (:pie::t2 "VLCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
+    ((:wat::core::= h "rec-List")
+      (:wat::core::let [base (:pie::arg e 1)]
+        (:pie::do-rec-list (:pie::eval env (:pie::arg e 0))
+                           (:pie::eval env (:pie::arg base 0))
+                           (:pie::eval env (:pie::arg base 1))
+                           (:pie::eval env (:pie::arg e 2)))))
     ((:pie::nat-elim? h)
       (:wat::core::let [base (:pie::arg e 1)]
         (:pie::do-nat-elim h
@@ -246,6 +256,21 @@
       (:pie::t2 "VNeu" bt (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "NNat") (:pie::sym elim) (:pie::arg t 1) bt b s))))
     (:else (:pie::fail (:wat::string::concat elim " of a non-Nat")))))
 
+;; rec-List: nil gives the base; (:: e es) gives (step e es (rec-List es base step)); a stuck
+;; target, whose type (List E) gives the step's type, a stuck rec-List.
+(:wat::core::defn :pie::list-step-type [et <- :wat::WatAST x <- :wat::WatAST] -> :wat::WatAST
+  (:pie::arrow-value et (:pie::arrow-value (:pie::t1 "VList" et) (:pie::arrow-value x x))))
+
+(:wat::core::defn :pie::do-rec-list [t <- :wat::WatAST bt <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VNil") b)
+    ((:pie::tag? t "VLCons")
+      (:pie::do-ap (:pie::do-ap (:pie::do-ap s (:pie::arg t 0)) (:pie::arg t 1)) (:pie::do-rec-list (:pie::arg t 1) bt b s)))
+    ((:pie::tag? t "VNeu")
+      (:pie::t2 "VNeu" bt (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                                      (:pie::sym "NRecList") (:pie::arg t 1) (:pie::arg (:pie::arg t 0) 0) bt b s))))
+    (:else (:pie::fail "rec-List of a non-list"))))
+
 ;; ---- reading back
 
 (:wat::core::defn :pie::subscript [i <- :wat::core::i64] -> :wat::core::String
@@ -272,6 +297,7 @@
     ((:pie::tag? v "VU") (:pie::sym "U"))
     ((:pie::tag? v "VAtom") (:pie::sym "Atom"))
     ((:pie::tag? v "VNat") (:pie::sym "Nat"))
+    ((:pie::tag? v "VList") (:pie::t1 "List" (:pie::rb-type used (:pie::arg v 0))))
     ((:pie::tag? v "VPi") (:pie::rb-binder used v "Pi"))
     ((:pie::tag? v "VSigma") (:pie::rb-binder used v "Sigma"))
     ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
@@ -304,6 +330,9 @@
                     (:pie::rb used (:pie::arg t 1) a)
                     (:pie::rb used (:pie::inst (:pie::arg t 2) a) (:pie::do-cdr v))))))
     ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
+    ((:pie::tag? v "VNil") (:pie::sym "nil"))
+    ((:pie::tag? v "VLCons")
+      (:pie::t2 "::" (:pie::rb used (:pie::arg t 0) (:pie::arg v 0)) (:pie::rb used t (:pie::arg v 1))))
     ((:pie::tag? v "VQuote") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "quote") (:pie::arg v 0))))
     ((:pie::tag? v "VZero") (:pie::sym "zero"))
     ((:pie::tag? v "VAdd1") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "add1") (:pie::rb used t (:pie::arg v 0)))))
@@ -316,6 +345,13 @@
       (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arg ne 1) (:pie::arg ne 2)))))
     ((:pie::tag? ne "NCar") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "car") (:pie::rb-neu used (:pie::arg ne 0)))))
     ((:pie::tag? ne "NCdr") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "cdr") (:pie::rb-neu used (:pie::arg ne 0)))))
+    ((:pie::tag? ne "NRecList")
+      (:wat::core::let [bt (:pie::arg ne 2)]
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym "rec-List")
+                    (:pie::rb-neu used (:pie::arg ne 0))
+                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::rb-type used bt) (:pie::rb used bt (:pie::arg ne 3))))
+                    (:pie::rb used (:pie::list-step-type (:pie::arg ne 1) bt) (:pie::arg ne 4))))))
     ((:pie::tag? ne "NNat")
       (:wat::core::let [elim (:pie::name-of (:pie::arg ne 0))
                         bt (:pie::arg ne 2)]
@@ -384,7 +420,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -513,7 +549,7 @@
       (:wat::core::let [tc (:pie::check-type ctx env (:pie::arg e 0))
                         tv (:pie::eval env tc)]
         (:pie::syn tv (:pie::t2 "the" tc (:pie::check ctx env (:pie::arg e 1) tv)))))
-    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma") h)
+    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma" "List") h)
       (:pie::syn (:pie::t0 "VU") (:pie::type-at ctx env e true)))
     ((:wat::core::= h "car")
       (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
@@ -528,6 +564,20 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ;; :: only synthesizes, as in Pie: its head's type gives the list's.
+    ((:wat::core::= h "::")
+      (:wat::core::let [hs (:pie::synth ctx env (:pie::arg e 0))
+                        lt (:pie::t1 "VList" (:pie::syn-type hs))]
+        (:pie::syn lt (:pie::t2 "::" (:pie::syn-core hs) (:pie::check ctx env (:pie::arg e 1) lt)))))
+    ((:wat::core::= h "rec-List")
+      (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
+                        lt (:pie::syn-type ts)]
+        (:wat::core::if (:pie::tag? lt "VList")
+          (:wat::core::let [bs (:pie::synth ctx env (:pie::arg e 1))
+                            x (:pie::syn-type bs)
+                            sc (:pie::check ctx env (:pie::arg e 2) (:pie::list-step-type (:pie::arg lt 0) x))]
+            (:pie::syn x (:pie::t3 "rec-List" (:pie::syn-core ts) (:pie::t2 "the" (:pie::rb-type (:pie::used ctx) x) (:pie::syn-core bs)) sc)))
+          (:pie::fail (:wat::string::concat "not a List: " (:pie::show-type ctx lt))))))
     ((:pie::nat-elim? h)
       (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat"))
                         bs (:pie::synth ctx env (:pie::arg e 1))
@@ -562,6 +612,7 @@
     (:wat::core::cond
       ((:wat::core::if u? (:wat::core::= n "U") false) (:pie::fail "U is a type, but it does not have a type"))
       ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) e)
+      ((:wat::core::= h "List") (:pie::t1 "List" (:pie::type-at ctx env (:pie::arg e 0) u?)))
       ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->"))
         (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym h)) (:pie::check-types ctx env (:pie::args e) u?))))
       ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
@@ -594,6 +645,7 @@
 (:wat::core::defn :pie::check [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST t <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::let [h (:pie::head e)]
     (:wat::core::cond
+      ((:wat::core::if (:wat::core::= (:pie::name-of e) "nil") (:pie::tag? t "VList") false) e)
       ((:wat::core::if (:wat::core::= h "cons") (:pie::tag? t "VSigma") false)
         (:wat::core::let [ac (:pie::check ctx env (:pie::arg e 0) (:pie::arg t 1))]
           (:pie::t2 "cons" ac (:pie::check ctx env (:pie::arg e 1) (:pie::inst (:pie::arg t 2) (:pie::eval env ac))))))
@@ -629,7 +681,7 @@
   (:wat::core::let [h (:pie::head e)]
     (:wat::core::cond
       ((:wat::core::= (:pie::name-of e) "U") true)
-      ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->")) (:pie::any-large? (:pie::args e)))
+      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "List") h) (:pie::any-large? (:pie::args e)))
       ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
         (:wat::core::if (:pie::any-large? (:pie::binder-types (:pie::kids (:pie::arg e 0)))) true (:pie::large? (:pie::arg e 1))))
       (:else false))))
