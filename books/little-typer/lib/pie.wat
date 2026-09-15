@@ -4,7 +4,8 @@
 ;; is AGPL-3.0; it is run as the oracle (tools/pie-oracle.sh) and never read into this.
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
-;; car, cdr, -> and Pi, lambda, application, the, which-Nat, claim, define, check-same.
+;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, claim,
+;; define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
@@ -12,7 +13,7 @@
 ;;             (VNeu type neutral)
 ;; - closures: (CLOS env x body): an environment, a variable, and a body in core form
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
-;;             (NWhichNat target base-type base step)
+;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -156,12 +157,13 @@
     ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
-    ((:wat::core::= h "which-Nat")
+    ((:pie::nat-elim? h)
       (:wat::core::let [base (:pie::arg e 1)]
-        (:pie::do-which-nat (:pie::eval env (:pie::arg e 0))
-                            (:pie::eval env (:pie::arg base 0))
-                            (:pie::eval env (:pie::arg base 1))
-                            (:pie::eval env (:pie::arg e 2)))))
+        (:pie::do-nat-elim h
+                           (:pie::eval env (:pie::arg e 0))
+                           (:pie::eval env (:pie::arg base 0))
+                           (:pie::eval env (:pie::arg base 1))
+                           (:pie::eval env (:pie::arg e 2)))))
     (:else (:pie::eval-app env (:pie::eval env (:wat::core::first (:pie::kids e))) (:pie::args e)))))
 
 ;; (-> A B C) is (Pi ((_ A)) (-> B C)).
@@ -216,13 +218,33 @@
       (:pie::t2 "VNeu" (:pie::inst (:pie::arg (:pie::arg p 0) 2) (:pie::do-car p)) (:pie::t1 "NCdr" (:pie::arg p 1))))
     (:else (:pie::fail "cdr of a non-pair"))))
 
-;; which-Nat: zero gives the base, (add1 n) gives (step n), a stuck target a stuck which-Nat.
-(:wat::core::defn :pie::do-which-nat [t <- :wat::WatAST bt <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
+;; The eliminators for Nat, each (ELIM target base step). zero gives the base; (add1 n) gives
+;;   which-Nat: (step n)
+;;   iter-Nat:  (step (iter-Nat n base step))
+;;   rec-Nat:   (step n (rec-Nat n base step))
+;; and a stuck target gives a stuck eliminator, (NNat ELIM target base-type base step).
+(:wat::core::defn :pie::nat-elim? [h <- :wat::core::String] -> :wat::core::bool
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "which-Nat" "iter-Nat" "rec-Nat") h))
+
+;; The step's type, for base type x.
+(:wat::core::defn :pie::nat-step-type [elim <- :wat::core::String x <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::= elim "which-Nat") (:pie::arrow-value (:pie::t0 "VNat") x))
+    ((:wat::core::= elim "iter-Nat") (:pie::arrow-value x x))
+    (:else (:pie::arrow-value (:pie::t0 "VNat") (:pie::arrow-value x x)))))
+
+(:wat::core::defn :pie::do-nat-elim [elim <- :wat::core::String t <- :wat::WatAST bt <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
     ((:pie::tag? t "VZero") b)
-    ((:pie::tag? t "VAdd1") (:pie::do-ap s (:pie::arg t 0)))
-    ((:pie::tag? t "VNeu") (:pie::t2 "VNeu" bt (:pie::t4 "NWhichNat" (:pie::arg t 1) bt b s)))
-    (:else (:pie::fail "which-Nat of a non-Nat"))))
+    ((:pie::tag? t "VAdd1")
+      (:wat::core::let [n (:pie::arg t 0)]
+        (:wat::core::cond
+          ((:wat::core::= elim "which-Nat") (:pie::do-ap s n))
+          ((:wat::core::= elim "iter-Nat") (:pie::do-ap s (:pie::do-nat-elim elim n bt b s)))
+          (:else (:pie::do-ap (:pie::do-ap s n) (:pie::do-nat-elim elim n bt b s))))))
+    ((:pie::tag? t "VNeu")
+      (:pie::t2 "VNeu" bt (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "NNat") (:pie::sym elim) (:pie::arg t 1) bt b s))))
+    (:else (:pie::fail (:wat::string::concat elim " of a non-Nat")))))
 
 ;; ---- reading back
 
@@ -294,13 +316,14 @@
       (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arg ne 1) (:pie::arg ne 2)))))
     ((:pie::tag? ne "NCar") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "car") (:pie::rb-neu used (:pie::arg ne 0)))))
     ((:pie::tag? ne "NCdr") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "cdr") (:pie::rb-neu used (:pie::arg ne 0)))))
-    ((:pie::tag? ne "NWhichNat")
-      (:wat::core::let [bt (:pie::arg ne 1)]
+    ((:pie::tag? ne "NNat")
+      (:wat::core::let [elim (:pie::name-of (:pie::arg ne 0))
+                        bt (:pie::arg ne 2)]
         (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
-                    (:pie::sym "which-Nat")
-                    (:pie::rb-neu used (:pie::arg ne 0))
-                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::rb-type used bt) (:pie::rb used bt (:pie::arg ne 2))))
-                    (:pie::rb used (:pie::arrow-value (:pie::t0 "VNat") bt) (:pie::arg ne 3))))))
+                    (:pie::sym elim)
+                    (:pie::rb-neu used (:pie::arg ne 1))
+                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::rb-type used bt) (:pie::rb used bt (:pie::arg ne 3))))
+                    (:pie::rb used (:pie::nat-step-type elim bt) (:pie::arg ne 4))))))
     (:else (:pie::fail (:wat::string::concat "cannot read back neutral " (:wat::core::ast->source ne))))))
 
 ;; ---- alpha-equivalence of raw read-backs (one binder per lambda, Pi, Sigma)
@@ -361,7 +384,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -505,12 +528,12 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
-    ((:wat::core::= h "which-Nat")
+    ((:pie::nat-elim? h)
       (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat"))
                         bs (:pie::synth ctx env (:pie::arg e 1))
                         x (:pie::syn-type bs)
-                        sc (:pie::check ctx env (:pie::arg e 2) (:pie::arrow-value (:pie::t0 "VNat") x))]
-        (:pie::syn x (:pie::t3 "which-Nat" tc (:pie::t2 "the" (:pie::rb-type (:pie::used ctx) x) (:pie::syn-core bs)) sc))))
+                        sc (:pie::check ctx env (:pie::arg e 2) (:pie::nat-step-type h x))]
+        (:pie::syn x (:pie::t3 h tc (:pie::t2 "the" (:pie::rb-type (:pie::used ctx) x) (:pie::syn-core bs)) sc))))
     ((:wat::core::if (:wat::core::= h "cons") true (:wat::core::= h "lambda"))
       (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e) "; use the")))
     (:else
