@@ -31,4 +31,11 @@
     [:mal::Val.Kw {:name name} (:wat::string::concat ":" name)]
     [:mal::Val.List {:items xs} (:mal::pr-seq "(" xs ")" readably)]
     [:mal::Val.Vec {:items xs} (:mal::pr-seq "[" xs "]" readably)]
-    [:mal::Val.Map {:kvs xs} (:mal::pr-seq "{" xs "}" readably)]))
+    [:mal::Val.Map {:kvs xs} (:mal::pr-seq "{" xs "}" readably)]
+    [:mal::Val.Builtin {:name name} (:wat::string::concat "#<builtin " name ">")]))
+
+;; what the REPL prints for an evaluation
+(:wat::core::defn :mal::pr-res [r <- :mal::Res] -> :wat::core::String
+  (:wat::core::match r
+    [:mal::Res.Ok {:v v} (:mal::pr-str v true)]
+    [:mal::Res.Err {:e e} (:wat::string::concat "Error: " (:mal::pr-str e true))]))
