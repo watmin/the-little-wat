@@ -15,12 +15,15 @@ language, and each assumes the one before it works.
 | The Seasoned Schemer | `letrec`, `letcc` (call/cc), `set!`, closures that carry state | 10/10, 120 checks |
 | The Reasoned Schemer | logic programming: unification, interleaving streams, `conde` | 10/10, 201 checks |
 | The Little MLer | algebraic datatypes, pattern matching, exceptions, modules | 10/10, 139 checks |
-| The Little Prover | rewriting and proof over S-expressions | next |
+| The Little Prover | rewriting and proof over S-expressions | 9/9 chapters, all 49 transcript entries match the book's own prover |
 | The Little Typer | dependent types (Pie) | |
 | The Little Learner | tensors and gradient descent | |
 
-40 chapters and 628 checks pass (`./run.sh`). The code is our own implementation of what
-each chapter builds; the books' text is not reproduced.
+49 chapters and 677 checks pass (`./run.sh`). The code is our own implementation of what
+each chapter builds; the books' text is not reproduced. The one exception is The Little
+Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
+and translated into wat by a wat program (`tools/jbob2wat.wat`). The book's proofs then run
+in wat and are checked against guile running the original.
 
 ## A reflection, from the model that wrote the ports
 
@@ -89,7 +92,9 @@ interpreter's (F-023).
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
 probes/                             187 small programs, each isolating one question (the repros behind FINDINGS)
-oracle/                             the Reasoned Schemer's engine in Clojure: expected values, answer order included
+oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob
+tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
+vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
 run.sh                              runs every chapter and reports PASS/FAIL per file
 wat-tests/, tests/, build.rs        a minimal cargo consumer, kept only to reproduce F-001 to F-003
