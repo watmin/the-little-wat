@@ -836,6 +836,42 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** CLEAN.
 - **Repro:** `books/seasoned-schemer/ch20-whats-in-store.wat`.
 
+## The Reasoned Schemer
+
+### F-019: a variant constructor inside a collection or stream literal keeps its narrowed type, so `[(Option.Some {…})]` is not a `Vector<Option<i64>>`
+
+- **Where:** Reasoned Schemer ch 10's engine, before any chapter. Its streams are
+  `(:wat::stream::Stream :- [(:wat::core::Option :- [State])])`, where `None` marks a
+  suspension, so a stream literal holds `Some` values.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - `(:wat::core::Option.Some {:value 42})` returned from a fn declared
+    `(:wat::core::Option :- [:wat::core::i64])` works (`probes/mk/some-direct.wat`).
+  - The same value inside a vector literal is refused at startup
+    (`probes/mk/some-in-vector.wat`):
+    > `:u::v: body produces (:wat::core::Vector :- [(:wat::core::Option.Some :- [:wat::core::i64])]); signature declares (:wat::core::Vector :- [(:wat::core::Option :- [:wat::core::i64])])`
+  - Likewise in `(:wat::stream::cons (Option.Some {…}) (:wat::stream::empty))`, with or
+    without a typealias (`probes/mk/some-in-stream-no-alias.wat`,
+    `probes/mk/alias-param-and-fn-vector.wat`).
+  - The brace-form `(:wat::core::Option.None {})` hits the same wall inside a stream
+    (`probes/mk/option-stream-brace-none.wat`):
+    > `:wat::stream::cons: parameter #2 expects (:wat::stream::Stream :- [(:wat::core::Option.None :- [:?149])]); got (:wat::stream::Stream :- [(:wat::core::Option :- [:wat::core::i64])])`
+
+    The bare `:wat::core::Option.None` is fine (`probes/mk/option-stream-bare-none.wat`),
+    because a bare unit variant of a parametric enum is typed as the enum (`check.rs:1979`).
+- **Mechanism** (read in the source): a brace-form constructor is typed as its variant
+  (`Option.Some`), not its enum. The variant widens to the enum at a fn's return
+  (`some-direct`), but not inside a type argument, because type arguments unify
+  invariantly: "Args are INVARIANT (a channel's send/recv types are exact) → unify, not
+  covariant-assignable" (`check.rs:17266`). `check.rs:13679–13690` already works around the
+  same exact-head unify for `<` by widening each side to its enclosing enum first.
+- **Workaround:** a generic helper whose declared return does the widening:
+  `(wat.core/defn u/some :- [T] [x :- T] :- (wat.type/Option :- [T]) (:wat::core::Option.Some {:value x}))`.
+  Then `[(u/some 1)]` and the stream both check (`probes/mk/some-via-helper.wat`).
+- **Class:** GAP. In Rust `vec![Some(1)]` is a `Vec<Option<i32>>`, and in Clojure the
+  question never comes up. Widening a variant to its enum where it becomes a type argument
+  would keep channel invariance while ending this.
+- **Repro:** the probes named above.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
