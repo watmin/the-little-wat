@@ -58,6 +58,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   template splices fine.
 - **F-023:** `conj` onto a `Vector` clones it, so Clojure's `[]` + `conj` accumulator is
   O(n²). `PersistentVector` or stream fns with one `into` are the linear routes.
+- **F-025:** `match` treats a `_` arm, a bare binder `[v …]` or a hash-destructure as
+  covering every variant, and its non-exhaustive error suggests adding `_`. That goes
+  against the doctrine that an arm cannot be forgotten.
 
 ## Classes
 
@@ -1106,6 +1109,30 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   - Along the way: F-019 to F-024 and R-004/R-005.
 - **Class:** CLEAN, with the cost noted.
 - **Repro:** `./run.sh`; `clojure -M oracle/chNN.clj` for any chapter's expected values.
+
+### F-025: `match` accepts `_`, a bare binder, or a hash-destructure as a catch-all, and its own error recommends `_`
+
+- **Doctrine, per the builder (2026-09-14):** wat does not allow `_`; you cannot forget to
+  define an arm.
+- **What happened** (2026-09-14, wat-rs `a3218644d`), on a user enum with three unit
+  variants:
+  - Naming one variant and ending with `[_ …]` passes and runs
+    (`probes/match-wildcard-enum.wat`).
+  - Ending with a bare binder `[v …]` passes and runs (`probes/match-binder-catchall.wat`).
+  - Naming two and leaving the third out is refused, but the error offers the escape
+    (`probes/match-missing-arm.wat`):
+    > `non-exhaustive: enum :u::Veg missing arm(s) for variant(s): Tomato (or include _ wildcard)`
+- **Mechanism** (read in the source): exhaustiveness is `wildcard_seen`
+  (`check.rs:6385`, `:6637`). It is set by a `MatchArm::Wildcard` arm (`:6446–6452`), a
+  `MatchArm::Binding` arm (`:6453–6463`), and a hash-destructure arm (`:6468–6481`). Any of
+  the three covers every variant, including ones added to the enum later.
+- **So:** the exhaustiveness check is real, but a catch-all arm silences it. That keeps a
+  variant added later from ever producing an error. This repository's own engine has 13
+  `_` arms (`books/reasoned-schemer/lib/ch10-under-the-hood.wat`), all accepted.
+- **Class:** GAP (the checker drifts from the stated doctrine). Enforcing the doctrine
+  means refusing the three catch-all shapes on enums and dropping "or include `_`
+  wildcard" from the diagnostic.
+- **Repro:** the three probes above.
 
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 
