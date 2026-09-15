@@ -247,14 +247,29 @@
 (wat.core/defn rs/start [] :- :rs::State
   (:rs::State :s {} :c 1))
 
+(wat.core/defn rs/answer? [o :- (wat.type/Option :- [:rs::State])] :- wat.type/bool
+  (:wat::core::match o
+    [:wat::core::Option.Some {:value _st} true]
+    [:wat::core::Option.None {} false]))
+
+;; An answer's value of the query variable (variable 0).
+(wat.core/defn rs/reify-answer [o :- (wat.type/Option :- [:rs::State])] :- :wat::WatAST
+  (:wat::core::match o
+    [:wat::core::Option.Some {:value st} (rs/reify (rs/var 0) st)]
+    [:wat::core::Option.None {} '()]))
+
 ;; The first n values (n < 0: all) of the query variable handed to f, as a quoted list. The
 ;; query is variable 0. The run and run* macros below are the book's spelling of this.
+;; The answers go through the stdlib's lazy stream fns and one native into, which is linear.
+;; Accumulating them by hand (rs/take's conj, a splice per answer) was quadratic: conj
+;; copies a Vector (F-023).
 (wat.core/defn rs/run-goal [n :- wat.type/i64 f :- [:rs::Term :-> :rs::Goal]] :- :wat::WatAST
-  (wat.core/let [q (rs/var 0)
-                 sts (rs/take n [] ((f q) (rs/start)))]
-    (:wat::core::foldl (wat.core/fn [acc :- :wat::WatAST st :- :rs::State] :- :wat::WatAST
-                         (wat.core/quasiquote (~@acc ~(rs/reify q st))))
-                       '() sts)))
+  (wat.core/let [answers (:wat::core::map rs/reify-answer
+                                          (:wat::core::filter rs/answer? ((f (rs/var 0)) (rs/start))))
+                 v (wat.core/if (wat.core/< n 0)
+                     (:wat::core::into [] answers)
+                     (:wat::core::into [] (:wat::core::take answers n)))]
+    (wat.core/quasiquote (~@v))))
 
 ;; ---- the book's surface: run, run*, fresh, conde, defrel, as macros
 ;;

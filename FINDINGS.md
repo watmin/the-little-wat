@@ -8,7 +8,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 |---|---|---|
 | The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
 | The Seasoned Schemer | 10 / 10 | all pass. letrec via Y (C-012); letcc via `Result/try`, with the abandoned work measured (C-013, C-015); `set!` on Cell services (C-014); mutable, shared and cyclic lists on an Arena (C-016); generators as lazy streams (C-017); the ch 20 interpreter with a store and escaping letcc (C-018). Refused by design: Y-bang (R-002) and re-entrant continuations (R-003) |
-| The Reasoned Schemer | 1 / 10 | in progress. The ch 10 engine was built first, since every chapter runs on it; the book's surface (`run`, `fresh`, `conde`, `defrel`) works as wat macros (C-019) |
+| The Reasoned Schemer | 7 / 10 | ch 1–6 and the ch 10 engine pass, 128 checks. The book's surface (`run`, `fresh`, `conde`, `defrel`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Measured: the search is linear, about 0.35 ms per answer against 1.1 µs on the JVM (F-023) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -17,6 +17,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
   arity nor argument types. Definitions still are. Converting to the Clojure/EDN spelling
   silently turns off call checking everywhere.
+- **F-024:** to the checker, `wat.core/let` is not a let. Its binding vector is checked as a
+  vector literal (so `[a 1 b "x"]` is refused, naming the retired `:wat::core::vec`), and its
+  body is checked without the bindings. A type error in the body surfaces only at runtime.
 - **F-012:** `(wat/load-file! …)` is a silent no-op: no load, no error, even for a missing
   file.
 - **F-003:** a `wat.test/deftest` is silently skipped (zero tests, still green).
@@ -53,6 +56,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   everywhere, contradicting the checker's own comment. Only `(:u::T.Nil {})` works.
 - **F-021:** in a program-body macro, `~@` refuses a vector-form argument that a pure
   template splices fine.
+- **F-023:** `conj` onto a `Vector` clones it, so Clojure's `[]` + `conj` accumulator is
+  O(n²). `PersistentVector` or stream fns with one `into` are the linear routes.
 
 ## Classes
 
@@ -1001,6 +1006,92 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   `:wat::core::defmacro` as `wat.core/defmacro` would drop every macro without a word at
   the definitions.
 - **Repro:** the probes named above.
+
+### F-023: `conj` onto a `Vector` copies the whole Vector, so an accumulating loop is quadratic
+
+- **Where:** Reasoned Schemer ch 6, `(run 1000000 q (very-recursiveo))`, which the book
+  asks for. In wat it took 18.9 s for 10 000 answers, and the 100 000 run never finished
+  (R-005). The oracle does a million in 1.1 s.
+- **What happened** (2026-09-14, wat-rs `a3218644d`). Measured, wall clock, about 0.55 s of
+  each run being startup:
+
+  | 10 000 answers of very-recursiveo | ms | 20 000 |
+  |---|---|---|
+  | as first written: `rs/take` conj's states onto a Vector, then `rs/run-goal` splices each answer onto a quoted list | 18 890 | — |
+  | the search alone, answers counted (`probes/mk/vr-count-*.wat`) | 3 910 | 7 250 |
+  | the search, states conj'ed onto a Vector (`vr-take-*.wat`) | 5 856 | 16 534 |
+  | answers through `filter` / `map` / `take` / `into []` (`vr-stream-nolet.wat`, now `rs/run-goal`) | 4 115 | 7 551 |
+
+  A loop that only conj's onto a Vector (`probes/mk/vector-conj-*.wat`): 1 180 ms for
+  10 000, 4 516 for 20 000, 16 950 for 40 000. The same loop adding instead stays at
+  623–760 ms.
+- **Mechanism** (read in the source): `vector_conj_inner` clones the Vec and pushes, every
+  time: `let mut out = (**xs).clone(); out.push(item.clone());`
+  (`src/collection/eval.rs:280–284`). `PersistentVector`'s conj is a persistent
+  `push_back` (`:899–902`).
+- **So:** `[]` and `conj`, Clojure's accumulator idiom, is O(n²) in wat. The splice per
+  answer (`(~@acc ~x)`) was my own quadratic, and the larger part (about 10.8 s of the
+  18.9). Both are gone from the engine now.
+- **Routes:** the stdlib's lazy stream fns with one native `into []`, which is linear (the
+  last row). Or accumulate into `(:wat::core::PersistentVector)`.
+- **What is left is the interpreter:** the search is linear at about 0.35 ms per answer,
+  against about 1.1 µs on the JVM. That constant is what compilation would change; the two
+  quadratics were data-structure and algorithm costs, which it would not.
+- **Class:** GAP (performance). Clojure's `[]` is persistent, so `conj` costs O(log n).
+  `Arc::make_mut` would avoid the copy when the Vec is not shared.
+- **Repro:** the probes named above.
+
+### F-024: to the checker, `wat.core/let` is not a let: its bindings are checked as a vector literal, and its body without them
+
+- **Where:** Reasoned Schemer ch 10's engine. A probe binding a Stream and then a Vector in
+  a Clojure-spelled `let` was refused with
+  `:wat::core::vec: parameter #11 expects (:wat::stream::Stream :- [:?2972]); got (:wat::core::Vector :- [:?3004])`,
+  a verb the program never calls (`probes/mk/vr-stream-10000.wat` at that commit).
+- **What happened** (2026-09-14, wat-rs `a3218644d`), isolated with no miniKanren:
+
+  | probe | form | result |
+  |---|---|---|
+  | `probes/kw-let-mixed.wat` | `(:wat::core::let [a 1 b "x"] …)` | runs |
+  | `probes/clj-let-mixed.wat` | `(wat.core/let [a 1 b "x"] …)` | refused: `:wat::core::vec: parameter #5 expects :wat::core::i64; got :wat::core::String` |
+  | `probes/clj-let-kwcalls-mixed.wat` | `(wat.core/let [a (:wat::core::+ 1 2) b (:wat::string::concat "x" "y")] …)` | refused, the same |
+  | `probes/clj-let-symcalls-mixed.wat` | `(wat.core/let [a (wat.core/+ 1 2) b (wat.string/concat "x" "y")] …)` | runs |
+  | `probes/kw-let-body-checked.wat` | `(:wat::core::let [a "x"] (:wat::core::+ a 1))` | refused at startup: `no clause of :wat::core::+ matches … [:wat::core::String, :wat::core::i64]` |
+  | `probes/clj-let-body-unchecked.wat` | `(wat.core/let [a "x"] (:wat::core::+ a 1))` | passes the checker; fails at **runtime** with `NoMatchingClause` |
+
+- **Mechanism** (read in the source): the checker has no case for `wat.core/let`. Its head
+  is a symbol, so it takes the value-head path (`check.rs:6214–6243`): infer the head as a
+  value, and when that fails or is not a Fn, "Recurse into args so nested errors still
+  surface". The binding vector is one of those args, so it is inferred as a vector literal,
+  whose elements must share one type. The body is inferred without the bindings in scope.
+  Only elements whose types are known can clash: literals and keyword-headed calls.
+  Symbol-headed calls infer as fresh variables (F-014), which is why most Clojure lets in
+  this repository pass. `defn` escapes because it is a macro, and symbol-headed macro calls
+  expand before checking (C-019). `let` is a special form.
+- **So:**
+  - This is F-014's root for lets: no binding a Clojure `let` makes is ever type-checked.
+  - The error names `:wat::core::vec`, a retired verb the user never wrote. Its parameter
+    number is off by one (`b`'s value, the 4th element, is "parameter #5"), and its remedy
+    says to rename `:wat::core::vec` → `:wat::core::Vector`.
+  - When F-014 is fixed, and symbol-headed calls get real types, every Clojure `let` that
+    binds two different types will start failing with this error.
+- **Class:** GAP (a defect), and the most serious codemod hazard after F-014. The keyword
+  `let` → `wat.core/let` rewrite turns off checking of every binding and body.
+- **Repro:** the probes in the table.
+
+### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
+
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `timeout 180 wat
+  probes/mk/very-recursiveo-100000.wat` was still running at 10:15 elapsed, 7 minutes
+  after `timeout` sent SIGTERM. An explicit `kill -TERM` changed nothing: the process was
+  still running (`Rl`) 5 seconds later. Only SIGKILL stopped it.
+- **Doctrine** (`src/runtime.rs:70–77`): "The wat binary installs OS signal handlers for
+  SIGINT and SIGTERM; both set this flag to `true`. User programs poll via the
+  `:wat::kernel::stopped?` form to decide whether to continue their main loops". So a
+  computation that never polls, like a search, cannot be stopped by SIGTERM or Ctrl-C.
+- **Cost:** a runaway computation needs `timeout -s KILL`. Every timed run in this
+  repository since then uses it.
+- **Class:** REFUSAL (a principled protocol: "stopping is a protocol", arc 170). A program
+  can poll `stopped?` itself; the evaluator does not.
 
 ## Predicted, unverified
 
