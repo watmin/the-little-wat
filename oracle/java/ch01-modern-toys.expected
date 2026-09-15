@@ -1,0 +1,18 @@
+(Salt)
+(Pepper)
+(Thyme)
+(Sage)
+(CartesianPt 2 3)
+(ManhattanPt 2 3)
+(CartesianPt -1 0)
+(Zero)
+(OneMoreThan (Zero))
+(OneMoreThan (OneMoreThan (OneMoreThan (Zero))))
+(Base (Zero))
+(Base (Salt))
+(Base 5)
+(Base true)
+(Slice (Base (CartesianPt 1 2)))
+(Slice (Slice (Base (OneMoreThan (Zero)))))
+true
+false
