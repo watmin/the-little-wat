@@ -1,0 +1,9 @@
+refused: vecnil requires that the length be zero, not 1
+refused: vec:: requires that the length have add1 on top, not zero
+refused: Can't determine a type
+refused: Expected a Vec with add1 at the top of the length, got zero
+refused: Expected a Vec with add1 at the top of the length, got n
+refused: Expected a Vec with add1 at the top of the length, got zero
+refused: Expected Nat but given Atom
+refused: Expected Nat but given Atom
+refused: Expected (List Atom) but given (Vec Atom 0)

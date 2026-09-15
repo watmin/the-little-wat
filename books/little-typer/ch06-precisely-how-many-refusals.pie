@@ -1,0 +1,31 @@
+#lang pie
+;; The Little Typer, chapter 6: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; vecnil's length is zero
+(the (Vec Atom 1) vecnil)
+
+;; one entry longer than the type says
+(the (Vec Atom 1) (vec:: 'a (vec:: 'b vecnil)))
+
+;; vecnil by itself
+vecnil
+
+;; the head of an empty Vec
+(head (the (Vec Atom 0) vecnil))
+
+;; head needs a length that is visibly add1 of something
+(the (Pi ((n Nat)) (-> (Vec Nat n) Nat)) (lambda (n es) (head es)))
+
+;; tail twice of a Vec of length 1
+(tail (tail (the (Vec Atom 1) (vec:: 'a vecnil))))
+
+;; a Vec's length is a Nat
+(Vec Atom 'three)
+
+;; the entry is an Atom, not a Nat
+(the (Vec Nat 1) (vec:: 'a vecnil))
+
+;; a Vec is not a List
+(the (List Atom) (the (Vec Atom 0) vecnil))
