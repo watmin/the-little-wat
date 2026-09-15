@@ -9,6 +9,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
 | The Seasoned Schemer | 10 / 10 | all pass. letrec via Y (C-012); letcc via `Result/try`, with the abandoned work measured (C-013, C-015); `set!` on Cell services (C-014); mutable, shared and cyclic lists on an Arena (C-016); generators as lazy streams (C-017); the ch 20 interpreter with a store and escaping letcc (C-018). Refused by design: Y-bang (R-002) and re-entrant continuations (R-003) |
 | The Reasoned Schemer | 10 / 10 | all pass, 201 checks (C-020). The book's surface (`run`, `fresh`, `conde`, `defrel`, `conda`, `condu`) works as wat macros (C-019). From ch 3 on, every expected value comes from `oracle/`, a Clojure transliteration of the book's engine, so answer order is checked too; ch 1–2 agree with it on all 51 queries. Speed: about 100 times slower than the JVM on ch 8's queries, and about 430 times slower on the deepest searches (F-023, C-020) |
+| The Little MLer | 10 / 10 | all pass, 139 checks. Datatypes are enums (generic, recursive and mutually recursive, C-021), constructors are function values (C-022), exceptions are Results, and functors are dictionaries (C-023). Every match names every variant, and the book shows what that costs: tuple matches (F-027) and nested coverage (F-028). F-029 blocks functors over surfaces; F-030, a newtype, panics when printed |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs

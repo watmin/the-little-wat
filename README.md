@@ -17,9 +17,14 @@ Each book leans on a different part of a language:
 The code here is our own implementation of what each chapter builds. The books' text is not
 reproduced.
 
-**Status:** The Little Schemer, The Seasoned Schemer and The Reasoned Schemer are complete,
-and all 30 chapters pass (`./run.sh`). FINDINGS.md opens with a status table and the list
-of findings to relay to wat-rs.
+**Status:** The Little Schemer, The Seasoned Schemer, The Reasoned Schemer and The Little
+MLer are complete, and all 40 chapters pass (`./run.sh`). FINDINGS.md opens with a status
+table and the list of findings to relay to wat-rs; PROVIDE.md lists what users shouldn't
+have to write themselves.
+
+The Little MLer's datatypes are wat enums, its pattern matches wat `match` with every
+variant named (no `_`), its exceptions Results, and its signatures, structures and functors
+surfaces, `extend-type` and dictionaries of functions.
 
 The Reasoned Schemer's miniKanren engine is `books/reasoned-schemer/lib/ch10-under-the-hood.wat`,
 with the book's `run`, `fresh`, `conde`, `defrel`, `conda` and `condu` as wat macros. Its

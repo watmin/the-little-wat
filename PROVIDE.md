@@ -28,6 +28,7 @@ the names and the design are the builder's call.
 | P-010 | A relational (miniKanren) library | optional library | open |
 | P-011 | A mutable graph/arena store | optional library, if at all | open |
 | P-012 | Tuple patterns in `match` arms, exhaustive over the product | checker (F-027) | open |
+| P-013 | Generic functions over a surface, for any type that implements it (functors) | checker (F-029) | open |
 
 ## Stdlib
 
@@ -163,6 +164,19 @@ These are fixes, not additions, but each is something users currently write them
   of each position's variants. The same product check would let nested arms count as
   coverage (F-028), which today they never do, even when complete. Together that is what
   would let F-025's doctrine be enforced without forcing a catch-all one level down.
+
+### P-013: generic functions over a surface, for any type that implements it
+
+- **What we wrote:** a dictionary for each structure, a generic struct of closures that call
+  the structure's surface features (`:ml::int-ops`, `:ml::num-ops`, `:ml::sealed-ops` in
+  `books/little-mler/lib/ch10-building-on-blocks.wat`). The functor is a generic fn over
+  dictionaries instead of over the surface.
+- **Why:** a generic fn over `(:ml::N :- [T])` refuses a non-generic type that implements
+  `N` at a concrete argument (F-029). That is the shape of every "any implementation of this
+  interface" function, ML's functors and Rust's `fn f<T: Trait>` alike. Writing a dictionary
+  per implementation is the boilerplate surfaces exist to remove.
+- **Suggested shape:** Stone 118.3-B's bind-then-unify for the plain-path arm of the
+  surface-bound check too, so `NumberAsInt` binds `T` to `i64` there.
 
 ## Optional libraries
 
