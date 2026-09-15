@@ -12,6 +12,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little MLer | 10 / 10 | all pass, 139 checks. Datatypes are enums (generic, recursive and mutually recursive, C-021), constructors are function values (C-022), exceptions are Results, and functors are dictionaries (C-023). Every match names every variant, and the book shows what that costs: tuple matches (F-027) and nested coverage (F-028). F-029 blocks functors over surfaces; F-030, a newtype, panics when printed |
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
 | The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
+| The Little Learner | 0 / — | starting. Its oracle will be Racket's `malt`, the book's own library (not yet installed). F-034: an f64 prints without its decimal point |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -82,6 +83,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-033:** taking a WatAST apart copies it. `ast->children` deep-copies every child
   subtree (a WatAST owns `Vec<WatAST>`; only the root is behind an `Arc`), so code-as-data
   programs pay a tree's whole size per destructure. Native enums share their fields.
+- **F-034:** an f64 prints without its decimal point (`100.0` as `100`, `1e21` as 22
+  digits), both from `:wat::f64::to-string` and in failure records, so a printed float
+  reads back as an integer. Clojure and Racket print `100.0`.
 - **F-032:** the lexer rejects `λ`, `Π`, `Σ`, `→` in symbols but accepts `é`, and its
   error is located in `crates/wat-reader/src/parser.rs` with a byte offset, not in the
   user's file and line.
@@ -1560,6 +1564,33 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   Every chapter still matches Racket's Pie. The stronger route is values as native enums,
   which share.
 - **Class:** GAP (performance; P-014).
+- **Repro:** the two probes.
+
+## The Little Learner
+
+### F-034: an f64 prints without its decimal point, so a printed float reads back as an integer
+
+- **Where:** The Little Learner, before its first chapter. Its results are floats, and
+  checking them against Racket's means comparing how the two print.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/learner/f64-printing.wat`:
+
+  | Value | wat `:wat::f64::to-string` | Clojure `prn` | Racket |
+  |---|---|---|---|
+  | `100.0` | `100` | `100.0` | `100.0` |
+  | `1e21` | `1000000000000000000000` | `1.0E21` | `1e+21` |
+  | `1e-7` | `0.0000001` | `1.0E-7` | `1e-7` |
+  | `(* -1.0 0.0)` | `-0` | `-0.0` | `-0.0` |
+  | `(+ 0.1 0.2)` | `0.30000000000000004` | the same | the same |
+
+  wat's own renderer does the same. A failing `(:wat::test::assert-eq 100.0 1e21)` reports
+  `:actual "100" :expected "1000000000000000000000"`
+  (`probes/learner/f64-in-failure-record.wat`).
+- **So:** the digits are the shortest round-trip ones, which is right. The format is Rust's
+  `Display` for f64, though: an integral float drops its `.0`, and no magnitude ever gets an
+  exponent. In EDN and Clojure `100.0` reads back as a float; wat's `100` reads back as an
+  integer. A failure message can't tell a float from an integer.
+- **Route:** the Little Learner's checks will compare f64 values, not their printed forms.
+- **Class:** GAP (EDN fidelity of printed floats).
 - **Repro:** the two probes.
 
 ## Predicted, unverified
