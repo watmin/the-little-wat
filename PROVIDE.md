@@ -29,6 +29,9 @@ the names and the design are the builder's call.
 | P-011 | A mutable graph/arena store | optional library, if at all | open |
 | P-012 | Tuple patterns in `match` arms, exhaustive over the product | checker (F-027) | open |
 | P-013 | Generic functions over a surface, for any type that implements it (functors) | checker (F-029) | open |
+| P-014 | A WatAST whose children are shared, not copied | runtime (F-033) | open |
+| P-015 | Bit operations on integers | core (F-035) | open |
+| P-016 | A seeded, pure random number generator | stdlib (F-036) | open |
 
 ## Stdlib
 
