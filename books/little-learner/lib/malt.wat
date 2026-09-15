@@ -436,7 +436,77 @@
 
 (:wat::core::defn :ll::identity [p <- :ll::V] -> :ll::V p)
 
-;; naked: p - alpha * g (malted/F-naked.rkt)
+;; ---- the non-dual operators (learner/ext-ops/J-nd-ops.rkt)
+;;
+;; malt's descents update parameters with extended operators that make no duals
+;; (base-no-duals.rkt): the same arithmetic on real parts, answering plain numbers, so an
+;; accompaniment (a velocity, a smoothed square) never carries a link back into the last
+;; revision.
+
+(:wat::core::defn :ll::rho2 [f <- [:wat::core::f64 :wat::core::f64 :-> :wat::core::f64]] -> [:ll::V :ll::V :-> :ll::V]
+  (:wat::core::fn [a <- :ll::V b <- :ll::V] -> :ll::V (:ll::num (f (:ll::rho a) (:ll::rho b)))))
+
+(:wat::core::defn :ll::rho1 [f <- [:wat::core::f64 :-> :wat::core::f64]] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [a <- :ll::V] -> :ll::V (:ll::num (f (:ll::rho a)))))
+
+(:wat::core::defn :ll::+-rho [t <- :ll::V u <- :ll::V] -> :ll::V
+  ((:ll::ext2 (:ll::rho2 (:wat::core::fn [a <- :wat::core::f64 b <- :wat::core::f64] -> :wat::core::f64 (:wat::core::+ a b))) 0 0) t u))
+(:wat::core::defn :ll::--rho [t <- :ll::V u <- :ll::V] -> :ll::V
+  ((:ll::ext2 (:ll::rho2 (:wat::core::fn [a <- :wat::core::f64 b <- :wat::core::f64] -> :wat::core::f64 (:wat::core::- a b))) 0 0) t u))
+(:wat::core::defn :ll::*-rho [t <- :ll::V u <- :ll::V] -> :ll::V
+  ((:ll::ext2 (:ll::rho2 (:wat::core::fn [a <- :wat::core::f64 b <- :wat::core::f64] -> :wat::core::f64 (:wat::core::* a b))) 0 0) t u))
+(:wat::core::defn :ll::/-rho [t <- :ll::V u <- :ll::V] -> :ll::V
+  ((:ll::ext2 (:ll::rho2 (:wat::core::fn [a <- :wat::core::f64 b <- :wat::core::f64] -> :wat::core::f64 (:wat::core::/ a b))) 0 0) t u))
+(:wat::core::defn :ll::sqrt-rho [t <- :ll::V] -> :ll::V
+  ((:ll::ext1 (:ll::rho1 (:wat::core::fn [a <- :wat::core::f64] -> :wat::core::f64 (:wat::math::sqrt a))) 0) t))
+(:wat::core::defn :ll::sqr-rho [t <- :ll::V] -> :ll::V (:ll::*-rho t t))
+
+;; zeroes: 0.0 in place of every scalar (zeroes-ρ)
+(:wat::core::defn :ll::zeroes [t <- :ll::V] -> :ll::V
+  ((:ll::ext1 (:wat::core::fn [x <- :ll::V] -> :ll::V (:ll::num 0.0)) 0) t))
+
+;; smooth: decay-rate * average + (1.0 - decay-rate) * g (malted/E-gd-common.rkt)
+(:wat::core::defn :ll::smooth [decay-rate <- :ll::V average <- :ll::V g <- :ll::V] -> :ll::V
+  (:ll::+-rho (:ll::*-rho decay-rate average) (:ll::*-rho (:ll::--rho (:ll::num 1.0) decay-rate) g)))
+
+;; ---- the descents (malted/F- through I-)
+
+;; naked: p - alpha * g
 (:wat::core::defn :ll::naked-gradient-descent [h <- :ll::Hypers] -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
   (:ll::gradient-descent h :ll::identity :ll::identity
-    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V (:ll::- pa (:ll::* (:ll::num (:ll::Hypers/alpha h)) g)))))
+    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V (:ll::--rho pa (:ll::*-rho (:ll::num (:ll::Hypers/alpha h)) g)))))
+
+(:wat::core::defn :ll::first-of [pa <- :ll::V] -> :ll::V (:ll::ref pa 0))
+
+(:wat::core::defn :ll::with-zeroes [p <- :ll::V] -> :ll::V
+  (:ll::lst (:wat::core::Vector :- [:ll::V] p (:ll::zeroes p))))
+
+;; velocity: v = mu * (last v) - alpha * g, and p + v (malted/G-velocity.rkt)
+(:wat::core::defn :ll::velocity-gradient-descent [h <- :ll::Hypers] -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
+  (:ll::gradient-descent h :ll::with-zeroes :ll::first-of
+    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V
+      (:wat::core::let [v (:ll::--rho (:ll::*-rho (:ll::num (:ll::Hypers/mu h)) (:ll::ref pa 1))
+                                      (:ll::*-rho (:ll::num (:ll::Hypers/alpha h)) g))]
+        (:ll::lst (:wat::core::Vector :- [:ll::V] (:ll::+-rho (:ll::ref pa 0) v) v))))))
+
+;; rms: r = (smooth beta (last r) g^2), alpha-hat = alpha / (sqrt r + epsilon), and
+;; p - alpha-hat * g. malt's rms has its own epsilon, 10e-8 (malted/H-rms.rkt).
+(:wat::core::defn :ll::rms-gradient-descent [h <- :ll::Hypers] -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
+  (:ll::gradient-descent h :ll::with-zeroes :ll::first-of
+    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V
+      (:wat::core::let [r (:ll::smooth (:ll::num (:ll::Hypers/beta h)) (:ll::ref pa 1) (:ll::sqr-rho g))
+                        alpha-hat (:ll::/-rho (:ll::num (:ll::Hypers/alpha h)) (:ll::+-rho (:ll::sqrt-rho r) (:ll::num 10e-8)))]
+        (:ll::lst (:wat::core::Vector :- [:ll::V] (:ll::--rho (:ll::ref pa 0) (:ll::*-rho alpha-hat g)) r))))))
+
+;; adam: r as rms's, v = (smooth mu (last v) g), and p - alpha-hat * v, with the common
+;; epsilon, 1.0e-8 (malted/I-adam.rkt, E-gd-common.rkt).
+(:wat::core::defn :ll::adam-gradient-descent [h <- :ll::Hypers] -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
+  (:ll::gradient-descent h
+    (:wat::core::fn [p <- :ll::V] -> :ll::V
+      (:wat::core::let [zeroed (:ll::zeroes p)] (:ll::lst (:wat::core::Vector :- [:ll::V] p zeroed zeroed))))
+    :ll::first-of
+    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V
+      (:wat::core::let [r (:ll::smooth (:ll::num (:ll::Hypers/beta h)) (:ll::ref pa 2) (:ll::sqr-rho g))
+                        alpha-hat (:ll::/-rho (:ll::num (:ll::Hypers/alpha h)) (:ll::+-rho (:ll::sqrt-rho r) (:ll::num 1.0e-8)))
+                        v (:ll::smooth (:ll::num (:ll::Hypers/mu h)) (:ll::ref pa 1) g)]
+        (:ll::lst (:wat::core::Vector :- [:ll::V] (:ll::--rho (:ll::ref pa 0) (:ll::*-rho alpha-hat v)) v r))))))
