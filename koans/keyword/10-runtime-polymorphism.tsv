@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedForm: malformed :wat::core::fn form: fn signature: expected a vector `[name <- :T ...]` as the args-vector; got list	(= "Hello!" (greet))
+2	refused	true	MalformedForm: malformed :wat::core::fn form: fn signature: expected a vector `[name <- :T ...]` as the args-vector; got list	(= "Hello, Ada." (greet "Ada"))
+3	refused	true	MalformedForm: malformed :wat::core::fn form: fn signature: expected a vector `[name <- :T ...]` as the args-vector; got list	(= "Hello to all: Ada, Bob, Cy!" (greet "Ada" "Bob" "Cy"))
+4	refused	true	TypeMismatch: {…} map literal: parameter value #2 expects :wat::core::keyword; got :wat::core::String	(= "Rex barks." (sound {:kind :dog :name "Rex"}))
+5	refused	true	TypeMismatch: {…} map literal: parameter value #2 expects :wat::core::keyword; got :wat::core::String	(= "Tom meows." (sound {:kind :cat :name "Tom"}))
+6	refused	true	TypeMismatch: {…} map literal: parameter value #2 expects :wat::core::keyword; got :wat::core::String	(= "Nemo is quiet." (sound {:kind :fish :name "Nemo"}))
+7	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= "Anon is quiet." (sound {:name "Anon"}))

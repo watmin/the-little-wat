@@ -1,0 +1,12 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= true (even-steps? 0))
+2	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= false (even-steps? 1))
+3	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= false (even-loop? 100001))
+4	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= '(1) (my-reverse [1]))
+5	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= '(9 8 7 6) (my-reverse [6 7 8 9]))
+6	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 1 (fact 1))
+7	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 6 (fact 3))
+8	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 24 (fact 4))
+9	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 120 (fact 5))
+10	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 2432902008176640000 (fact 20))
+11	refused	true	TypeMismatch: :wat::core::<: parameter #1 expects an orderable type (i64, u8, f64, String, bool, keyword, Instant, Duration, (Vector :- [T]), Tuple, (Option :- [T]), (Result :- [T E])); got :wat::core::bigint	(< 1000000000000000000000000N (fact 25N))

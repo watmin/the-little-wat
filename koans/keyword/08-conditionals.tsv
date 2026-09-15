@@ -1,0 +1,10 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::false?	(= :yes (if (false? (= 1 2)) :yes :no))
+2	refused	true	MalformedForm: malformed :wat::core::if form: expected (:wat::core::if cond then else) — 3 args; got 2	(= [] (if (> 5 3) []))
+3	refused	true	MalformedForm: malformed :wat::core::if form: expected (:wat::core::if cond then else) — 3 args; got 2	(= nil (if (< 5 3) :yes))
+4	refused	true	MalformedForm: malformed :wat::core::if form: expected (:wat::core::if cond then else) — 3 args; got 2	(= nil (if (nil? 0) :yes))
+5	refused	true	BareLegacyUnitValue: bare unit value '()' is retired (arc 179); `nil` is the sole unit value. An empty list literal `()` in expression position is no longer a second spelling of unit. `()` survives ONLY as empty-parameter-list syntax (e.g. ':wat::core::Fn()->T', '(() -> T)'), which is a distinct gra	(= :glory (if (not (empty? ())) :doom :glory))
+6	refused	true	MalformedForm: malformed :wat::core::rest form: cannot take rest of empty Vec	(= :third (let [x 7] (cond (= x 5) :first (= x 6) :second :else :third)))
+7	refused	true	unresolved: :wat::core::if-not :wat::core::zero?	(= 'doom (if-not (zero? 1) 'doom 'more-doom))
+8	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= "fast" (speed :cycling))
+9	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= "no way" (speed :sleeping))

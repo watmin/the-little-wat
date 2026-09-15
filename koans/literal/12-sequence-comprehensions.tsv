@@ -1,0 +1,6 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::for	(= '(0 1 2 3) (for [x (range 4)] x))
+2	refused	true	unresolved: :wat::core::for	(= '(0 2 4 6) (for [x (range 4)] (* 2 x)))
+3	refused	true	unresolved: :wat::core::for :wat::core::even?	(= '(0 2 4 6 8) (for [x (range 10) :when (even? x)] x))
+4	refused	true	unresolved: :wat::core::for :wat::core::even?	(= '(0 4 16 36 64) (for [x (range 10) :when (even? x)] (* x x)))
+5	refused	true	unresolved: :wat::core::for	(= [[:a 1] [:a 2] [:b 1] [:b 2]] (for [l [:a :b] n [1 2]] [l n]))

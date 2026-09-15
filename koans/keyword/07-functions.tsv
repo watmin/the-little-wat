@@ -1,0 +1,11 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 27 (cube 3))
+2	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 12 (triple 4))
+3	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 14 ((fn [n] (* 7 n)) 2))
+4	died	true	UnboundSymbol: unbound symbol: #	(= 30 (#(* 10 %) 3))
+5	died	true	UnboundSymbol: unbound symbol: #	(= 12 (#(+ %1 %2 %3) 3 4 5))
+6	died	true	UnboundSymbol: unbound symbol: #	(= "xxz" (#(str "xx" %2) "y" "z"))
+7	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 20 (((fn [] *)) 4 5))
+8	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 9 ((fn [f] (f 4 5)) +))
+9	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 16 ((fn [f] (f 4)) (fn [n] (* n n))))
+10	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 64 ((fn [f] (f 4)) cube))

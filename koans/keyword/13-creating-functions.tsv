@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::bool]); got (:wat::stream::Stream :- [:?818])	(= [true false true] (let [not-a-keyword? (complement keyword?)] (map not-a-keyword? ["a" :b 'c])))
+2	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::keyword]); got (:wat::stream::Stream :- [:()])	(= [:x "x" 'x] (let [not-nil? (fn [v] (not (nil? v)))] (filter not-nil? [nil :x nil "x" 'x])))
+3	refused	true	unresolved: :wat::core::partial	(= 21 (let [times-7 (partial * 7)] (times-7 3)))
+4	refused	true	unresolved: :wat::core::partial	(= [:a :b :c :d] (let [ab (partial concat [:a :b])] (ab [:c :d])))
+5	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 16 (let [inc-then-square (comp square inc)] (inc-then-square 3)))
+6	refused	true	unresolved: :wat::core::comp	(= 7 (let [dec-twice (comp dec dec)] (dec-twice 9)))
+7	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 99 (let [square-then-dec (comp dec square)] (square-then-dec 10)))

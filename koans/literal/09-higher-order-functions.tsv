@@ -1,0 +1,11 @@
+row	verdict	clojure	wat said	koan
+1	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= [3 6 9] (map (fn [x] (* 3 x)) [1 2 3]))
+2	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= [1 4 9 16] (map (fn [x] (* x x)) [1 2 3 4]))
+3	refused	true	unresolved: :wat::core::nil?	(= [false true false] (map nil? [:a nil :b]))
+4	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= '() (filter (fn [x] false) '(:a :b :c)))
+5	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= '(:a :b :c) (filter (fn [x] true) '(:a :b :c)))
+6	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= [5 10 15] (filter (fn [x] (< x 20)) [5 10 15 20 25]))
+7	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= [10 20 30] (map (fn [x] (* 10 x)) (filter (fn [x] (< x 4)) [1 2 3 4 5])))
+8	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 120 (reduce (fn [a b] (* a b)) [1 2 3 4 5]))
+9	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 240 (reduce (fn [a b] (* a b)) 2 [1 2 3 4 5]))
+10	died	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= "longest" (reduce (fn [a b] (if (< (count a) (count b)) b a)) ["which" "is" "longest"]))

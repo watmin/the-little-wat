@@ -1,0 +1,13 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::WatAST; got (:wat::core::Vector :- [:wat::core::i64])	(= '(4 5 6) (list 4 5 6))
+2	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::core::i64; got :wat::WatAST	(= 4 (first '(4 5 6)))
+3	literal	true		(= '(5 6) (rest '(4 5 6)))
+4	literal	true		(= 3 (count '(pear plum fig)))
+5	literal	true		(= 0 (count '()))
+6	literal	true		(= '() (rest '(fig)))
+7	refused	true	unresolved: :wat::core::cons	(= '(:x :y :z) (cons :x '(:y :z)))
+8	refused	true	TypeMismatch: :wat::core::conj: parameter #1 expects (Vector :- [T]), (HashSet :- [T]), (PersistentVector :- [T]), or (List :- [T]); got :wat::WatAST	(= '(:w :x :y :z) (conj '(:x :y :z) :w))
+9	refused	true	unresolved: :wat::core::peek	(= :x (peek '(:x :y :z)))
+10	refused	true	unresolved: :wat::core::pop	(= '(:y :z) (pop '(:x :y :z)))
+11	refused	true	MalformedForm: malformed :wat::core::try form: ':wat::core::try' is retired (Stone 241.15); use ':wat::core::Result/try' instead	(= "empty" (try (pop '()) (catch IllegalStateException e "empty")))
+12	died	true	MalformedForm: malformed :wat::core::rest form: cannot take rest of empty form	(= '() (rest '()))

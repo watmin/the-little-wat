@@ -1,0 +1,6 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	ArityMismatch: :wat::core::range: expected 2 argument(s); got 1	(= '(0 1 2 3) (for [x (range 4)] x))
+2	refused	true	ArityMismatch: :wat::core::range: expected 2 argument(s); got 1	(= '(0 2 4 6) (for [x (range 4)] (* 2 x)))
+3	refused	true	TypeMismatch: :wat::core::vec: parameter #4 expects (:wat::core::Vector :- [:wat::core::i64]); got :wat::core::keyword	(= '(0 2 4 6 8) (for [x (range 10) :when (even? x)] x))
+4	refused	true	TypeMismatch: :wat::core::vec: parameter #4 expects (:wat::core::Vector :- [:wat::core::i64]); got :wat::core::keyword	(= '(0 4 16 36 64) (for [x (range 10) :when (even? x)] (* x x)))
+5	refused	true	TypeMismatch: :wat::core::vec: parameter #5 expects (:wat::core::Vector :- [:wat::core::keyword]); got (:wat::core::Vector :- [:wat::core::i64])	(= [[:a 1] [:a 2] [:b 1] [:b 2]] (for [l [:a :b] n [1 2]] [l n]))

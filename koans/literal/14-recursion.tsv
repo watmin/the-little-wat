@@ -1,0 +1,12 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::dec	(= true (even-steps? 0))
+2	refused	true	unresolved: :wat::core::dec	(= false (even-steps? 1))
+3	refused	true	unresolved: :wat::core::loop :wat::core::recur :wat::core::dec	(= false (even-loop? 100001))
+4	refused	true	unresolved: :wat::core::list	(= '(1) (my-reverse [1]))
+5	refused	true	unresolved: :wat::core::list	(= '(9 8 7 6) (my-reverse [6 7 8 9]))
+6	refused	true	unresolved: :wat::core::dec	(= 1 (fact 1))
+7	refused	true	unresolved: :wat::core::dec	(= 6 (fact 3))
+8	refused	true	unresolved: :wat::core::dec	(= 24 (fact 4))
+9	refused	true	unresolved: :wat::core::dec	(= 120 (fact 5))
+10	refused	true	unresolved: :wat::core::dec	(= 2432902008176640000 (fact 20))
+11	refused	true	unresolved: :wat::core::dec	(< 1000000000000000000000000N (fact 25N))

@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::cons	(= "Hello!" (greet))
+2	refused	true	unresolved: :wat::core::cons	(= "Hello, Ada." (greet "Ada"))
+3	refused	true	unresolved: :wat::core::cons	(= "Hello to all: Ada, Bob, Cy!" (greet "Ada" "Bob" "Cy"))
+4	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "Rex barks." (sound {:kind :dog :name "Rex"}))
+5	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "Tom meows." (sound {:kind :cat :name "Tom"}))
+6	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "Nemo is quiet." (sound {:kind :fish :name "Nemo"}))
+7	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "Anon is quiet." (sound {:name "Anon"}))
