@@ -1,20 +1,23 @@
 ;; books/little-typer/lib/pie.wat: wat-Pie, our own checker and evaluator for Pie, the
-;; language of The Little Typer. It uses normalization by evaluation with bidirectional type
-;; checking, the published technique Pie itself is built on. Racket's Pie is AGPL-3.0; it is
-;; run as the oracle (tools/pie-oracle.sh) and never read into this.
+;; language of The Little Typer. It uses normalization by evaluation with bidirectional,
+;; elaborating type checking, the published technique Pie itself is built on. Racket's Pie
+;; is AGPL-3.0; it is run as the oracle (tools/pie-oracle.sh) and never read into this.
 ;;
-;; v0 covers the language of chapters 1 and 2: U, Atom, 'atoms, Nat, zero, add1, numerals,
-;; Pair and Sigma, cons, car, cdr, -> and Pi, lambda, application, the, claim, define,
-;; check-same.
+;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
+;; car, cdr, -> and Pi, lambda, application, the, which-Nat, claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
 ;;             (VPi x dom clos) (VSigma x car-type clos) (VLam x clos) (VCons a d)
 ;;             (VNeu type neutral)
-;; - closures: (CLOS env x body): an environment, a variable, a body still in source form
+;; - closures: (CLOS env x body): an environment, a variable, and a body in core form
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
+;;             (NWhichNat target base-type base step)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
+;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
+;; each eliminator's base annotated by its type, (which-Nat t (the X b) s), as Pie's core is,
+;; so a stuck eliminator knows its type. Evaluation runs on core.
 ;; Reading back gives raw terms (one binder per Pi, Sigma and lambda), compared by
 ;; alpha-equivalence. A separate pass resugars them for printing, the way Pie prints.
 ;;
@@ -77,6 +80,8 @@
   (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a b)))
 (:wat::core::defn :pie::t3 [tag <- :wat::core::String a <- :wat::WatAST b <- :wat::WatAST c <- :wat::WatAST] -> :wat::WatAST
   (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a b c)))
+(:wat::core::defn :pie::t4 [tag <- :wat::core::String a <- :wat::WatAST b <- :wat::WatAST c <- :wat::WatAST d <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a b c d)))
 
 (:wat::core::defn :pie::int-node [n <- :wat::core::i64] -> :wat::WatAST
   (:wat::core::quasiquote ~n))
@@ -107,7 +112,14 @@
 (:wat::core::defn :pie::inst [c <- :wat::WatAST v <- :wat::WatAST] -> :wat::WatAST
   (:pie::eval (:pie::bind (:pie::arg c 0) (:pie::name-of (:pie::arg c 1)) v) (:pie::arg c 2)))
 
-;; ---- evaluation
+;; The value (-> dom cod) for types already values: the closure returns cod whatever its
+;; argument, through a private environment name.
+(:wat::core::defn :pie::arrow-value [dom <- :wat::WatAST cod <- :wat::WatAST] -> :wat::WatAST
+  (:pie::t3 "VPi" (:pie::sym "_") dom
+            (:pie::clos (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "%cod") cod))))
+                        "_" (:pie::sym "%cod"))))
+
+;; ---- evaluation (of core)
 
 (:wat::core::defn :pie::numeral [n <- :wat::core::i64] -> :wat::WatAST
   (:wat::core::if (:wat::core::= n 0) (:pie::t0 "VZero") (:pie::t1 "VAdd1" (:pie::numeral (:wat::core::- n 1)))))
@@ -144,6 +156,12 @@
     ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "which-Nat")
+      (:wat::core::let [base (:pie::arg e 1)]
+        (:pie::do-which-nat (:pie::eval env (:pie::arg e 0))
+                            (:pie::eval env (:pie::arg base 0))
+                            (:pie::eval env (:pie::arg base 1))
+                            (:pie::eval env (:pie::arg e 2)))))
     (:else (:pie::eval-app env (:pie::eval env (:wat::core::first (:pie::kids e))) (:pie::args e)))))
 
 ;; (-> A B C) is (Pi ((_ A)) (-> B C)).
@@ -197,6 +215,14 @@
     ((:pie::tag? p "VNeu")
       (:pie::t2 "VNeu" (:pie::inst (:pie::arg (:pie::arg p 0) 2) (:pie::do-car p)) (:pie::t1 "NCdr" (:pie::arg p 1))))
     (:else (:pie::fail "cdr of a non-pair"))))
+
+;; which-Nat: zero gives the base, (add1 n) gives (step n), a stuck target a stuck which-Nat.
+(:wat::core::defn :pie::do-which-nat [t <- :wat::WatAST bt <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VZero") b)
+    ((:pie::tag? t "VAdd1") (:pie::do-ap s (:pie::arg t 0)))
+    ((:pie::tag? t "VNeu") (:pie::t2 "VNeu" bt (:pie::t4 "NWhichNat" (:pie::arg t 1) bt b s)))
+    (:else (:pie::fail "which-Nat of a non-Nat"))))
 
 ;; ---- reading back
 
@@ -268,6 +294,13 @@
       (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arg ne 1) (:pie::arg ne 2)))))
     ((:pie::tag? ne "NCar") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "car") (:pie::rb-neu used (:pie::arg ne 0)))))
     ((:pie::tag? ne "NCdr") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "cdr") (:pie::rb-neu used (:pie::arg ne 0)))))
+    ((:pie::tag? ne "NWhichNat")
+      (:wat::core::let [bt (:pie::arg ne 1)]
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym "which-Nat")
+                    (:pie::rb-neu used (:pie::arg ne 0))
+                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::rb-type used bt) (:pie::rb used bt (:pie::arg ne 2))))
+                    (:pie::rb used (:pie::arrow-value (:pie::t0 "VNat") bt) (:pie::arg ne 3))))))
     (:else (:pie::fail (:wat::string::concat "cannot read back neutral " (:wat::core::ast->source ne))))))
 
 ;; ---- alpha-equivalence of raw read-backs (one binder per lambda, Pi, Sigma)
@@ -328,7 +361,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -420,13 +453,18 @@
 (:wat::core::defn :pie::show-type [ctx <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::String
   (:wat::core::ast->source (:pie::sugar (:pie::rb-type (:pie::used ctx) t))))
 
-;; ---- type checking
+;; ---- type checking, with elaboration: synth gives (TYPE CORE), check gives CORE
+
+(:wat::core::defn :pie::syn [t <- :wat::WatAST core <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] t core)))
+(:wat::core::defn :pie::syn-type [s <- :wat::WatAST] -> :wat::WatAST (:pie::nth (:pie::kids s) 0))
+(:wat::core::defn :pie::syn-core [s <- :wat::WatAST] -> :wat::WatAST (:pie::nth (:pie::kids s) 1))
 
 (:wat::core::defn :pie::synth [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::let [k (:wat::core::ast-kind e)]
     (:wat::core::cond
-      ((:wat::core::= k "int") (:pie::t0 "VNat"))
-      ((:wat::core::= k "symbol") (:pie::synth-var ctx (:wat::core::ast-name e)))
+      ((:wat::core::= k "int") (:pie::syn (:pie::t0 "VNat") e))
+      ((:wat::core::= k "symbol") (:pie::syn (:pie::synth-var ctx (:wat::core::ast-name e)) e))
       ((:pie::list? e) (:pie::synth-form ctx env e (:pie::head e)))
       (:else (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e)))))))
 
@@ -445,88 +483,113 @@
 
 (:wat::core::defn :pie::synth-form [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST h <- :wat::core::String] -> :wat::WatAST
   (:wat::core::cond
-    ((:wat::core::= h "quote") (:pie::t0 "VAtom"))
-    ((:wat::core::= h "add1") (:wat::core::do (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat")) (:pie::t0 "VNat")))
+    ((:wat::core::= h "quote") (:pie::syn (:pie::t0 "VAtom") e))
+    ((:wat::core::= h "add1")
+      (:pie::syn (:pie::t0 "VNat") (:pie::t1 "add1" (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat")))))
     ((:wat::core::= h "the")
-      (:wat::core::let [tv (:pie::check-type-eval ctx env (:pie::arg e 0))]
-        (:wat::core::do (:pie::check ctx env (:pie::arg e 1) tv) tv)))
+      (:wat::core::let [tc (:pie::check-type ctx env (:pie::arg e 0))
+                        tv (:pie::eval env tc)]
+        (:pie::syn tv (:pie::t2 "the" tc (:pie::check ctx env (:pie::arg e 1) tv)))))
     ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma") h)
-      (:wat::core::do (:pie::check-type ctx env e) (:pie::t0 "VU")))
+      (:pie::syn (:pie::t0 "VU") (:pie::check-type ctx env e)))
     ((:wat::core::= h "car")
-      (:wat::core::let [pt (:pie::synth ctx env (:pie::arg e 0))]
-        (:wat::core::if (:pie::tag? pt "VSigma") (:pie::arg pt 1) (:pie::fail "car of a non-pair"))))
-    ((:wat::core::= h "cdr")
-      (:wat::core::let [pt (:pie::synth ctx env (:pie::arg e 0))]
+      (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
+                        pt (:pie::syn-type s)]
         (:wat::core::if (:pie::tag? pt "VSigma")
-          (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env (:pie::arg e 0))))
+          (:pie::syn (:pie::arg pt 1) (:pie::t1 "car" (:pie::syn-core s)))
+          (:pie::fail "car of a non-pair"))))
+    ((:wat::core::= h "cdr")
+      (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
+                        pt (:pie::syn-type s)
+                        pc (:pie::syn-core s)]
+        (:wat::core::if (:pie::tag? pt "VSigma")
+          (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::= h "which-Nat")
+      (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat"))
+                        bs (:pie::synth ctx env (:pie::arg e 1))
+                        x (:pie::syn-type bs)
+                        sc (:pie::check ctx env (:pie::arg e 2) (:pie::arrow-value (:pie::t0 "VNat") x))]
+        (:pie::syn x (:pie::t3 "which-Nat" tc (:pie::t2 "the" (:pie::rb-type (:pie::used ctx) x) (:pie::syn-core bs)) sc))))
     ((:wat::core::if (:wat::core::= h "cons") true (:wat::core::= h "lambda"))
       (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e) "; use the")))
-    (:else (:pie::synth-app ctx env (:pie::synth ctx env (:wat::core::first (:pie::kids e))) (:pie::args e)))))
+    (:else
+      (:wat::core::let [fs (:pie::synth ctx env (:wat::core::first (:pie::kids e)))]
+        (:pie::synth-app ctx env (:pie::syn-type fs) (:wat::core::Vector :- [:wat::WatAST] (:pie::syn-core fs)) (:pie::args e))))))
 
-(:wat::core::defn :pie::synth-app [ctx <- :wat::WatAST env <- :wat::WatAST ft <- :wat::WatAST as <- :pie::Es] -> :wat::WatAST
+;; Each argument is checked against the function type's domain; the core is (f a ...).
+(:wat::core::defn :pie::synth-app [ctx <- :wat::WatAST env <- :wat::WatAST ft <- :wat::WatAST done <- :pie::Es as <- :pie::Es] -> :wat::WatAST
   (:wat::core::if (:wat::core::empty? as)
-    ft
+    (:pie::syn ft (:pie::mk done))
     (:wat::core::if (:pie::tag? ft "VPi")
-      (:wat::core::let [a (:wat::core::first as)]
-        (:wat::core::do
-          (:pie::check ctx env a (:pie::arg ft 1))
-          (:pie::synth-app ctx env (:pie::inst (:pie::arg ft 2) (:pie::eval env a)) (:wat::core::rest as))))
+      (:wat::core::let [ac (:pie::check ctx env (:wat::core::first as) (:pie::arg ft 1))]
+        (:pie::synth-app ctx env (:pie::inst (:pie::arg ft 2) (:pie::eval env ac))
+                         (:wat::core::conj done ac) (:wat::core::rest as)))
       (:pie::fail (:wat::string::concat "not a function type: " (:pie::show-type ctx ft))))))
 
-(:wat::core::defn :pie::check-type-eval [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
-  (:wat::core::do (:pie::check-type ctx env e) (:pie::eval env e)))
-
-(:wat::core::defn :pie::check-type [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::core::nil
+;; A type expression, elaborated.
+(:wat::core::defn :pie::check-type [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::let [h (:pie::head e)
                     n (:pie::name-of e)]
     (:wat::core::cond
-      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) nil)
-      ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->")) (:pie::check-types ctx env (:pie::args e)))
-      ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma")) (:pie::check-binders ctx env (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) e)
+      ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->"))
+        (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym h)) (:pie::check-types ctx env (:pie::args e)))))
+      ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
+        (:pie::check-binders ctx env h (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
       (:else (:pie::check ctx env e (:pie::t0 "VU"))))))
 
-(:wat::core::defn :pie::check-types [ctx <- :wat::WatAST env <- :wat::WatAST es <- :pie::Es] -> :wat::core::nil
+(:wat::core::defn :pie::check-types [ctx <- :wat::WatAST env <- :wat::WatAST es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
-    nil
-    (:wat::core::do (:pie::check-type ctx env (:wat::core::first es)) (:pie::check-types ctx env (:wat::core::rest es)))))
+    (:wat::core::Vector :- [:wat::WatAST])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::check-type ctx env (:wat::core::first es)))
+                        (:pie::check-types ctx env (:wat::core::rest es)))))
 
-(:wat::core::defn :pie::check-binders [ctx <- :wat::WatAST env <- :wat::WatAST binders <- :pie::Es body <- :wat::WatAST] -> :wat::core::nil
-  (:wat::core::if (:wat::core::empty? binders)
-    (:pie::check-type ctx env body)
-    (:wat::core::let [b (:pie::kids (:wat::core::first binders))
-                      x (:pie::name-of (:wat::core::first b))
-                      av (:pie::check-type-eval ctx env (:pie::nth b 1))]
-      (:pie::check-binders (:pie::extend-var ctx x av) (:pie::bind env x (:pie::var-value av x)) (:wat::core::rest binders) body))))
+;; (Pi ((x A) (y B)) C) elaborates to (Pi ((x A)) (Pi ((y B)) C)).
+(:wat::core::defn :pie::check-binders [ctx <- :wat::WatAST env <- :wat::WatAST stag <- :wat::core::String binders <- :pie::Es body <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [b (:pie::kids (:wat::core::first binders))
+                    x (:pie::name-of (:wat::core::first b))
+                    ac (:pie::check-type ctx env (:pie::nth b 1))
+                    av (:pie::eval env ac)
+                    ctx2 (:pie::extend-var ctx x av)
+                    env2 (:pie::bind env x (:pie::var-value av x))
+                    more (:wat::core::rest binders)
+                    inner (:wat::core::if (:wat::core::empty? more)
+                            (:pie::check-type ctx2 env2 body)
+                            (:pie::check-binders ctx2 env2 stag more body))]
+    (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                (:pie::sym stag)
+                (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) ac))))
+                inner))))
 
-(:wat::core::defn :pie::check [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::nil
+(:wat::core::defn :pie::check [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST t <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::let [h (:pie::head e)]
     (:wat::core::cond
       ((:wat::core::if (:wat::core::= h "cons") (:pie::tag? t "VSigma") false)
-        (:wat::core::do
-          (:pie::check ctx env (:pie::arg e 0) (:pie::arg t 1))
-          (:pie::check ctx env (:pie::arg e 1) (:pie::inst (:pie::arg t 2) (:pie::eval env (:pie::arg e 0))))))
+        (:wat::core::let [ac (:pie::check ctx env (:pie::arg e 0) (:pie::arg t 1))]
+          (:pie::t2 "cons" ac (:pie::check ctx env (:pie::arg e 1) (:pie::inst (:pie::arg t 2) (:pie::eval env ac))))))
       ((:wat::core::if (:wat::core::= h "lambda") (:pie::tag? t "VPi") false)
         (:pie::check-lambda ctx env (:pie::kids (:pie::arg e 0)) (:pie::arg e 1) t))
       (:else
-        (:wat::core::let [st (:pie::synth ctx env e)]
-          (:wat::core::if (:pie::alpha? (:pie::rb-type (:pie::used ctx) st) (:pie::rb-type (:pie::used ctx) t)
+        (:wat::core::let [s (:pie::synth ctx env e)]
+          (:wat::core::if (:pie::alpha? (:pie::rb-type (:pie::used ctx) (:pie::syn-type s)) (:pie::rb-type (:pie::used ctx) t)
                                         (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String]))
-            nil
-            (:pie::fail (:wat::string::concat (:wat::core::ast->source e) " has type " (:pie::show-type ctx st)
+            (:pie::syn-core s)
+            (:pie::fail (:wat::string::concat (:wat::core::ast->source e) " has type " (:pie::show-type ctx (:pie::syn-type s))
                                               " but should have type " (:pie::show-type ctx t)))))))))
 
-(:wat::core::defn :pie::check-lambda [ctx <- :wat::WatAST env <- :wat::WatAST names <- :pie::Es body <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::nil
+(:wat::core::defn :pie::check-lambda [ctx <- :wat::WatAST env <- :wat::WatAST names <- :pie::Es body <- :wat::WatAST t <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::if (:pie::tag? t "VPi")
     (:wat::core::let [x (:pie::name-of (:wat::core::first names))
                       dom (:pie::arg t 1)
                       xv (:pie::var-value dom x)
                       ctx2 (:pie::extend-var ctx x dom)
                       env2 (:pie::bind env x xv)
-                      bt (:pie::inst (:pie::arg t 2) xv)]
-      (:wat::core::if (:wat::core::empty? (:wat::core::rest names))
-        (:pie::check ctx2 env2 body bt)
-        (:pie::check-lambda ctx2 env2 (:wat::core::rest names) body bt)))
+                      bt (:pie::inst (:pie::arg t 2) xv)
+                      inner (:wat::core::if (:wat::core::empty? (:wat::core::rest names))
+                              (:pie::check ctx2 env2 body bt)
+                              (:pie::check-lambda ctx2 env2 (:wat::core::rest names) body bt))]
+      (:pie::t2 "lambda" (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x))) inner))
     (:pie::fail (:wat::string::concat "a lambda should have a Pi type, not " (:pie::show-type ctx t)))))
 
 ;; ---- programs: claim, define, check-same, and expressions, whose (the TYPE VALUE) is printed
@@ -551,32 +614,28 @@
     (:wat::core::cond
       ((:wat::core::= h "claim")
         (:wat::core::let [x (:pie::name-of (:pie::arg form 0))
-                          tv (:pie::check-type-eval ctx env (:pie::arg form 1))]
+                          tv (:pie::eval env (:pie::check-type ctx env (:pie::arg form 1)))]
           (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "claim") tv))
                     :env env :out (:pie::St/out st))))
       ((:wat::core::= h "define")
         (:wat::core::let [x (:pie::name-of (:pie::arg form 0))
                           tv (:pie::claimed-type ctx x)
-                          e (:pie::arg form 1)]
-          (:wat::core::do
-            (:pie::check ctx env e tv)
-            (:wat::core::let [v (:pie::eval env e)]
-              (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "def") tv v))
-                        :env (:pie::bind env x v) :out (:pie::St/out st))))))
+                          v (:pie::eval env (:pie::check ctx env (:pie::arg form 1) tv))]
+          (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "def") tv v))
+                    :env (:pie::bind env x v) :out (:pie::St/out st))))
       ((:wat::core::= h "check-same")
-        (:wat::core::let [tv (:pie::check-type-eval ctx env (:pie::arg form 0))
-                          a (:pie::arg form 1)
-                          b (:pie::arg form 2)]
-          (:wat::core::do
-            (:pie::check ctx env a tv)
-            (:pie::check ctx env b tv)
-            (:wat::core::if (:pie::alpha? (:pie::rb (:pie::used ctx) tv (:pie::eval env a)) (:pie::rb (:pie::used ctx) tv (:pie::eval env b))
-                                          (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String]))
-              st
-              (:pie::fail (:wat::string::concat "check-same failed: " (:wat::core::ast->source a) " and " (:wat::core::ast->source b)))))))
+        (:wat::core::let [tv (:pie::eval env (:pie::check-type ctx env (:pie::arg form 0)))
+                          a (:pie::eval env (:pie::check ctx env (:pie::arg form 1) tv))
+                          b (:pie::eval env (:pie::check ctx env (:pie::arg form 2) tv))]
+          (:wat::core::if (:pie::alpha? (:pie::rb (:pie::used ctx) tv a) (:pie::rb (:pie::used ctx) tv b)
+                                        (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String]))
+            st
+            (:pie::fail (:wat::string::concat "check-same failed: " (:wat::core::ast->source (:pie::arg form 1))
+                                              " and " (:wat::core::ast->source (:pie::arg form 2)))))))
       (:else
-        (:wat::core::let [t (:pie::synth ctx env form)
-                          v (:pie::eval env form)
+        (:wat::core::let [s (:pie::synth ctx env form)
+                          t (:pie::syn-type s)
+                          v (:pie::eval env (:pie::syn-core s))
                           used (:pie::used ctx)
                           shown (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::sugar (:pie::rb-type used t)) (:pie::sugar (:pie::rb used t v))))]
           (:pie::St :ctx ctx :env env :out (:wat::core::conj (:pie::St/out st) (:wat::core::ast->source shown))))))))
