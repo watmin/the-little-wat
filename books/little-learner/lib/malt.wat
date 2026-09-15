@@ -443,6 +443,37 @@
 (:wat::core::defn :ll::correlate [bank <- :ll::V signal <- :ll::V] -> :ll::V
   ((:ll::ext2 :ll::correlate-3-2 3 2) bank signal))
 
+;; ---- convolution layers (malted/M-recu.rkt) and signal-avg (malted/B-layer-fns.rkt)
+
+;; ((corr t) theta) = (correlate bank t) + biases, theta = (bank biases)
+(:wat::core::defn :ll::corr [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:ll::+ (:ll::correlate (:ll::ref theta 0) t) (:ll::ref theta 1))))
+
+;; ((recu t) theta) = (rectify ((corr t) theta))
+(:wat::core::defn :ll::recu [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:ll::rectify ((:ll::corr t) theta))))
+
+;; (((k-recu k) t) theta): k recu layers, each taking the next two members of theta
+(:wat::core::defn :ll::k-recu [k <- :wat::core::i64] -> [:ll::V :-> [:ll::V :-> :ll::V]]
+  (:wat::core::fn [t <- :ll::V] -> [:ll::V :-> :ll::V]
+    (:wat::core::fn [theta <- :ll::V] -> :ll::V
+      (:wat::core::if (:wat::core::= k 0)
+        t
+        (((:ll::k-recu (:wat::core::- k 1)) ((:ll::recu t) theta)) (:ll::refr theta 2))))))
+
+;; sum-cols: sum-1 at rank 2, adding a rank-2 tensor's rows (learner/ext-ops/D-sum.rkt)
+(:wat::core::defn :ll::sum-cols [t <- :ll::V] -> :ll::V ((:ll::ext1 :ll::sum-1 2) t))
+
+;; ((signal-avg t) theta): each channel's average over the segments, the dimension second
+;; from last; theta is not used
+(:wat::core::defn :ll::signal-avg [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:wat::core::let [s (:ll::shape t)
+                      num-segments (:wat::core::nth s (:wat::core::- (:ll::rank t) 2))]
+      (:ll::/ (:ll::sum-cols t) (:ll::num (:wat::i64::to-f64 num-segments))))))
+
 ;; ---- grid search (tools/A-hypers.rkt)
 ;;
 ;; malt's grid-search is a macro over dynamically bound hypers: every combination of the
