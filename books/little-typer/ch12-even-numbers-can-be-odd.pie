@@ -1,0 +1,45 @@
+#lang pie
+;; The Little Typer, chapter 12 (Even Numbers Can Be Odd): Even and Odd as Sigma types,
+;; and proofs that carry their witness. Our own examples on the chapter's topics. Racket's
+;; Pie prints each expression's (the TYPE NORMAL-FORM); wat-Pie reads this same file and
+;; must print the same.
+
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(claim double (-> Nat Nat))
+(define double (lambda (n) (iter-Nat n 0 (+ 2))))
+
+(claim Even (-> Nat U))
+(define Even (lambda (n) (Sigma ((half Nat)) (= Nat n (double half)))))
+(Even 10)
+(claim zero-is-even (Even 0))
+(define zero-is-even (cons 0 (same 0)))
+zero-is-even
+(the (Even 10) (cons 5 (same 10)))
+
+(claim +two-even (Pi ((n Nat)) (-> (Even n) (Even (+ 2 n)))))
+(define +two-even (lambda (n e-n) (cons (add1 (car e-n)) (cong (cdr e-n) (+ 2)))))
++two-even
+(+two-even 0 zero-is-even)
+(claim two-is-even (Even 2))
+(define two-is-even (+two-even 0 zero-is-even))
+two-is-even
+(car two-is-even)
+
+(claim Odd (-> Nat U))
+(define Odd (lambda (n) (Sigma ((haf Nat)) (= Nat n (add1 (double haf))))))
+(claim one-is-odd (Odd 1))
+(define one-is-odd (cons 0 (same 1)))
+one-is-odd
+(claim thirteen-is-odd (Odd 13))
+(define thirteen-is-odd (cons 6 (same 13)))
+thirteen-is-odd
+
+(claim add1-even->odd (Pi ((n Nat)) (-> (Even n) (Odd (add1 n)))))
+(define add1-even->odd (lambda (n e-n) (cons (car e-n) (cong (cdr e-n) (+ 1)))))
+add1-even->odd
+(add1-even->odd 2 two-is-even)
+(claim add1-odd->even (Pi ((n Nat)) (-> (Odd n) (Even (add1 n)))))
+(define add1-odd->even (lambda (n o-n) (cons (add1 (car o-n)) (cong (cdr o-n) (+ 1)))))
+add1-odd->even
+(add1-odd->even 13 thirteen-is-odd)

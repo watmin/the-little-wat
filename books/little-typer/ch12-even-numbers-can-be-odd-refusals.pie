@@ -1,0 +1,37 @@
+#lang pie
+;; The Little Typer, chapter 12: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; half of 4 is 2, not 1
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(claim Even (-> Nat U))
+(define Even (lambda (n) (Sigma ((half Nat)) (= Nat n (iter-Nat half 0 (+ 2))))))
+(the (Even 4) (cons 1 (same 4)))
+
+;; zero is not odd: (= Nat 0 1) has no same
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(claim Odd (-> Nat U))
+(define Odd (lambda (n) (Sigma ((haf Nat)) (= Nat n (add1 (iter-Nat haf 0 (+ 2)))))))
+(the (Odd 0) (cons 0 (same 0)))
+
+;; a proof of evenness needs its type given
+(cons 0 (same 0))
+
+;; +two-even must add one to the half, not keep it
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(claim Even (-> Nat U))
+(define Even (lambda (n) (Sigma ((half Nat)) (= Nat n (iter-Nat half 0 (+ 2))))))
+(the (Pi ((n Nat)) (-> (Even n) (Even (+ 2 n)))) (lambda (n e-n) (cons (car e-n) (cong (cdr e-n) (+ 2)))))
+
+;; add1-even->odd must add one to both sides, not two
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(claim Even (-> Nat U))
+(define Even (lambda (n) (Sigma ((half Nat)) (= Nat n (iter-Nat half 0 (+ 2))))))
+(claim Odd (-> Nat U))
+(define Odd (lambda (n) (Sigma ((haf Nat)) (= Nat n (add1 (iter-Nat haf 0 (+ 2)))))))
+(the (Pi ((n Nat)) (-> (Even n) (Odd (add1 n)))) (lambda (n e-n) (cons (car e-n) (cong (cdr e-n) (+ 2)))))

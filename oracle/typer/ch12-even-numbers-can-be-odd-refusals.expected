@@ -1,0 +1,5 @@
+refused: The expressions 2 and 4 are not the same Nat
+refused: The expressions 1 and zero are not the same Nat
+refused: Can't determine a type
+refused: Expected (= Nat (add1 (add1 n)) (iter-Nat (car e-n) (the Nat 0) (lambda (j) (add1 (add1 j))))) but given (= Nat (add1 (add1 n)) (add1 (add1 (iter-Nat (car e-n) (the Nat 0) (lambda (j) (add1 (add1 j)))))))
+refused: Expected (= Nat (add1 n) (add1 (iter-Nat (car e-n) (the Nat 0) (lambda (j) (add1 (add1 j)))))) but given (= Nat (add1 (add1 n)) (add1 (add1 (iter-Nat (car e-n) (the Nat 0) (lambda (j) (add1 (add1 j)))))))
