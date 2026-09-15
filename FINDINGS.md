@@ -15,7 +15,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
-| Make-a-Lisp (NEXT.md §2) | 4 / 11 steps | in progress. mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal values are pure data, and mal's environments live on a store service. Step 0: 24/24 (C-031); step 1: 121/121; step 2: 15/15; step 3: 33/33 (5 optional DEBUG-EVAL tests not done) |
+| Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -2335,6 +2335,37 @@ name. Rows blocked are counted once per row.
 
 - `mal/step0_repl.wat`, driven by mal's unmodified runner through the shim
   (`tools/mal-test.sh step0_repl`), passes 24 of 24.
+
+### C-032: Make-a-Lisp passes mal's own tests at every step: 909 of them, and every hard one
+
+- **Where:** `mal/`, all 11 steps (`mal/README.md`), driven by mal's unmodified runner through
+  the shim (`tools/mal-all.sh`).
+- **Results** (2026-09-15, wat-rs `a3218644d`):
+
+  | step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | A |
+  |---|---|---|---|---|---|---|---|---|---|---|---|
+  | passing | 24 | 121 | 15 | 33 | 199 | 8 | 71 | 115 | 58 | 173 | 92 |
+  | optional, not passing | | | | 5 | | | | 9 | 3 | | 21 |
+
+  The 38 optional failures are 17 DEBUG-EVAL traces, not implemented, and 21 metadata tests.
+  Values keep no metadata; `with-meta` hands its value back. mal's self-hosting test (mal in
+  mal, run on this mal) was not attempted.
+- **How:**
+  - mal's values are pure data. A builtin is its name; a closure or a macro is its
+    parameters, body and environment's id; an atom is its id.
+  - mal's environments and atoms live on a store service, as wat's doctrine keeps state
+    (C-014). So the mutable state of a language written in wat is wat state on a service.
+  - mal's tail calls are wat's own: step 5 is step 4 unchanged, recurring 10000 deep, and
+    mutually so.
+  - Every error, a thrown value included, is an evaluation's `Err`, so `try*` is a match.
+  - Steps 1–4 and 6–A passed their hard tests on the first full run. Step 0 first failed on
+    the shim's missing echo, and step 5 on runtest's timeout (F-051), not on the
+    interpreter.
+- **What it cost:**
+  - the shim (F-049, F-050);
+  - 3 ms a call on a service-held environment (F-051);
+  - twenty edits for each new variant of the value type (Friction).
+- **Class:** acceptance result.
 
 ## Predicted, unverified
 

@@ -20,8 +20,10 @@ language, and each assumes the one before it works.
 | The Little Learner | tensors, automatic differentiation, gradient descent | 22/22 (chapters 1–15, Interludes I–VII): all 194 values match malt, the book's own library, exactly |
 | A Little Java, A Few Patterns | objects, interfaces, the visitor pattern, mutable fields | 10/10: all 130 results match Java's |
 | The Clojure Koans (our own koans on its 27 topics) | Clojure itself, form by form | of 229 koans, 29 port literally and 163 more run the wat way; 17 have no route today, and 20 are refused by design |
+| Make-a-Lisp (kanaka/mal) | building a language: reader, eval, environments, tail calls, macros, try | 11/11 steps: 909 of mal's own tests pass, every hard one; 38 optional ones don't (metadata, debug tracing) |
 
-97 chapters (1,399 checks) and 27 koan programs (163 checks) pass (`./run.sh`). The code is our own implementation of what
+97 chapters (1,399 checks) and 27 koan programs (163 checks) pass (`./run.sh`), and the 11
+Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
 and translated into wat by a wat program (`tools/jbob2wat.wat`). The book's proofs then run
@@ -127,6 +129,19 @@ changed and ran it. 29 ran. The failures sort cleanly:
 Written the wat way, 163 more run. The other 37 were marked instead: 17 have no route today,
 such as set union (a set's elements can't be read back, F-046), and 20 are refused by design.
 
+**Make-a-Lisp asked whether wat can build a language, and it can.** All 11 steps pass mal's
+own tests, run by mal's own runner: 909 of them. I kept mal's values as plain data and put its
+environments and atoms on a service, which is where wat's doctrine keeps state. mal's tail
+calls turned out to be wat's own. Nine of the eleven steps passed their hard tests on the first
+full run. The other two failed on the shim's missing echo and on time, not on the interpreter.
+
+Two costs showed up, and neither was in the interpreter:
+- **The terminal.** A wat program can't print a prompt, or a line that isn't EDN, and it
+  can't read an unbalanced line as a line (F-049, F-050). A 40-line Python shim had to stand
+  between mal's runner and the program.
+- **Speed.** A message to a service costs about 224 µs, a hundred function calls (F-051). So
+  the doctrine's home for state makes every variable lookup the price of a hundred calls.
+
 The run also measured the finding that cost me most in the first books. Spelled with
 keywords, 38 rows are refused at startup that the Clojure spelling lets through to die at
 runtime (F-014).
@@ -142,15 +157,16 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-050 are gaps and defects.
+  - F-001 to F-051 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-031 are clean ports and acceptance results.
+  - C-001 to C-032 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
 - [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-017).
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.
+- [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -159,7 +175,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             247 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             249 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
@@ -172,6 +188,7 @@ koans/idiom/NN-<topic>.wat          the koans that don't port literally, said th
 tools/koan-tiers.sh                 every koan's tier: literal, wat idiom, missing, or refused
 mal/stepN_<name>.wat                Make-a-Lisp in wat, one program per step
 tools/mal-test.sh, tools/mal-shim.py  a step against mal's own tests; the shim is the terminal a wat program can't be
+tools/mal-all.sh                    every mal step, one summary line each
 vendor/mal/                         Make-a-Lisp's test runner and step tests, MPL 2.0, unmodified
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports

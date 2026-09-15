@@ -1,12 +1,12 @@
-;; mal/step9_try.wat: Make-a-Lisp step 9: try*/catch* and throw, apply and map, and the
-;; predicates, keywords, symbols, vectors and hash-maps.
+;; mal/stepA_mal.wat: Make-a-Lisp step A, the last: readline, time-ms, *host-language*, and
+;; the rest of the core (string?, number?, fn?, seq, conj, meta, with-meta; lib/core.wat).
 ;;
-;; Step 8, plus try*. A thrown value is an evaluation's Err, as every error already is, so try*
-;; is a match on it. apply and map call back into mal, so they are dispatched here with the
-;; store's builtins; the rest are lib/core.wat's. Driven by mal's own runner through
-;; tools/mal-shim.py (tools/mal-test.sh step9_try): each input line arrives as one EDN string,
-;; and each output line goes back as one, then :mal/done (FINDINGS F-049, F-050). Keyword
-;; spelling throughout.
+;; Step 9, plus readline and time-ms. readline asks the shim for a line mid-form: it prints
+;; :mal/readline and its prompt, and reads the line the shim sends (tools/mal-shim.py). Values
+;; carry no metadata: meta answers nil, and with-meta hands its value back. Driven by mal's own
+;; runner through tools/mal-shim.py (tools/mal-test.sh stepA_mal): each input line arrives as
+;; one EDN string, and each output line goes back as one, then :mal/done (FINDINGS F-049,
+;; F-050). Keyword spelling throughout.
 
 (:wat::load-file! "lib/types.wat")
 (:wat::load-file! "lib/reader.wat")
@@ -15,7 +15,7 @@
 (:wat::load-file! "lib/core.wat")
 
 (:wat::core::defn :mal::store-names [] -> :mal::Strs
-  ["atom" "atom?" "deref" "reset!" "swap!" "eval" "read-string" "slurp" "throw" "apply" "map"])
+  ["atom" "atom?" "deref" "reset!" "swap!" "eval" "read-string" "slurp" "throw" "apply" "map" "readline" "time-ms"])
 
 ;; the environment eval evaluates in: the REPL's, the first one the store makes
 (:wat::core::defn :mal::repl-env [] -> :wat::core::i64 0)
@@ -65,6 +65,18 @@
       (:mal::with-string name args
         (:wat::core::fn [path <- :wat::core::String] -> :mal::Res (:mal::ok (:mal::str (:wat::io::read-file path))))))
     ((:wat::core::= name "throw") (:mal::err (:mal::first-arg args)))
+    ;; readline: the shim prints the prompt and sends the next input line (tools/mal-shim.py)
+    ((:wat::core::= name "readline")
+      (:mal::with-string name args
+        (:wat::core::fn [prompt <- :wat::core::String] -> :mal::Res
+          (:wat::core::do
+            (:wat::kernel::println :mal/readline)
+            (:wat::kernel::println prompt)
+            (:wat::core::match (:wat::kernel::read-frame)
+              [:wat::kernel::ReadFrameOutcome.Frame {:text t} (:mal::ok (:mal::str (:wat::edn::read t)))]
+              [:wat::kernel::ReadFrameOutcome.Eof {} (:mal::ok (:mal::nil))]
+              [:wat::kernel::ReadFrameOutcome.Stopped {} (:mal::ok (:mal::nil))])))))
+    ((:wat::core::= name "time-ms") (:mal::ok (:mal::int (:wat::time::epoch-millis (:wat::time::now)))))
     ;; (apply f a b (c d)): f of a, b, c and d
     ((:wat::core::= name "apply")
       (:wat::core::if (:wat::core::< (:wat::core::length args) 2)
@@ -432,5 +444,6 @@
       (:mal::define-builtins (:mal::store-names) env st)
       (:mal::rep "(def! load-file (fn* (f) (eval (read-string (str \"(do \" (slurp f) \"\\nnil)\")))))" env st)
       (:mal::rep "(def! *ARGV* (list))" env st)
+      (:mal::rep "(def! *host-language* \"wat\")" env st)
       (:mal::rep "(defmacro! cond (fn* (& xs) (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw \"odd number of forms to cond\")) (cons 'cond (rest (rest xs)))))))" env st)
       (:mal::repl env st))))

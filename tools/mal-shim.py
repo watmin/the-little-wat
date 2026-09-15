@@ -11,7 +11,9 @@
 # So both directions go as EDN, the only thing wat speaks, and this shim is the terminal the
 # wat program lacks. It prints the prompt; sends each input line to the program as one EDN
 # string; and turns each EDN string the program prints back into raw text, until the program
-# prints :mal/done, its end-of-output marker.
+# prints :mal/done, its end-of-output marker. mal's readline asks for a line mid-form: the
+# program prints :mal/readline and then its prompt, and the shim prints the prompt, reads the
+# next input line, and sends it on.
 #
 # Usage: tools/mal-shim.py WAT-BINARY mal/stepN_name.wat
 
@@ -46,6 +48,15 @@ def main():
             out = out.rstrip("\n")
             if out == ":mal/done":
                 break
+            if out == ":mal/readline":
+                prompt = json.loads(p.stdout.readline().rstrip("\n"))
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
+                answer = sys.stdin.readline()
+                sys.stdout.write(answer)
+                p.stdin.write(json.dumps(answer.rstrip("\r\n")) + "\n")
+                p.stdin.flush()
+                continue
             try:
                 text = json.loads(out)
             except ValueError:
