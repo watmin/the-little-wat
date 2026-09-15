@@ -1,0 +1,9 @@
+refused: Can't determine a type
+refused: Expected Nat but given Atom
+refused: Expected Nat but given Atom
+refused: Not a function type: Nat
+refused: Not a function type: Nat
+refused: Expected Nat but given Atom
+refused: Expected Nat but given Atom
+refused: Not a function type: Nat
+refused: Unknown variable f

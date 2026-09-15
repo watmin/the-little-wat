@@ -1,0 +1,20 @@
+#lang pie
+;; The Little Typer, chapter 3: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; recursion is not an option: gauss is only claimed while it is being defined
+(claim gauss (-> Nat Nat))
+(define gauss (lambda (n) (which-Nat n 0 (lambda (n-1) (gauss n-1)))))
+
+;; iter-Nat's step must take and give the base's type
+(iter-Nat 3 0 (lambda (k) 'a))
+
+;; rec-Nat's step takes two arguments
+(rec-Nat 3 0 (lambda (k) k))
+
+;; rec-Nat's target must be a Nat
+(rec-Nat 'three 0 (lambda (n-1 almost) almost))
+
+;; a base's type must be determinable
+(iter-Nat 3 (cons 1 2) (lambda (p) p))

@@ -1,0 +1,9 @@
+refused: Expected Atom but given Nat
+refused: Can't determine a type
+refused: Not a pair type: Atom
+refused: Expected Nat but given Atom
+refused: The expressions 'citron and 'lemon are not the same Atom
+refused: The expressions 3 and 4 are not the same Nat
+refused: No claim: x
+refused: Not a type
+refused: The name z is already defined.

@@ -1,0 +1,7 @@
+refused: U is a type, but it does not have a type.
+refused: U is a type, but it does not have a type.
+refused: U is a type, but it does not have a type.
+refused: Expected U but given Nat
+refused: Expected U but given Nat
+refused: Expected Nat but given Atom
+refused: Expected Nat but given A

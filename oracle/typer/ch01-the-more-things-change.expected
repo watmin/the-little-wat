@@ -18,3 +18,7 @@
 (the Nat 1)
 (the (Pair Atom Atom) (cons (quote celery) (quote carrot)))
 (the Atom (quote celery))
+(the U Atom)
+(the U (Pair Atom Nat))
+U
+(Pair U Atom)

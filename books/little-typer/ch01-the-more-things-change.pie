@@ -33,3 +33,9 @@ vegetables
 (car vegetables)
 (check-same Nat one (add1 zero))
 (check-same (Pair Atom Atom) vegetables (cons (car vegetables) (cdr vegetables)))
+
+;; types by themselves: a U is printed with its type; U, which has none, by itself
+Atom
+(Pair Atom Nat)
+U
+(Pair U Atom)

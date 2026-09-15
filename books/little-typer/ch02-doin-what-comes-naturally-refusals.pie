@@ -1,0 +1,32 @@
+#lang pie
+;; The Little Typer, chapter 2: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; a lambda needs its type given
+(lambda (x) x)
+
+;; the body is an Atom, not a Nat
+(the (-> Nat Nat) (lambda (x) 'a))
+
+;; the argument is an Atom, not a Nat
+((the (-> Nat Nat) (lambda (x) x)) 'a)
+
+;; too many arguments
+((the (-> Nat Nat) (lambda (x) x)) 1 2)
+
+;; a Nat is not a function
+(the Nat (5 3))
+
+;; which-Nat's target must be a Nat
+(which-Nat 'a 0 (lambda (n) n))
+
+;; the step must give the base's type
+(which-Nat 3 0 (lambda (n) 'more))
+
+;; a lambda cannot have a non-function type
+(the Nat (lambda (x) x))
+
+;; a claimed name is not usable until it is defined
+(claim f (-> Nat Nat))
+(f 3)

@@ -1,0 +1,27 @@
+#lang pie
+;; The Little Typer, chapter 4: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; a Pi over U is a type but not a U
+(the U (Pi ((A U)) (-> A A)))
+
+;; U is not a U
+(the U U)
+
+;; a pair of types is not a U when one of them is U
+(the U (Pair U Nat))
+
+;; the first argument of flip is a type
+(claim flip (Pi ((A U) (D U)) (-> (Pair A D) (Pair D A))))
+(define flip (lambda (A D) (lambda (p) (cons (cdr p) (car p)))))
+(flip 5 Nat)
+
+;; 5 is not a U
+((the (Pi ((A U)) (-> A A)) (lambda (A a) a)) 5)
+
+;; the argument must have the type given for A
+((the (Pi ((A U)) (-> A A)) (lambda (A a) a)) Nat 'five)
+
+;; a value of type A cannot be used as a Nat
+(the (Pi ((A U)) (-> A Nat)) (lambda (A a) a))

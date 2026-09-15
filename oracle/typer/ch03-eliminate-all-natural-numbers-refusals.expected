@@ -1,0 +1,5 @@
+refused: Unknown variable gauss
+refused: Expected Nat but given Atom
+refused: Expected (-> Nat Nat) but given Nat
+refused: Expected Nat but given Atom
+refused: Can't determine a type

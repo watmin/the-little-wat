@@ -1,0 +1,33 @@
+#lang pie
+;; The Little Typer, chapter 1: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; 5 is a Nat, not an Atom
+(the Atom 5)
+
+;; a cons needs its type given: its type cannot be determined
+(cons 'ratatouille 'baguette)
+
+;; car of an atom
+(car 'a)
+
+;; the pair's cdr is an Atom, not a Nat
+(the (Pair Atom Nat) (cons 'a 'b))
+
+;; the two are not the same Atom
+(check-same Atom 'citron 'lemon)
+
+;; the two are not the same Nat
+(check-same Nat (add1 2) 4)
+
+;; a name must be claimed before it is defined
+(define x 'a)
+
+;; a claim's type must be a type
+(claim y 'y)
+
+;; a name can be defined only once
+(claim z Atom)
+(define z 'a)
+(define z 'b)

@@ -42,6 +42,11 @@ twin-Atom
 (the U (Pi ((n Nat)) (-> Atom Nat)))
 (the U (Sigma ((n Nat)) Atom))
 (the U (Pair (-> Nat Nat) (Sigma ((a Atom) (n Nat)) Atom)))
+;; A type that is not a U has no type to print, so Pie prints the type by itself.
+(Pi ((A U)) (-> A A))
+(Sigma ((A U)) A)
+(-> U U)
+(Pair U (Pi ((B U) (b B)) B))
 (the (Pi ((A U)) (-> A A)) (lambda (B) (lambda (b) b)))
 (check-same (Pi ((A U)) (-> A A)) (lambda (A a) a) (lambda (B b) b))
 (the (Pi ((A U)) (Pi ((A U)) (-> A A))) (lambda (A B) (lambda (x) x)))

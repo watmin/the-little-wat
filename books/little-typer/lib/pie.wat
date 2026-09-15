@@ -623,6 +623,28 @@
 
 ;; ---- programs: claim, define, check-same, and expressions, whose (the TYPE VALUE) is printed
 
+;; A type that is not a U: one that mentions U as a type among its parts, like U itself or
+;; (Pi ((A U)) A). It has no type to print, so Pie prints the type by itself.
+(:wat::core::defn :pie::large? [e <- :wat::WatAST] -> :wat::core::bool
+  (:wat::core::let [h (:pie::head e)]
+    (:wat::core::cond
+      ((:wat::core::= (:pie::name-of e) "U") true)
+      ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->")) (:pie::any-large? (:pie::args e)))
+      ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
+        (:wat::core::if (:pie::any-large? (:pie::binder-types (:pie::kids (:pie::arg e 0)))) true (:pie::large? (:pie::arg e 1))))
+      (:else false))))
+
+(:wat::core::defn :pie::any-large? [es <- :pie::Es] -> :wat::core::bool
+  (:wat::core::if (:wat::core::empty? es)
+    false
+    (:wat::core::if (:pie::large? (:wat::core::first es)) true (:pie::any-large? (:wat::core::rest es)))))
+
+(:wat::core::defn :pie::binder-types [bs <- :pie::Es] -> :pie::Es
+  (:wat::core::if (:wat::core::empty? bs)
+    (:wat::core::Vector :- [:wat::WatAST])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::nth (:pie::kids (:wat::core::first bs)) 1))
+                        (:pie::binder-types (:wat::core::rest bs)))))
+
 (:wat::core::defstruct :pie::St
   [ctx <- :wat::WatAST
    env <- :wat::WatAST
@@ -661,6 +683,10 @@
             st
             (:pie::fail (:wat::string::concat "check-same failed: " (:wat::core::ast->source (:pie::arg form 1))
                                               " and " (:wat::core::ast->source (:pie::arg form 2)))))))
+      ((:pie::large? form)
+        (:wat::core::let [tv (:pie::eval env (:pie::check-type ctx env form))]
+          (:pie::St :ctx ctx :env env
+                    :out (:wat::core::conj (:pie::St/out st) (:wat::core::ast->source (:pie::sugar (:pie::rb-type (:pie::used ctx) tv)))))))
       (:else
         (:wat::core::let [s (:pie::synth ctx env form)
                           t (:pie::syn-type s)
@@ -674,15 +700,21 @@
     st
     (:pie::run-forms (:pie::run-form st (:wat::core::first forms)) (:wat::core::rest forms))))
 
-;; Run a .pie file (its first line, #lang pie, is dropped) and give each expression's output.
+(:wat::core::defn :pie::init [] -> :pie::St
+  (:pie::St :ctx (:wat::core::quote ()) :env (:wat::core::quote ()) :out (:wat::core::Vector :- [:wat::core::String])))
+
+(:wat::core::defn :pie::read-forms [text <- :wat::core::String] -> :pie::Es
+  (:wat::core::match (:wat::core::read-string text)
+    [:wat::core::ReadOutcome.Forms {:forms fs} (:pie::kids fs)]
+    [:wat::core::ReadOutcome.Malformed {:cause c} (:pie::fail (:wat::core::Error/message c))]))
+
+;; A .pie file's text after its first line, #lang pie.
+(:wat::core::defn :pie::file-body [path <- :wat::core::String] -> :wat::core::String
+  (:wat::string::join "\n" (:wat::core::rest (:wat::string::split (:wat::io::read-file path) "\n"))))
+
+;; Run a .pie file and give each expression's output.
 (:wat::core::defn :pie::run-file [path <- :wat::core::String] -> :pie::Names
-  (:wat::core::let [lines (:wat::string::split (:wat::io::read-file path) "\n")
-                    body (:wat::string::join "\n" (:wat::core::rest lines))]
-    (:wat::core::match (:wat::core::read-string body)
-      [:wat::core::ReadOutcome.Forms {:forms fs}
-        (:pie::St/out (:pie::run-forms (:pie::St :ctx (:wat::core::quote ()) :env (:wat::core::quote ()) :out (:wat::core::Vector :- [:wat::core::String]))
-                                       (:pie::kids fs)))]
-      [:wat::core::ReadOutcome.Malformed {:cause c} (:pie::fail (:wat::core::Error/message c))])))
+  (:pie::St/out (:pie::run-forms (:pie::init) (:pie::read-forms (:pie::file-body path)))))
 
 (:wat::core::defn :pie::non-empty [xs <- :pie::Names] -> :pie::Names
   (:wat::core::if (:wat::core::empty? xs)
@@ -705,3 +737,52 @@
       (:wat::test::assert-eq (:wat::core::length got) (:wat::core::length want))
       (:pie::compare got want)
       (:wat::kernel::println (:wat::string::concat label ": ok")))))
+
+;; ---- refusals: what Pie refuses, wat-Pie must refuse too
+;;
+;; A refusals file (tools/pie-oracle-refusals.sh) is cases separated by blank lines; each
+;; case's last form must be refused and the forms before it are setup. A refusal is a
+;; failed assertion somewhere inside the checker, so each refused form runs in a thread
+;; (:wat::test::run-thread), whose death comes back as a value: RunResult.Failed.
+
+(:wat::core::typealias :pie::Cases (:wat::core::Vector :- [:pie::Es]))
+
+(:wat::core::defn :pie::cases [paras <- :pie::Names] -> :pie::Cases
+  (:wat::core::if (:wat::core::empty? paras)
+    (:wat::core::Vector :- [:pie::Es])
+    (:wat::core::let [forms (:pie::read-forms (:wat::core::first paras))
+                      more (:pie::cases (:wat::core::rest paras))]
+      (:wat::core::if (:wat::core::empty? forms) more (:wat::core::concat (:wat::core::Vector :- [:pie::Es] forms) more)))))
+
+(:wat::core::defn :pie::but-last [xs <- :pie::Es] -> :pie::Es
+  (:wat::core::if (:wat::core::empty? (:wat::core::rest xs))
+    (:wat::core::Vector :- [:wat::WatAST])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:wat::core::first xs)) (:pie::but-last (:wat::core::rest xs)))))
+
+(:wat::core::defn :pie::last [xs <- :pie::Es] -> :wat::WatAST
+  (:wat::core::if (:wat::core::empty? (:wat::core::rest xs)) (:wat::core::first xs) (:pie::last (:wat::core::rest xs))))
+
+;; Run a case's setup, then its last form in a thread; give wat-Pie's refusal message.
+(:wat::core::defn :pie::refusal [case <- :pie::Es] -> :wat::core::String
+  (:wat::core::let [st (:pie::run-forms (:pie::init) (:pie::but-last case))
+                    form (:pie::last case)]
+    (:wat::core::match (:wat::test::run-thread (:pie::run-form st form))
+      [:wat::kernel::RunResult.Passed {}
+        (:pie::fail (:wat::string::concat "accepted a form Pie refuses: " (:wat::core::ast->source form)))]
+      [:wat::kernel::RunResult.Failed {:failure f} (:wat::kernel::Failure/message f)])))
+
+(:wat::core::defn :pie::check-cases [cases <- :pie::Cases want <- :pie::Names] -> :wat::core::nil
+  (:wat::core::if (:wat::core::empty? cases)
+    nil
+    (:wat::core::do
+      (:wat::kernel::println (:wat::string::concat "  Pie " (:wat::core::first want) "; " (:pie::refusal (:wat::core::first cases))))
+      (:pie::check-cases (:wat::core::rest cases) (:wat::core::rest want)))))
+
+;; Every case of a chapter's refusals file must be refused, as Racket's Pie refuses it.
+(:wat::core::defn :pie::check-refusals [pie <- :wat::core::String expected <- :wat::core::String label <- :wat::core::String] -> :wat::core::nil
+  (:wat::core::let [cases (:pie::cases (:wat::string::split (:pie::file-body pie) "\n\n"))
+                    want (:pie::non-empty (:wat::string::split (:wat::io::read-file expected) "\n"))]
+    (:wat::core::do
+      (:wat::test::assert-eq (:wat::core::length cases) (:wat::core::length want))
+      (:pie::check-cases cases want)
+      (:wat::kernel::println (:wat::string::concat label " refusals: ok")))))
