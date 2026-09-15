@@ -6,14 +6,15 @@
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
 ;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
 ;; ::, rec-List, ind-List, Vec, vecnil, vec::, head, tail, ind-Vec, ind-Nat, =, same, cong,
-;; replace, symm, trans, Either, left, right, ind-Either, claim, define, check-same.
+;; replace, symm, trans, Either, left, right, ind-Either, Trivial, sole, Absurd, ind-Absurd,
+;; claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
 ;;             (VPi x dom clos) (VSigma x car-type clos) (VLam x clos) (VCons a d)
 ;;             (VList elem-type) (VNil) (VLCons e es)
 ;;             (VVec elem-type length) (VVecNil) (VVecCons e es) (VEq type from to) (VSame v)
-;;             (VEither L R) (VLeft v) (VRight v) (VNeu type neutral)
+;;             (VEither L R) (VLeft v) (VRight v) (VTrivial) (VSole) (VAbsurd) (VNeu type neutral)
 ;; - closures: (CLOS env x body): an environment, a variable, and a body in core form
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
 ;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
@@ -23,7 +24,7 @@
 ;;             where p and q are values, either of which may be stuck
 ;;             (NIndList target elem-type motive base step)
 ;;             (NIndVec length target elem-type motive base step)
-;;             (NIndEither target L R motive base-left base-right)
+;;             (NIndEither target L R motive base-left base-right) (NIndAbsurd target motive)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -151,6 +152,9 @@
     ((:wat::core::= name "Nat") (:pie::t0 "VNat"))
     ((:wat::core::= name "zero") (:pie::t0 "VZero"))
     ((:wat::core::= name "vecnil") (:pie::t0 "VVecNil"))
+    ((:wat::core::= name "Trivial") (:pie::t0 "VTrivial"))
+    ((:wat::core::= name "sole") (:pie::t0 "VSole"))
+    ((:wat::core::= name "Absurd") (:pie::t0 "VAbsurd"))
     (:else
       (:wat::core::match (:pie::lookup (:pie::kids env) name)
         [:wat::core::Option.Some {:value v} v]
@@ -171,6 +175,7 @@
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "=") (:pie::t3 "VEq" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1)) (:pie::eval env (:pie::arg e 2))))
     ((:wat::core::= h "same") (:pie::t1 "VSame" (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "ind-Absurd") (:pie::do-ind-absurd (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "Either") (:pie::t2 "VEither" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "left") (:pie::t1 "VLeft" (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "right") (:pie::t1 "VRight" (:pie::eval env (:pie::arg e 0))))
@@ -304,6 +309,12 @@
         (:pie::t2 "VNeu" (:pie::t3 "VEq" y (:pie::do-ap f (:pie::arg tt 1)) (:pie::do-ap f (:pie::arg tt 2)))
                          (:pie::t4 "NCong" (:pie::arg t 1) x y f))))
     (:else (:pie::fail "cong of a non-equality"))))
+
+;; ind-Absurd: an Absurd has no values, so its target is always stuck, and so is it.
+(:wat::core::defn :pie::do-ind-absurd [t <- :wat::WatAST mot <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::if (:pie::tag? t "VNeu")
+    (:pie::t2 "VNeu" mot (:pie::t2 "NIndAbsurd" (:pie::arg t 1) mot))
+    (:pie::fail "ind-Absurd of a non-Absurd")))
 
 ;; ind-Either: (left x) gives (base-left x), (right x) gives (base-right x); the type is
 ;; (mot target). A base's type, (Pi ((x L)) (mot (left x))) or the right one, as a value.
@@ -490,6 +501,8 @@
     ((:pie::tag? v "VList") (:pie::t1 "List" (:pie::rb-type used (:pie::arg v 0))))
     ((:pie::tag? v "VVec") (:pie::t2 "Vec" (:pie::rb-type used (:pie::arg v 0)) (:pie::rb used (:pie::t0 "VNat") (:pie::arg v 1))))
     ((:pie::tag? v "VEither") (:pie::t2 "Either" (:pie::rb-type used (:pie::arg v 0)) (:pie::rb-type used (:pie::arg v 1))))
+    ((:pie::tag? v "VTrivial") (:pie::sym "Trivial"))
+    ((:pie::tag? v "VAbsurd") (:pie::sym "Absurd"))
     ((:pie::tag? v "VEq")
       (:pie::t3 "=" (:pie::rb-type used (:pie::arg v 0)) (:pie::rb used (:pie::arg v 0) (:pie::arg v 1)) (:pie::rb used (:pie::arg v 0) (:pie::arg v 2))))
     ((:pie::tag? v "VPi") (:pie::rb-binder used v "Pi"))
@@ -524,6 +537,10 @@
                     (:pie::rb used (:pie::arg t 1) a)
                     (:pie::rb used (:pie::inst (:pie::arg t 2) a) (:pie::do-cdr v))))))
     ((:pie::tag? t "VVec") (:pie::rb-vec used t v))
+    ;; every Trivial is sole; a stuck Absurd reads back annotated, (the Absurd x)
+    ((:pie::tag? t "VTrivial") (:pie::sym "sole"))
+    ((:wat::core::if (:pie::tag? t "VAbsurd") (:pie::tag? v "VNeu") false)
+      (:pie::t2 "the" (:pie::sym "Absurd") (:pie::rb-neu used (:pie::arg v 1))))
     ((:wat::core::if (:pie::tag? t "VEq") (:pie::tag? v "VSame") false) (:pie::t1 "same" (:pie::rb used (:pie::arg t 0) (:pie::arg v 0))))
     ((:wat::core::if (:pie::tag? t "VEither") (:pie::tag? v "VLeft") false) (:pie::t1 "left" (:pie::rb used (:pie::arg t 0) (:pie::arg v 0))))
     ((:wat::core::if (:pie::tag? t "VEither") (:pie::tag? v "VRight") false) (:pie::t1 "right" (:pie::rb used (:pie::arg t 1) (:pie::arg v 0))))
@@ -556,6 +573,8 @@
 
 (:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
+    ((:pie::tag? ne "NIndAbsurd")
+      (:pie::t2 "ind-Absurd" (:pie::t2 "the" (:pie::sym "Absurd") (:pie::rb-neu used (:pie::arg ne 0))) (:pie::rb-type used (:pie::arg ne 1))))
     ((:pie::tag? ne "NIndEither")
       (:wat::core::let [ks (:pie::kids ne)
                         l (:pie::nth ks 2)
@@ -684,7 +703,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong" "replace" "symm" "trans" "ind-List" "ind-Vec" "Either" "left" "right" "ind-Either") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong" "replace" "symm" "trans" "ind-List" "ind-Vec" "Either" "left" "right" "ind-Either" "ind-Absurd") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -793,7 +812,8 @@
 
 (:wat::core::defn :pie::synth-var [ctx <- :wat::WatAST name <- :wat::core::String] -> :wat::WatAST
   (:wat::core::cond
-    ((:wat::core::if (:wat::core::= name "Atom") true (:wat::core::= name "Nat")) (:pie::t0 "VU"))
+    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Atom" "Nat" "Trivial" "Absurd") name) (:pie::t0 "VU"))
+    ((:wat::core::= name "sole") (:pie::t0 "VTrivial"))
     ((:wat::core::= name "zero") (:pie::t0 "VNat"))
     ((:wat::core::= name "U") (:pie::fail "U is a type, but it does not have a type"))
     ((:wat::core::= name "vecnil") (:pie::fail "cannot determine a type for vecnil; use the"))
@@ -829,6 +849,10 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::= h "ind-Absurd")
+      (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VAbsurd"))
+                        mc (:pie::check-type ctx env (:pie::arg e 1))]
+        (:pie::syn (:pie::eval env mc) (:pie::t2 "ind-Absurd" tc mc))))
     ((:wat::core::= h "ind-Either")
       (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
                         tt (:pie::syn-type ts)]
@@ -984,7 +1008,7 @@
                     n (:pie::name-of e)]
     (:wat::core::cond
       ((:wat::core::if u? (:wat::core::= n "U") false) (:pie::fail "U is a type, but it does not have a type"))
-      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) e)
+      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat" "Trivial" "Absurd") n) e)
       ((:wat::core::= h "List") (:pie::t1 "List" (:pie::type-at ctx env (:pie::arg e 0) u?)))
       ((:wat::core::= h "Vec")
         (:pie::t2 "Vec" (:pie::type-at ctx env (:pie::arg e 0) u?) (:pie::check ctx env (:pie::arg e 1) (:pie::t0 "VNat"))))

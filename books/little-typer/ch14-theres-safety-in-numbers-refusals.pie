@@ -1,0 +1,28 @@
+#lang pie
+;; The Little Typer, chapter 14: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; sole is a Trivial, not a Nat
+(the Nat sole)
+
+;; Absurd has no values
+(the Absurd sole)
+
+;; ind-Absurd's target must be an Absurd
+(ind-Absurd 5 Nat)
+
+;; ind-Absurd's motive must be a type
+(the (-> Absurd Nat) (lambda (x) (ind-Absurd x 5)))
+
+;; (Fin 0) is Absurd: there is no smallest entry of nothing
+(claim Fin (-> Nat U))
+(define Fin (lambda (n) (iter-Nat n Absurd (lambda (X) (Either X Trivial)))))
+(the (Fin 0) (right sole))
+
+;; an index into a Vec of length 1 is a (Fin 1), not a (Fin 2)
+(claim Fin (-> Nat U))
+(define Fin (lambda (n) (iter-Nat n Absurd (lambda (X) (Either X Trivial)))))
+(claim vec-ref (Pi ((E U) (l Nat)) (-> (Fin l) (Vec E l) E)))
+(define vec-ref (lambda (E l) (ind-Nat l (lambda (k) (-> (Fin k) (Vec E k) E)) (lambda (no es) (ind-Absurd no E)) (lambda (l-1 vec-ref-l-1 i es) (ind-Either i (lambda (i) E) (lambda (i-1) (vec-ref-l-1 i-1 (tail es))) (lambda (triv) (head es)))))))
+(vec-ref Atom 1 (the (Fin 2) (left (right sole))) (vec:: 'a vecnil))

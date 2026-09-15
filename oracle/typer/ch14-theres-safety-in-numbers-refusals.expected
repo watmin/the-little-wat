@@ -1,0 +1,6 @@
+refused: Expected Nat but given Trivial
+refused: Expected Absurd but given Trivial
+refused: Expected Absurd but given Nat
+refused: Expected U but given Nat
+refused: right constructs an Either, but it was used where a Absurd was expected.
+refused: Expected (Either Absurd Trivial) but given (Either (Either Absurd Trivial) Trivial)

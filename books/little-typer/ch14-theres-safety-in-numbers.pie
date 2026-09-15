@@ -1,0 +1,69 @@
+#lang pie
+;; The Little Typer, chapter 14 (There's Safety in Numbers): Maybe as Either with Trivial,
+;; Absurd and ind-Absurd, Fin, and vec-ref, which cannot be asked for an entry that is not
+;; there. Our own examples on the chapter's topics. Racket's Pie prints each expression's
+;; (the TYPE NORMAL-FORM); wat-Pie reads this same file and must print the same.
+
+;; Trivial has one value, sole; every Trivial is sole
+Trivial
+sole
+(the (-> Nat Trivial) (lambda (n) sole))
+(the (-> Trivial Trivial) (lambda (t) t))
+
+;; Absurd has no values
+Absurd
+(the (-> Absurd Nat) (lambda (nope) (ind-Absurd nope Nat)))
+(the (-> Absurd Absurd) (lambda (x) x))
+(the (-> Absurd (Pair Nat Atom)) (lambda (x) (ind-Absurd x (Pair Nat Atom))))
+
+(claim Maybe (-> U U))
+(define Maybe (lambda (X) (Either X Trivial)))
+(claim nothing (Pi ((E U)) (Maybe E)))
+(define nothing (lambda (E) (right sole)))
+(claim just (Pi ((E U)) (-> E (Maybe E))))
+(define just (lambda (E e) (left e)))
+(Maybe Atom)
+(nothing Nat)
+(just Atom 'x)
+
+(claim maybe-head (Pi ((E U)) (-> (List E) (Maybe E))))
+(define maybe-head (lambda (E es) (rec-List es (nothing E) (lambda (hd tl head-tl) (just E hd)))))
+(maybe-head Atom (:: 'a (:: 'b nil)))
+(maybe-head Atom nil)
+(claim maybe-tail (Pi ((E U)) (-> (List E) (Maybe (List E)))))
+(define maybe-tail (lambda (E es) (rec-List es (nothing (List E)) (lambda (hd tl tail-tl) (just (List E) tl)))))
+(claim list-ref (Pi ((E U)) (-> Nat (List E) (Maybe E))))
+(claim step-list-ref (Pi ((E U)) (-> Nat (-> (List E) (Maybe E)) (-> (List E) (Maybe E)))))
+(define step-list-ref
+  (lambda (E n-1 list-ref-n-1)
+    (lambda (es)
+      (ind-Either (maybe-tail E es) (lambda (maybe-tl) (Maybe E)) (lambda (tl) (list-ref-n-1 tl)) (lambda (empty) (nothing E))))))
+(define list-ref (lambda (E n) (rec-Nat n (maybe-head E) (step-list-ref E))))
+(list-ref Atom 1 (:: 'a (:: 'b (:: 'c nil))))
+(list-ref Atom 5 (:: 'a nil))
+
+(claim Fin (-> Nat U))
+(define Fin (lambda (n) (iter-Nat n Absurd Maybe)))
+(Fin 0)
+(Fin 2)
+(claim fzero (Pi ((n Nat)) (Fin (add1 n))))
+(define fzero (lambda (n) (nothing (Fin n))))
+(claim fadd1 (Pi ((n Nat)) (-> (Fin n) (Fin (add1 n)))))
+(define fadd1 (lambda (n i-1) (just (Fin n) i-1)))
+(fzero 2)
+(fadd1 2 (fzero 1))
+
+(claim base-vec-ref (Pi ((E U)) (-> (Fin zero) (Vec E zero) E)))
+(define base-vec-ref (lambda (E no-value-ever es) (ind-Absurd no-value-ever E)))
+(claim step-vec-ref (Pi ((E U) (l-1 Nat)) (-> (-> (Fin l-1) (Vec E l-1) E) (-> (Fin (add1 l-1)) (Vec E (add1 l-1)) E))))
+(define step-vec-ref
+  (lambda (E l-1 vec-ref-l-1)
+    (lambda (i es)
+      (ind-Either i (lambda (i) E) (lambda (i-1) (vec-ref-l-1 i-1 (tail es))) (lambda (triv) (head es))))))
+(claim vec-ref (Pi ((E U) (l Nat)) (-> (Fin l) (Vec E l) E)))
+(define vec-ref (lambda (E l) (ind-Nat l (lambda (k) (-> (Fin k) (Vec E k) E)) (base-vec-ref E) (step-vec-ref E))))
+(vec-ref Atom 3 (fzero 2) (vec:: 'a (vec:: 'b (vec:: 'c vecnil))))
+(vec-ref Atom 3 (fadd1 2 (fzero 1)) (vec:: 'a (vec:: 'b (vec:: 'c vecnil))))
+(vec-ref Atom 3 (fadd1 2 (fadd1 1 (fzero 0))) (vec:: 'a (vec:: 'b (vec:: 'c vecnil))))
+base-vec-ref
+(vec-ref Atom 1)
