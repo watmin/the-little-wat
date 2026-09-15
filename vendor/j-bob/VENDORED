@@ -1,0 +1,2 @@
+Vendored from https://github.com/the-little-prover/j-bob (scheme/), commit 2a4567b, BSD 2-Clause (LICENSE.md).
+Used as the oracle for books/little-prover/ and as the source its wat port is generated from.
