@@ -1,0 +1,4 @@
+vendor/mal/wat: the directory the wat implementation runs in under tools/mal-test.sh. mal's
+tests name their fixture files as ../tests/NAME, relative to an implementation's own directory
+beside tests/ (impls/NAME/ in the mal repository), so from here they reach vendor/mal/tests/.
+Not part of the vendored copy; ours.

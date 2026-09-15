@@ -118,7 +118,8 @@
     [:mal::Val.Str {:s s} (:mal::ok ast)]
     [:mal::Val.Kw {:name name} (:mal::ok ast)]
     [:mal::Val.Builtin {:name name} (:mal::ok ast)]
-    [:mal::Val.Closure {:params p :body b :env e} (:mal::ok ast)]))
+    [:mal::Val.Closure {:params p :body b :env e} (:mal::ok ast)]
+    [:mal::Val.Atom {:id i} (:mal::ok ast)]))
 
 (:wat::core::defn :mal::rep [line <- :wat::core::String env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Strs
   (:wat::core::match (:mal::read-str line)

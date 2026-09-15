@@ -17,5 +17,7 @@ step="${1:?usage: tools/mal-test.sh STEP [runtest.py options]}"
 shift
 WAT="${WAT:-../wat-rs/target/release/wat}"
 root="$(pwd)"
-python3 vendor/mal/runtest.py --no-pty --rundir "$root" "$@" "vendor/mal/tests/$step.mal" -- \
+# The tests name their fixture files as ../tests/NAME, relative to an implementation's own
+# directory beside tests/; vendor/mal/wat is that directory here, so the program runs there.
+python3 vendor/mal/runtest.py --no-pty --rundir "$root/vendor/mal/wat" "$@" "$root/vendor/mal/tests/$step.mal" -- \
   python3 "$root/tools/mal-shim.py" "$root/$WAT" "$root/mal/$step.wat"

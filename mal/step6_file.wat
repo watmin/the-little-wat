@@ -1,16 +1,70 @@
-;; mal/step4_if_fn_do.wat: Make-a-Lisp step 4: if, fn*, do, closures, and the core functions.
+;; mal/step6_file.wat: Make-a-Lisp step 6: files, eval, and atoms.
 ;;
-;; A closure is data (its parameters, body and environment's id); applying it makes a new
-;; environment on the store, inside the closure's, and binds its parameters there. Driven by
-;; mal's own runner through tools/mal-shim.py (tools/mal-test.sh step4_if_fn_do): each input
-;; line arrives as one EDN string, and each output line goes back as one, then :mal/done
-;; (FINDINGS F-049, F-050). Keyword spelling throughout.
+;; Atoms live on the store beside the environments (lib/env.wat); a mal atom is its id. The
+;; builtins that touch the store or call back into mal (atom, deref, reset!, swap!, eval,
+;; read-string, slurp) are dispatched here; the rest are lib/core.wat's. load-file and *ARGV*
+;; are defined in mal at startup, as the process guide defines them. Driven by mal's own runner
+;; through tools/mal-shim.py (tools/mal-test.sh step6_file): each input line arrives as one EDN
+;; string, and each output line goes back as one, then :mal/done (FINDINGS F-049, F-050).
+;; Keyword spelling throughout.
 
 (:wat::load-file! "lib/types.wat")
 (:wat::load-file! "lib/reader.wat")
 (:wat::load-file! "lib/printer.wat")
 (:wat::load-file! "lib/env.wat")
 (:wat::load-file! "lib/core.wat")
+
+(:wat::core::defn :mal::store-names [] -> :mal::Strs
+  ["atom" "atom?" "deref" "reset!" "swap!" "eval" "read-string" "slurp"])
+
+;; the environment eval evaluates in: the REPL's, the first one the store makes
+(:wat::core::defn :mal::repl-env [] -> :wat::core::i64 0)
+
+(:wat::core::defn :mal::with-atom [name <- :wat::core::String args <- :mal::Vals f <- [:wat::core::i64 :-> :mal::Res]] -> :mal::Res
+  (:wat::core::match (:mal::atom-of (:mal::first-arg args))
+    [:wat::core::Option.Some {:value id} (f id)]
+    [:wat::core::Option.None {} (:mal::fail (:wat::string::concat name ": expected an atom"))]))
+
+(:wat::core::defn :mal::with-string [name <- :wat::core::String args <- :mal::Vals f <- [:wat::core::String :-> :mal::Res]] -> :mal::Res
+  (:wat::core::match (:mal::str-of (:mal::first-arg args))
+    [:wat::core::Option.Some {:value s} (f s)]
+    [:wat::core::Option.None {} (:mal::fail (:wat::string::concat name ": expected a string"))]))
+
+(:wat::core::defn :mal::call-store-builtin [name <- :wat::core::String args <- :mal::Vals st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::cond
+    ((:wat::core::= name "atom") (:mal::ok (:mal::atom-ref (:mal::new-atom! st (:mal::first-arg args)))))
+    ((:wat::core::= name "atom?")
+      (:mal::ok (:mal::bool (:wat::core::match (:mal::atom-of (:mal::first-arg args))
+                              [:wat::core::Option.Some {:value id} true]
+                              [:wat::core::Option.None {} false]))))
+    ((:wat::core::= name "deref")
+      (:mal::with-atom name args (:wat::core::fn [id <- :wat::core::i64] -> :mal::Res (:mal::ok (:mal::atom-deref st id)))))
+    ((:wat::core::= name "reset!")
+      (:mal::with-atom name args
+        (:wat::core::fn [id <- :wat::core::i64] -> :mal::Res
+          (:mal::ok (:mal::atom-reset! st id (:mal::first-arg (:wat::core::rest args)))))))
+    ;; (swap! a f & more): f of the atom's value and more; not atomic (a deref, then a reset)
+    ((:wat::core::= name "swap!")
+      (:mal::with-atom name args
+        (:wat::core::fn [id <- :wat::core::i64] -> :mal::Res
+          (:wat::core::match (:mal::apply (:mal::first-arg (:wat::core::rest args))
+                                          (:wat::core::concat (:wat::core::Vector :- [:mal::Val] (:mal::atom-deref st id))
+                                                              (:wat::core::rest (:wat::core::rest args)))
+                                          st)
+            [:mal::Res.Ok {:v v} (:mal::ok (:mal::atom-reset! st id v))]
+            [:mal::Res.Err {:e e} (:mal::err e)]))))
+    ((:wat::core::= name "eval") (:mal::eval (:mal::first-arg args) (:mal::repl-env) st))
+    ((:wat::core::= name "read-string")
+      (:mal::with-string name args
+        (:wat::core::fn [s <- :wat::core::String] -> :mal::Res
+          (:wat::core::match (:mal::read-str s)
+            [:mal::Read.Got {:v v :next j} (:mal::ok v)]
+            [:mal::Read.Failed {:msg m} (:mal::fail m)]
+            [:mal::Read.Empty {} (:mal::ok (:mal::nil))]))))
+    ((:wat::core::= name "slurp")
+      (:mal::with-string name args
+        (:wat::core::fn [path <- :wat::core::String] -> :mal::Res (:mal::ok (:mal::str (:wat::io::read-file path))))))
+    (:else (:mal::call-builtin name args))))
 
 ;; bind a closure's parameters to its arguments; after &, one name takes the rest as a list
 (:wat::core::defn :mal::bind-params [params <- :mal::Vals args <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
@@ -31,7 +85,7 @@
 
 (:wat::core::defn :mal::apply [f <- :mal::Val args <- :mal::Vals st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::match f
-    [:mal::Val.Builtin {:name name} (:mal::call-builtin name args)]
+    [:mal::Val.Builtin {:name name} (:mal::call-store-builtin name args st)]
     [:mal::Val.Closure {:params params :body body :env cenv}
       (:wat::core::let [inner (:mal::new-env! st cenv)]
         (:wat::core::match (:mal::bind-params params args inner st)
@@ -97,7 +151,6 @@
             [:mal::Res.Err {:e e} (:mal::err e)]))]
       [:wat::core::Option.None {} (:mal::fail "let*: expected a list of bindings")])))
 
-;; do: each form in turn; the last one's value
 (:wat::core::defn :mal::eval-do [forms <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::if (:wat::core::empty? forms)
     (:mal::ok (:mal::nil))
@@ -169,7 +222,7 @@
 
 (:wat::core::defn :mal::rep [line <- :wat::core::String env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Strs
   (:wat::core::match (:mal::read-str line)
-    [:mal::Read.Got {:v v :next j} (:wat::core::Vector :- [:wat::core::String] (:mal::pr-res (:mal::eval v env st)))]
+    [:mal::Read.Got {:v v :next j} (:wat::core::Vector :- [:wat::core::String] (:mal::pr-res (:mal::show-res (:mal::eval v env st) st)))]
     [:mal::Read.Failed {:msg m} (:wat::core::Vector :- [:wat::core::String] m)]
     [:mal::Read.Empty {} (:wat::core::Vector :- [:wat::core::String])]))
 
@@ -202,4 +255,7 @@
                     env (:mal::new-env! st -1)]
     (:wat::core::do
       (:mal::define-builtins (:mal::core-names) env st)
+      (:mal::define-builtins (:mal::store-names) env st)
+      (:mal::rep "(def! load-file (fn* (f) (eval (read-string (str \"(do \" (slurp f) \"\\nnil)\")))))" env st)
+      (:mal::rep "(def! *ARGV* (list))" env st)
       (:mal::repl env st))))
