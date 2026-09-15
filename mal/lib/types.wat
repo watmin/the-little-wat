@@ -5,19 +5,44 @@
 ;; and mal's environments and atoms can live on a service, where wat keeps state (a function
 ;; can't be a service's state, R-002). Keyword spelling throughout.
 
-(:wat::core::defenum :mal::Val :wat::enum::Impure
-  :Nil     []
-  :True    []
-  :False   []
-  :Int     [n <- :wat::core::i64]
-  :Str     [s <- :wat::core::String]
-  :Sym     [name <- :wat::core::String]
-  :Kw      [name <- :wat::core::String]
-  :List    [items <- (:wat::core::Vector :- [:mal::Val])]
-  :Vec     [items <- (:wat::core::Vector :- [:mal::Val])]
-  ;; keys and values alternate, in the order read
-  :Map     [kvs <- (:wat::core::Vector :- [:mal::Val])]
-  :Builtin [name <- :wat::core::String])
+;; The values are declared inside the protocol of the store service (lib/env.wat), which holds
+;; mal's environments: a Peer surface must declare every type its messages carry (Friction, A
+;; Little Java ch 10), and the store's messages carry values. So this file is the store's
+;; protocol too; steps that start no store just never use it.
+(:wat::core::defsurface :mal::Store :nature :wat::kernel::Peer
+  :messages
+  [(:wat::core::defenum :mal::Val :wat::enum::Pure
+     :Nil     []
+     :True    []
+     :False   []
+     :Int     [n <- :wat::core::i64]
+     :Str     [s <- :wat::core::String]
+     :Sym     [name <- :wat::core::String]
+     :Kw      [name <- :wat::core::String]
+     :List    [items <- (:wat::core::Vector :- [:mal::Val])]
+     :Vec     [items <- (:wat::core::Vector :- [:mal::Val])]
+     ;; keys and values alternate, in the order read
+     :Map     [kvs <- (:wat::core::Vector :- [:mal::Val])]
+     :Builtin [name <- :wat::core::String])
+   (:wat::core::defrecord :mal::Store::NewEnvRequest [outer <- :wat::core::i64])
+   (:wat::core::defenum :mal::Store::NewEnvResponse :wat::enum::Pure
+     :Ok               [id <- :wat::core::i64]
+     :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
+     :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
+   (:wat::core::defrecord :mal::Store::GetRequest [env <- :wat::core::i64  name <- :wat::core::String])
+   (:wat::core::defenum :mal::Store::GetResponse :wat::enum::Pure
+     :Ok               [found <- (:wat::core::Option :- [:mal::Val])]
+     :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
+     :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
+   (:wat::core::defrecord :mal::Store::SetRequest [env <- :wat::core::i64  name <- :wat::core::String  value <- :mal::Val])
+   (:wat::core::defenum :mal::Store::SetResponse :wat::enum::Pure
+     :Ok               [value <- :mal::Val]
+     :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
+     :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])]
+  :features
+  [(new-env [self <- :mal::Store  req <- :mal::Store::NewEnvRequest] -> :mal::Store::NewEnvResponse :max-request-bytes 524288)
+   (get     [self <- :mal::Store  req <- :mal::Store::GetRequest]    -> :mal::Store::GetResponse    :max-request-bytes 524288)
+   (set     [self <- :mal::Store  req <- :mal::Store::SetRequest]    -> :mal::Store::SetResponse    :max-request-bytes 524288)])
 
 (:wat::core::typealias :mal::Vals (:wat::core::Vector :- [:mal::Val]))
 (:wat::core::typealias :mal::Strs (:wat::core::Vector :- [:wat::core::String]))
@@ -69,6 +94,35 @@
     [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
     [:mal::Val.List {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
+    [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
+
+(:wat::core::defn :mal::sym-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
+  (:wat::core::match v
+    [:mal::Val.Sym {:name x} (:wat::core::Option.Some {:value x})]
+    [:mal::Val.Nil {} (:wat::core::Option.None {})]
+    [:mal::Val.True {} (:wat::core::Option.None {})]
+    [:mal::Val.False {} (:wat::core::Option.None {})]
+    [:mal::Val.Int {:n n} (:wat::core::Option.None {})]
+    [:mal::Val.Str {:s s} (:wat::core::Option.None {})]
+    [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.List {:items x} (:wat::core::Option.None {})]
+    [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
+    [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
+
+;; a list's or a vector's elements
+(:wat::core::defn :mal::seq-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
+  (:wat::core::match v
+    [:mal::Val.List {:items xs} (:wat::core::Option.Some {:value xs})]
+    [:mal::Val.Vec {:items xs} (:wat::core::Option.Some {:value xs})]
+    [:mal::Val.Nil {} (:wat::core::Option.None {})]
+    [:mal::Val.True {} (:wat::core::Option.None {})]
+    [:mal::Val.False {} (:wat::core::Option.None {})]
+    [:mal::Val.Int {:n n} (:wat::core::Option.None {})]
+    [:mal::Val.Str {:s s} (:wat::core::Option.None {})]
+    [:mal::Val.Sym {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
 
