@@ -925,6 +925,10 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   `crates/wat-reader/src/identifier.rs:362`). The behavior contradicts that. I have not
   found where the `[:-> :u::T.Nil]` type comes from. A smaller stale doc sits nearby:
   `decompose_variant`'s comment says the separator is `::`, while its code splits on `.`.
+- **Explained later (C-022):** a bare tagged variant is its constructor function; a unit
+  variant's constructor takes no arguments, hence `[:-> :u::T.Nil]`. So the bare keyword
+  names the constructor, while the checker's comment promises the value. Which one is
+  meant is the builder's call; the diagnostic should say which it saw.
 - **Class:** GAP (a defect). The documented route is dead for user enums, and the
   diagnostic names a function type and offers no remedy.
 - **Repro:** the probes named above.
@@ -1177,6 +1181,19 @@ The things that were annoying while writing Little Schemer, now tested. All agai
     declared `:wat::enum::Impure`. The containment rule keeps functions out of Pure enums
     (R-002). A top-level fn passed as the `next` field unfolds 1, 2, 3
     (`probes/ml/enum-holding-fn.wat`).
+- **Class:** CLEAN.
+
+### C-022: a variant's constructor is a function value, as in ML
+
+- **Where:** The Little MLer ch 7: `fun hot_maker(x) = Hot` returns the constructor
+  `Hot : bool -> bool_or_int`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`): the bare keyword `:u::B.Hot`, passed
+  where a `[:wat::core::bool :-> :u::B]` is expected and called positionally through the
+  parameter, builds `#u/B.Hot {:v true}` (`probes/ml/constructor-as-fn.wat`). The ch 7 lib's
+  `ml/hot-maker` returns `:ml::BoolOrInt.Hot` itself.
+- **It explains F-020:** a bare *unit* variant is its constructor too. With no fields that
+  is a nullary function, `[:-> :u::T.Nil]`, not the value, which is exactly the type F-020
+  reported.
 - **Class:** CLEAN.
 
 ### F-026: the retired nested pattern `(Variant binders…)` passes the checker and fails at runtime
