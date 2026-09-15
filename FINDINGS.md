@@ -1635,6 +1635,32 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   next state out, e.g. splitmix64), plus a seed from the world alongside `:wat::time::now`.
 - **Repro:** the verb grep.
 
+### Friction: a variant pattern must name every field
+
+- **Where:** The Little Learner's port. A dual has two fields (its real part and its
+  link), and most code wants one.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): `[:ll::V.Dual {:r r} …]` is refused:
+  > `malformed :wat::core::match form: map pattern has 1 key(s), variant `:ll::V.Dual` declares 2`
+
+  Each refusal also counts as a missing arm, so a single short pattern reports two errors
+  (non-exhaustive: missing `Dual`). Naming every field, `{:r r :k k}`, works.
+- **So:** Clojure's map destructuring takes any subset of keys. Here every arm binds
+  every field, used or not, and adding a field to a variant breaks every match on it.
+- **Class:** friction (a divergence from Clojure; possibly deliberate).
+- **Repro:** change any `{:r r :k k}` in `books/little-learner/lib/malt.wat` to `{:r r}`.
+
+### Friction: `drop` takes the collection first, the reverse of Clojure, and returns a lazy Stream
+
+- **What happened** (2026-09-15, wat-rs `a3218644d`): I wrote `(:wat::core::drop i es)`, as
+  in Clojure's `(drop n coll)`. The checker said:
+  > `:wat::core::drop: parameter #1 expects (Vector :- [T]), (PersistentVector :- [T]), (List :- [T]), or (Stream :- [T]); got :wat::core::i64`
+
+  Then `drop` returns a `Stream`, not a Vector, so a function expecting a Vector refused it
+  too. `nth` and `range` take the collection or the bounds in the order Clojure does.
+- **So:** a Clojure reader writes it backwards, and a codemod of Clojure-shaped code would
+  too. The checker catches it, loudly and well located.
+- **Class:** friction (a divergence from Clojure; a codemod hazard).
+
 ### Friction: the user guide still names verbs that are retired
 
 - **What happened** (2026-09-15): three verbs I took from `docs/USER-GUIDE.md` while writing

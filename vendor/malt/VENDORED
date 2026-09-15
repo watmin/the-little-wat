@@ -1,0 +1,11 @@
+malt: the code accompanying The Little Learner: A Straight Line to Deep Learning,
+by Daniel P. Friedman and Anurag Mendhekar. MIT License, Copyright (c) 2021 Anurag
+Mendhekar, Daniel P. Friedman (LICENSE, copied from the package).
+
+Source: https://github.com/themetaschemer/malt, commit 92a3e63aebf8f0801cffdb6b8a44c199d7973148,
+as installed by `raco pkg install --auto malt` (Racket 9.3), on 2026-09-15.
+
+Only the license is kept here. books/little-learner/lib/*.wat port parts of malt into wat by
+hand: the learner tensor representation (learner/tensors, learner/autodiff,
+learner/ext-ops) and the book's machine-learning code (malted/). Those files carry this
+notice. The installed malt package itself is the oracle (oracle/learner/, tools/learner-oracle.sh).
