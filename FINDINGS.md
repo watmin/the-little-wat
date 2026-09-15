@@ -66,6 +66,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-027:** a `match` arm cannot destructure a tuple (tuple patterns are legal only inside
   a variant's field), and a match on a tuple can be exhaustive only through `_` or a
   binder.
+- **F-028:** nested arms never count as covering a variant, even when together they cover
+  it completely, so the checker demands a binder fallback: a catch-all one level down.
 
 ## Classes
 
@@ -1216,6 +1218,29 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** GAP. Enforcing F-025's doctrine would want this first: exhaustiveness over the
   product of the positions' variants.
 - **Repro:** the probes above.
+
+### F-028: nested arms never count as covering a variant, even when together they cover it completely
+
+- **Where:** The Little MLer ch 5. `'a pizza = Bottom | Topping of ('a * 'a pizza)`, and
+  ML's `rem_anchovy`, which matches `Topping(Anchovy, p)`, then the other fish.
+- **What happened** (2026-09-14, wat-rs `a3218644d`), with `Topping` carrying a tuple:
+  - A tuple sub-pattern of binders, `{:t (x rest)}`, works
+    (`probes/ml/tuple-in-variant-binders.wat`).
+  - `{:t ([:u::Fish.Anchovy {}] rest)}` followed by a binder fallback `{:t (other rest)}`
+    works (`probes/ml/tuple-in-variant-nested.wat`).
+  - Three nested arms, one each for Anchovy, Lox and Tuna, cover `Topping` completely, and
+    are refused (`probes/ml/tuple-in-variant-strict.wat`):
+    > `non-exhaustive: enum :u::Pizza missing arm(s) for variant(s): Topping (or include _ wildcard)`
+- **So:** exhaustiveness counts an arm as covering its variant only when every sub-pattern
+  is a binder (C-021's `nested-pattern-hole.wat` is the partial case, rightly refused).
+  Complete coverage written in nested arms is refused, and the checker asks for a binder
+  fallback: a catch-all one level down, the thing the no-`_` doctrine targets. It is also
+  the arm that would silently absorb a fish added to the enum later.
+- **Route that keeps coverage explicit:** bind the field, then match it in its own `match`
+  with every variant named (`books/little-mler/lib/ch05-couples-are-magnificent-too.wat`).
+  A fish added later is then flagged there.
+- **Class:** GAP. P-012 (exhaustiveness over the product) would cover this too.
+- **Repro:** the three probes above.
 
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 

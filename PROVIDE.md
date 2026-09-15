@@ -160,7 +160,9 @@ These are fixes, not additions, but each is something users currently write them
   tuple matching entirely. Every function over a pair of datatypes pays for it.
 - **Suggested shape:** `[(p1 p2 …) body]` arms, each position a sub-pattern as they already
   are inside variant fields (`check.rs:7826`), with exhaustiveness checked over the product
-  of each position's variants. That is what would let F-025's doctrine be enforced.
+  of each position's variants. The same product check would let nested arms count as
+  coverage (F-028), which today they never do, even when complete. Together that is what
+  would let F-025's doctrine be enforced without forcing a catch-all one level down.
 
 ## Optional libraries
 
