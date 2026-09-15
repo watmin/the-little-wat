@@ -1,0 +1,112 @@
+;; The Reasoned Schemer, chapter 8 (Just a Bit More): multiplication, comparison and division
+;; on little-endian bit lists, as relations. Our own code, after the book's definitions.
+;; Needs lib/ch10-under-the-hood.wat, lib/ch02-old-toys.wat and lib/ch07-a-bit-too-much.wat.
+;; oracle/rels.clj holds identical Clojure twins.
+
+;; n * m = p
+(rs/defrel (rs/*o n m p)
+  (rs/conde ((rs/== (rs/nil) n) (rs/== (rs/nil) p))
+            ((rs/poso n) (rs/== (rs/nil) m) (rs/== (rs/nil) p))
+            ((rs/== (rs/q '(1)) n) (rs/poso m) (rs/== m p))
+            ((rs/>1o n) (rs/== (rs/q '(1)) m) (rs/== n p))
+            ((rs/fresh (x z)
+               (rs/== (rs/cons (rs/q '0) x) n) (rs/poso x)
+               (rs/== (rs/cons (rs/q '0) z) p) (rs/poso z)
+               (rs/>1o m)
+               (rs/*o x m z)))
+            ((rs/fresh (x y)
+               (rs/== (rs/cons (rs/q '1) x) n) (rs/poso x)
+               (rs/== (rs/cons (rs/q '0) y) m) (rs/poso y)
+               (rs/*o m n p)))
+            ((rs/fresh (x y)
+               (rs/== (rs/cons (rs/q '1) x) n) (rs/poso x)
+               (rs/== (rs/cons (rs/q '1) y) m) (rs/poso y)
+               (rs/odd-*o x n m p)))))
+
+(rs/defrel (rs/odd-*o x n m p)
+  (rs/fresh (q)
+    (rs/bound-*o q p n m)
+    (rs/*o x m q)
+    (rs/+o (rs/cons (rs/q '0) q) m p)))
+
+;; Keeps *o from running forever: q is no longer than p, and p no longer than n and m.
+(rs/defrel (rs/bound-*o q p n m)
+  (rs/conde ((rs/== (rs/nil) q) (rs/poso p))
+            ((rs/fresh (a0 a1 a2 a3 x y z)
+               (rs/== (rs/cons a0 x) q)
+               (rs/== (rs/cons a1 y) p)
+               (rs/conde ((rs/== (rs/nil) n) (rs/== (rs/cons a2 z) m) (rs/bound-*o x y z (rs/nil)))
+                         ((rs/== (rs/cons a3 z) n) (rs/bound-*o x y z m)))))))
+
+;; n and m have the same length; n is shorter; no longer.
+(rs/defrel (rs/=lo n m)
+  (rs/conde ((rs/== (rs/nil) n) (rs/== (rs/nil) m))
+            ((rs/== (rs/q '(1)) n) (rs/== (rs/q '(1)) m))
+            ((rs/fresh (a x b y)
+               (rs/== (rs/cons a x) n) (rs/poso x)
+               (rs/== (rs/cons b y) m) (rs/poso y)
+               (rs/=lo x y)))))
+
+(rs/defrel (rs/<lo n m)
+  (rs/conde ((rs/== (rs/nil) n) (rs/poso m))
+            ((rs/== (rs/q '(1)) n) (rs/>1o m))
+            ((rs/fresh (a x b y)
+               (rs/== (rs/cons a x) n) (rs/poso x)
+               (rs/== (rs/cons b y) m) (rs/poso y)
+               (rs/<lo x y)))))
+
+(rs/defrel (rs/<=lo n m)
+  (rs/conde ((rs/=lo n m))
+            ((rs/<lo n m))))
+
+;; n < m; n <= m.
+(rs/defrel (rs/<o n m)
+  (rs/conde ((rs/<lo n m))
+            ((rs/=lo n m) (rs/fresh (x) (rs/poso x) (rs/+o n x m)))))
+
+(rs/defrel (rs/<=o n m)
+  (rs/conde ((rs/== n m))
+            ((rs/<o n m))))
+
+;; Splits n at the length of r into its low bits l and high bits h.
+(rs/defrel (rs/splito n r l h)
+  (rs/conde ((rs/== (rs/nil) n) (rs/== (rs/nil) h) (rs/== (rs/nil) l))
+            ((rs/fresh (b n2)
+               (rs/== (rs/list* [(rs/q '0) b] n2) n) (rs/== (rs/nil) r)
+               (rs/== (rs/cons b n2) h) (rs/== (rs/nil) l)))
+            ((rs/fresh (n2)
+               (rs/== (rs/cons (rs/q '1) n2) n) (rs/== (rs/nil) r)
+               (rs/== n2 h) (rs/== (rs/q '(1)) l)))
+            ((rs/fresh (b n2 a r2)
+               (rs/== (rs/list* [(rs/q '0) b] n2) n)
+               (rs/== (rs/cons a r2) r) (rs/== (rs/nil) l)
+               (rs/splito (rs/cons b n2) r2 (rs/nil) h)))
+            ((rs/fresh (n2 a r2)
+               (rs/== (rs/cons (rs/q '1) n2) n)
+               (rs/== (rs/cons a r2) r) (rs/== (rs/q '(1)) l)
+               (rs/splito n2 r2 (rs/nil) h)))
+            ((rs/fresh (b n2 a r2 l2)
+               (rs/== (rs/cons b n2) n)
+               (rs/== (rs/cons a r2) r)
+               (rs/== (rs/cons b l2) l)
+               (rs/poso l2)
+               (rs/splito n2 r2 l2 h)))))
+
+;; n = m * q + r, with r < m (the book's /o).
+(rs/defrel (rs/divo n m q r)
+  (rs/conde ((rs/== (rs/nil) q) (rs/== n r) (rs/<o n m))
+            ((rs/== (rs/q '(1)) q) (rs/=lo m n) (rs/+o r m n) (rs/<o r m))
+            ((rs/poso q) (rs/<lo m n) (rs/<o r m) (rs/n-wider-than-mo n m q r))))
+
+(rs/defrel (rs/n-wider-than-mo n m q r)
+  (rs/fresh (nh nl qh ql)
+    (rs/fresh (mql mrql rr rh)
+      (rs/splito n r nl nh)
+      (rs/splito q r ql qh)
+      (rs/conde ((rs/== (rs/nil) nh) (rs/== (rs/nil) qh) (rs/-o nl r mql) (rs/*o m ql mql))
+                ((rs/poso nh)
+                 (rs/*o m ql mql)
+                 (rs/+o r mql mrql)
+                 (rs/-o mrql nl rr)
+                 (rs/splito rr r (rs/nil) rh)
+                 (rs/divo nh m qh rh))))))
