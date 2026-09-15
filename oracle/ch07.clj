@@ -1,0 +1,43 @@
+;; oracle/ch07.clj: the queries of books/reasoned-schemer/ch07-a-bit-too-much.wat, in the
+;; oracle. Its output is the wat chapter's expected values.
+;; Run: clojure -M oracle/ch07.clj
+(load-file "oracle/mk.clj")
+(in-ns 'mk)
+(load-file "oracle/rels.clj")
+
+(defmacro timed [label form]
+  `(let [t0# (System/nanoTime) v# ~form]
+     (println ~label (pr-str v#) (str "(" (quot (- (System/nanoTime) t0#) 1000000) " ms)"))))
+
+(println "== ch07")
+(show "xor-0" (run* (x y) (bit-xoro x y 0)))
+(show "xor-1" (run* (x y) (bit-xoro x y 1)))
+(show "xor-all" (run* (x y r) (bit-xoro x y r)))
+(show "and-1" (run* (x y) (bit-ando x y 1)))
+(show "half-1-1" (run* r (half-addero 1 1 r 1)))
+(show "half-all" (run* (x y r c) (half-addero x y r c)))
+(show "full-0-1-1" (run* (r c) (full-addero 0 1 1 r c)))
+(show "full-1-1-1" (run* (r c) (full-addero 1 1 1 r c)))
+(show "full-all" (run* (b x y r c) (full-addero b x y r c)))
+(show "build-0" (out (build-num 0)))
+(show "build-19" (out (build-num 19)))
+(show "build-36" (out (build-num 36)))
+(show "poso-6" (run* q (poso (quo '(0 1 1)))))
+(show "poso-1" (run* q (poso (quo '(1)))))
+(show "poso-0" (run* q (poso ())))
+(show "poso-r" (run* r (poso r)))
+(show ">1o-6" (run* q (>1o (quo '(0 1 1)))))
+(show ">1o-1" (run* q (>1o (quo '(1)))))
+(show ">1o-r" (run* r (>1o r)))
+(timed "gen-addero-6+3" (run* s (gen-addero 1 (quo '(0 1 1)) (quo '(1 1)) s)))
+(timed "addero-5" (run* (x y) (addero 0 x y (quo '(1 0 1)))))
+(timed "+o-5" (run* (x y) (+o x y (quo '(1 0 1)))))
+(timed "+o-9" (run 9 (x y r) (+o x y r)))
+(timed "-o-8-5" (run* q (-o (quo '(0 0 0 1)) (quo '(1 0 1)) q)))
+(timed "-o-6-6" (run* q (-o (quo '(0 1 1)) (quo '(0 1 1)) q)))
+(timed "-o-6-8" (run* q (-o (quo '(0 1 1)) (quo '(0 0 0 1)) q)))
+(timed "+o-built" (run* q (+o (build-num 29) (build-num 13) q)))
+(timed "lengtho-1" (run 1 n (lengtho (quo '(jicama rhubarb guava)) n)))
+(timed "lengtho-5" (run* ls (lengtho ls (quo '(1 0 1)))))
+(timed "lengtho-3" (run* q (lengtho (quo '(1 0 1)) 3)))
+(timed "lengtho-qq" (run 3 q (lengtho q q)))
