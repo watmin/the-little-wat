@@ -12,10 +12,21 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little MLer | 10 / 10 | all pass, 139 checks. Datatypes are enums (generic, recursive and mutually recursive, C-021), constructors are function values (C-022), exceptions are Results, and functors are dictionaries (C-023). Every match names every variant, and the book shows what that costs: tuple matches (F-027) and nested coverage (F-028). F-029 blocks functors over surfaces; F-030, a newtype, panics when printed |
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
 | The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
-| The Little Learner | 0 / — | starting. Its oracle will be Racket's `malt`, the book's own library (not yet installed). F-034: an f64 prints without its decimal point |
+| The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
 | The others | — | not started; see README |
 
-### Relay to wat-rs
+### Relay to wat-rs, by task
+
+Every open finding, grouped by the kind of wat-rs task it would become. The two lists below
+give each one's detail.
+
+| Task | Findings |
+|---|---|
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · the "malformed form" label on `first` of an empty Vector |
+| **Clean** (docs behind the code) | the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option |
+| **Improve** (works, but slowly or narrowly) | F-019/F-020 variant constructors don't widen, and a unit variant isn't a value · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-029 generic fns over a surface for non-generic types · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -1683,6 +1694,68 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   too. The checker catches it, loudly and well located.
 - **Class:** friction (a divergence from Clojure; a codemod hazard).
 
+### C-027: malt, the Little Learner's library, ported to wat, matches malt exactly, number for number
+
+- **Where:** The Little Learner, chapters 1–15 and Interludes I–VII (22 runners).
+- **What was done** (2026-09-15, wat-rs `a3218644d`):
+  - `books/little-learner/lib/malt.wat` (457 lines of code) ports malt's learner
+    representation and the book's code by hand. malt is MIT (vendor/malt).
+    - Tensors are nested Vectors, and duals carry their links as closures (an Impure enum).
+    - It has prim1/prim2 with malt's derivative formulas, and ext1/ext2 with malt's descent rules.
+    - Gradients are keyed by each leaf's position, since wat values have no identity.
+    - The rest is ported too: the non-dual operators, naked, velocity, rms and adam descent,
+      layers, blocks, correlation, and accuracy.
+  - Every operation is done in malt's order: sum from the last entry, a gradient added as
+    `(+ z g)`, `(- z)` as negation, correlate's own dot product.
+  - Each chapter's examples run twice, in Racket with malt (`oracle/learner/`) and in wat.
+    `lib/check.wat` compares the values by exact f64 equality, reading malt's printed
+    numbers with `:wat::string::to-f64`. There is no tolerance. A mutant one ulp off is
+    refused (`probes/learner/ch01-mutant.wat`).
+- **Result:** all 194 values match, bit for bit. They include:
+  - 1000-step descents;
+  - velocity, rms and adam;
+  - a 2-layer relu network trained on xor to a loss near 1e-30;
+  - malt's own correlation examples, with their gradients;
+  - the book's own Iris run: 2000 sampled revisions from the book's printed initial theta,
+    ending at malt's theta and its test accuracy, 0.9333333333333333.
+
+  `:wat::math::exp`, `ln` and `sqrt` agree with Racket's on every value tried.
+- **The oracle caught me twice, both in Racket:**
+  - malt shadows `*`, so `(* 1000 4)` made a dual, and `for/list` over it recorded 3 draws, not
+    4000.
+  - malt's unset hyperparameter is the symbol `unset-hyper-alpha`, which failed far away, in
+    `vector-map`'s contract. wat's explicit Hypers can't be left unset.
+- **Speed:** the book's Iris run takes 236 s in wat; malt's whole oracle, training included, takes
+  2.3 s. That's over 100 times slower, in line with C-020. Ch 15's 20000-revision Morse training
+  is out of reach, so its blocks are checked small and untrained. Ch 13i's grid search takes 27 s.
+- **Class:** CLEAN.
+- **Repro:** `wat books/little-learner/chNN-….wat`; `tools/learner-oracle.sh chNN-…`.
+
+### C-028: malt's dynamic hyperparameters and its random draws, done wat's way
+
+- **Where:** The Little Learner, Interlude II on, and ch 6 and 13.
+- **What the book needs:**
+  - malt's hyperparameters (`revs`, `alpha`, `batch-size`, `mu`, `beta`) are globals, set by
+    `with-hypers` inside a `dynamic-wind`.
+  - Its sampling draws with Racket's `(random n)` from a mutable global generator.
+
+  wat has neither dynamic binding nor random numbers (F-036), and it keeps mutable state on
+  services.
+- **What was done:**
+  - **Hyperparameters are a value.** `:ll::Hypers` is handed to each descent; a nested
+    `with-hypers` is a second value, and `grid-search` hands one per combination to its body.
+  - **Draws are recorded, then replayed.** The oracle copies Racket's seeded generator and
+    records the draws malt is about to make (`record-draws`, `NAME.draws`). The port replays
+    them, keeping its place on the Seasoned Schemer's counter service
+    (`books/seasoned-schemer/lib/counter.wat`). That is malt's hidden state made explicit, on a
+    service, as wat's doctrine asks.
+- **Result:** 22,405 draws replayed across ch 6 and 13, and every sampled descent ends where
+  malt's does.
+- **Cost:** the counter's 98 lines of service ceremony are the price of one integer of state
+  (compare the friction entries under C-014 and PROVIDE P-002). Hypers as a value cost
+  nothing, and a missing hyper can't be written (C-027).
+- **Class:** CLEAN (both). The missing random numbers are F-036.
+
 ### Friction: the user guide still names verbs that are retired
 
 - **What happened** (2026-09-15): three verbs I took from `docs/USER-GUIDE.md` while writing
@@ -1691,6 +1764,9 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   - `:wat::core::f64::to-string` ("use `:wat::f64::to-string`");
   - `:wat::std::math::exp` ("use `:wat::math::exp`");
   - `:wat::core::i64::to-f64` ("use `:wat::i64::to-f64`").
+
+  The guide also lists `:wat::std::math::log` as an alias of `ln`. It isn't among the
+  registered math verbs (`cos exp ln pi sin sqrt`), and neither is a `pow`.
 - **So:** the retirement is handled well at the call. The docs just haven't followed
   (compare the `first` Friction entry in The Little Typer).
 - **Class:** GAP. Clean: sweep the guide for retired names.
