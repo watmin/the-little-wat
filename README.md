@@ -42,6 +42,7 @@ books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main. Libs ne
 probes/*.wat                        small programs that isolate one question each (repros for FINDINGS)
 oracle/                             the Reasoned Schemer's engine in Clojure: expected values, answer order included
 FINDINGS.md                     the ledger: every place wat fell short, or didn't
+PROVIDE.md                      what users shouldn't have to write themselves (stdlib, checker, libraries)
 run.sh                          runs every chapter and reports PASS/FAIL per file
 wat-tests/, tests/, build.rs    a minimal cargo consumer, kept only to reproduce F-001 to F-003
 ```
