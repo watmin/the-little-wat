@@ -1,36 +1,52 @@
-;; mal/step3_env.wat: Make-a-Lisp step 3, environments: def! and let*.
+;; mal/step4_if_fn_do.wat: Make-a-Lisp step 4: if, fn*, do, closures, and the core functions.
 ;;
-;; The environments live on a store service (lib/env.wat). Driven by mal's own runner through
-;; tools/mal-shim.py (tools/mal-test.sh step3_env): each input line arrives as one EDN string,
-;; and each output line goes back as one, then :mal/done (FINDINGS F-049, F-050). Keyword
-;; spelling throughout.
+;; A closure is data (its parameters, body and environment's id); applying it makes a new
+;; environment on the store, inside the closure's, and binds its parameters there. Driven by
+;; mal's own runner through tools/mal-shim.py (tools/mal-test.sh step4_if_fn_do): each input
+;; line arrives as one EDN string, and each output line goes back as one, then :mal/done
+;; (FINDINGS F-049, F-050). Keyword spelling throughout.
 
 (:wat::load-file! "lib/types.wat")
 (:wat::load-file! "lib/reader.wat")
 (:wat::load-file! "lib/printer.wat")
 (:wat::load-file! "lib/env.wat")
+(:wat::load-file! "lib/core.wat")
 
-(:wat::core::defn :mal::arith [name <- :wat::core::String a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::cond
-    ((:wat::core::= name "+") (:wat::core::+ a b))
-    ((:wat::core::= name "-") (:wat::core::- a b))
-    ((:wat::core::= name "*") (:wat::core::* a b))
-    (:else (:wat::core::/ a b))))
+;; bind a closure's parameters to its arguments; after &, one name takes the rest as a list
+(:wat::core::defn :mal::bind-params [params <- :mal::Vals args <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::if (:wat::core::empty? params)
+    (:mal::ok (:mal::nil))
+    (:wat::core::match (:mal::sym-of (:wat::core::first params))
+      [:wat::core::Option.Some {:value name}
+        (:wat::core::if (:wat::core::= name "&")
+          (:wat::core::match (:mal::sym-of (:wat::core::second params))
+            [:wat::core::Option.Some {:value rest-name} (:wat::core::do (:mal::env-set! st env rest-name (:mal::list args)) (:mal::ok (:mal::nil)))]
+            [:wat::core::Option.None {} (:mal::fail "fn*: expected a name after &")])
+          (:wat::core::do
+            (:mal::env-set! st env name (:mal::first-arg args))
+            (:mal::bind-params (:wat::core::rest params)
+                               (:wat::core::if (:wat::core::empty? args) args (:wat::core::rest args))
+                               env st)))]
+      [:wat::core::Option.None {} (:mal::fail "fn*: expected a symbol")])))
 
-(:wat::core::defn :mal::call-builtin [name <- :wat::core::String args <- :mal::Vals] -> :mal::Res
-  (:wat::core::if (:wat::core::not (:wat::core::= (:wat::core::length args) 2))
-    (:mal::fail (:wat::string::concat name ": expected 2 arguments"))
-    (:wat::core::match (:mal::int-of (:wat::core::first args))
-      [:wat::core::Option.Some {:value a}
-        (:wat::core::match (:mal::int-of (:wat::core::second args))
-          [:wat::core::Option.Some {:value b} (:mal::ok (:mal::int (:mal::arith name a b)))]
-          [:wat::core::Option.None {} (:mal::fail (:wat::string::concat name ": expected numbers"))])]
-      [:wat::core::Option.None {} (:mal::fail (:wat::string::concat name ": expected numbers"))])))
-
-(:wat::core::defn :mal::apply [f <- :mal::Val args <- :mal::Vals] -> :mal::Res
-  (:wat::core::match (:mal::builtin-of f)
-    [:wat::core::Option.Some {:value name} (:mal::call-builtin name args)]
-    [:wat::core::Option.None {} (:mal::fail (:wat::string::concat (:mal::pr-str f true) " is not a function"))]))
+(:wat::core::defn :mal::apply [f <- :mal::Val args <- :mal::Vals st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::match f
+    [:mal::Val.Builtin {:name name} (:mal::call-builtin name args)]
+    [:mal::Val.Closure {:params params :body body :env cenv}
+      (:wat::core::let [inner (:mal::new-env! st cenv)]
+        (:wat::core::match (:mal::bind-params params args inner st)
+          [:mal::Res.Ok {:v x} (:mal::eval body inner st)]
+          [:mal::Res.Err {:e e} (:mal::err e)]))]
+    [:mal::Val.Nil {} (:mal::fail "nil is not a function")]
+    [:mal::Val.True {} (:mal::fail "true is not a function")]
+    [:mal::Val.False {} (:mal::fail "false is not a function")]
+    [:mal::Val.Int {:n n} (:mal::fail (:wat::string::concat (:wat::i64::to-string n) " is not a function"))]
+    [:mal::Val.Str {:s s} (:mal::fail "a string is not a function")]
+    [:mal::Val.Sym {:name name} (:mal::fail (:wat::string::concat name " is not a function"))]
+    [:mal::Val.Kw {:name name} (:mal::fail "a keyword is not a function")]
+    [:mal::Val.List {:items xs} (:mal::fail "a list is not a function")]
+    [:mal::Val.Vec {:items xs} (:mal::fail "a vector is not a function")]
+    [:mal::Val.Map {:kvs kvs} (:mal::fail "a map is not a function")]))
 
 (:wat::core::defn :mal::eval-all [xs <- :mal::Vals acc <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Many
   (:wat::core::if (:wat::core::empty? xs)
@@ -56,7 +72,6 @@
           [:mal::Res.Err {:e e} (:mal::err e)])]
       [:wat::core::Option.None {} (:mal::fail "def!: expected a symbol")])))
 
-;; bind each name in turn, in env, each value evaluated in env (so later ones see earlier ones)
 (:wat::core::defn :mal::bind-all [binds <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::if (:wat::core::< (:wat::core::length binds) 2)
     (:mal::ok (:mal::nil))
@@ -81,9 +96,36 @@
             [:mal::Res.Err {:e e} (:mal::err e)]))]
       [:wat::core::Option.None {} (:mal::fail "let*: expected a list of bindings")])))
 
+;; do: each form in turn; the last one's value
+(:wat::core::defn :mal::eval-do [forms <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::if (:wat::core::empty? forms)
+    (:mal::ok (:mal::nil))
+    (:wat::core::if (:wat::core::empty? (:wat::core::rest forms))
+      (:mal::eval (:wat::core::first forms) env st)
+      (:wat::core::match (:mal::eval (:wat::core::first forms) env st)
+        [:mal::Res.Ok {:v v} (:mal::eval-do (:wat::core::rest forms) env st)]
+        [:mal::Res.Err {:e e} (:mal::err e)]))))
+
+(:wat::core::defn :mal::eval-if [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::if (:wat::core::< (:wat::core::length xs) 3)
+    (:mal::fail "if: expected a test and a branch")
+    (:wat::core::match (:mal::eval (:wat::core::second xs) env st)
+      [:mal::Res.Ok {:v test}
+        (:wat::core::if (:mal::falsy? test)
+          (:wat::core::if (:wat::core::> (:wat::core::length xs) 3) (:mal::eval (:wat::core::nth xs 3) env st) (:mal::ok (:mal::nil)))
+          (:mal::eval (:wat::core::third xs) env st))]
+      [:mal::Res.Err {:e e} (:mal::err e)])))
+
+(:wat::core::defn :mal::eval-fn [xs <- :mal::Vals env <- :wat::core::i64] -> :mal::Res
+  (:wat::core::if (:wat::core::< (:wat::core::length xs) 3)
+    (:mal::fail "fn*: expected parameters and a body")
+    (:wat::core::match (:mal::seq-of (:wat::core::second xs))
+      [:wat::core::Option.Some {:value params} (:mal::ok (:mal::closure params (:wat::core::third xs) env))]
+      [:wat::core::Option.None {} (:mal::fail "fn*: expected a list of parameters")])))
+
 (:wat::core::defn :mal::eval-apply [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::match (:mal::eval-all xs (:wat::core::Vector :- [:mal::Val]) env st)
-    [:mal::Many.Ok {:vs vs} (:mal::apply (:wat::core::first vs) (:wat::core::rest vs))]
+    [:mal::Many.Ok {:vs vs} (:mal::apply (:wat::core::first vs) (:wat::core::rest vs) st)]
     [:mal::Many.Err {:e e} (:mal::err e)]))
 
 (:wat::core::defn :mal::eval-list [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
@@ -92,6 +134,9 @@
       (:wat::core::cond
         ((:wat::core::= name "def!") (:mal::eval-def xs env st))
         ((:wat::core::= name "let*") (:mal::eval-let xs env st))
+        ((:wat::core::= name "do") (:mal::eval-do (:wat::core::rest xs) env st))
+        ((:wat::core::= name "if") (:mal::eval-if xs env st))
+        ((:wat::core::= name "fn*") (:mal::eval-fn xs env))
         (:else (:mal::eval-apply xs env st)))]
     [:wat::core::Option.None {} (:mal::eval-apply xs env st)]))
 
@@ -143,12 +188,16 @@
     [:wat::kernel::ReadFrameOutcome.Eof {} nil]
     [:wat::kernel::ReadFrameOutcome.Stopped {} nil]))
 
+(:wat::core::defn :mal::define-builtins [names <- :mal::Strs env <- :wat::core::i64 st <- :mal::StoreRef] -> :wat::core::nil
+  (:wat::core::if (:wat::core::empty? names)
+    nil
+    (:wat::core::do
+      (:mal::env-set! st env (:wat::core::first names) (:mal::builtin (:wat::core::first names)))
+      (:mal::define-builtins (:wat::core::rest names) env st))))
+
 (:wat::core::defn :user::main [] -> :wat::core::nil
   (:wat::core::let [st (:mal::new-store)
                     env (:mal::new-env! st -1)]
     (:wat::core::do
-      (:mal::env-set! st env "+" (:mal::builtin "+"))
-      (:mal::env-set! st env "-" (:mal::builtin "-"))
-      (:mal::env-set! st env "*" (:mal::builtin "*"))
-      (:mal::env-set! st env "/" (:mal::builtin "/"))
+      (:mal::define-builtins (:mal::core-names) env st)
       (:mal::repl env st))))

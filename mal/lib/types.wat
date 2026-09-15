@@ -1,7 +1,7 @@
 ;; mal/lib/types.wat: mal's values. No main; each step's program loads what it needs.
 ;;
 ;; A mal value is data, all the way down: a builtin is its name, dispatched by eval; a closure
-;; will be its parameters, body and environment's id. So no wat function is ever inside one,
+;; is its parameters, its body and its environment's id. So no wat function is ever inside one,
 ;; and mal's environments and atoms can live on a service, where wat keeps state (a function
 ;; can't be a service's state, R-002). Keyword spelling throughout.
 
@@ -23,7 +23,8 @@
      :Vec     [items <- (:wat::core::Vector :- [:mal::Val])]
      ;; keys and values alternate, in the order read
      :Map     [kvs <- (:wat::core::Vector :- [:mal::Val])]
-     :Builtin [name <- :wat::core::String])
+     :Builtin [name <- :wat::core::String]
+     :Closure [params <- (:wat::core::Vector :- [:mal::Val])  body <- :mal::Val  env <- :wat::core::i64])
    (:wat::core::defrecord :mal::Store::NewEnvRequest [outer <- :wat::core::i64])
    (:wat::core::defenum :mal::Store::NewEnvResponse :wat::enum::Pure
      :Ok               [id <- :wat::core::i64]
@@ -68,8 +69,9 @@
 (:wat::core::defn :mal::list [items <- :mal::Vals] -> :mal::Val (:mal::Val.List {:items items}))
 (:wat::core::defn :mal::vec [items <- :mal::Vals] -> :mal::Val (:mal::Val.Vec {:items items}))
 (:wat::core::defn :mal::map [kvs <- :mal::Vals] -> :mal::Val (:mal::Val.Map {:kvs kvs}))
-
 (:wat::core::defn :mal::builtin [name <- :wat::core::String] -> :mal::Val (:mal::Val.Builtin {:name name}))
+(:wat::core::defn :mal::closure [params <- :mal::Vals body <- :mal::Val env <- :wat::core::i64] -> :mal::Val
+  (:mal::Val.Closure {:params params :body body :env env}))
 
 (:wat::core::defn :mal::bool [b <- :wat::core::bool] -> :mal::Val
   (:wat::core::if b (:mal::true) (:mal::false)))
@@ -95,7 +97,8 @@
     [:mal::Val.List {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
-    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::sym-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
   (:wat::core::match v
@@ -109,7 +112,8 @@
     [:mal::Val.List {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
-    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 ;; a list's or a vector's elements
 (:wat::core::defn :mal::seq-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
@@ -124,7 +128,24 @@
     [:mal::Val.Sym {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
-    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]))
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
+
+;; a list's elements (not a vector's)
+(:wat::core::defn :mal::list-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
+  (:wat::core::match v
+    [:mal::Val.List {:items xs} (:wat::core::Option.Some {:value xs})]
+    [:mal::Val.Vec {:items xs} (:wat::core::Option.None {})]
+    [:mal::Val.Nil {} (:wat::core::Option.None {})]
+    [:mal::Val.True {} (:wat::core::Option.None {})]
+    [:mal::Val.False {} (:wat::core::Option.None {})]
+    [:mal::Val.Int {:n n} (:wat::core::Option.None {})]
+    [:mal::Val.Str {:s s} (:wat::core::Option.None {})]
+    [:mal::Val.Sym {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::builtin-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
   (:wat::core::match v
@@ -138,7 +159,24 @@
     [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
     [:mal::Val.List {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
-    [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]))
+    [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
+
+;; nil and false are false; everything else is true
+(:wat::core::defn :mal::falsy? [v <- :mal::Val] -> :wat::core::bool
+  (:wat::core::match v
+    [:mal::Val.Nil {} true]
+    [:mal::Val.False {} true]
+    [:mal::Val.True {} false]
+    [:mal::Val.Int {:n n} false]
+    [:mal::Val.Str {:s s} false]
+    [:mal::Val.Sym {:name x} false]
+    [:mal::Val.Kw {:name x} false]
+    [:mal::Val.List {:items x} false]
+    [:mal::Val.Vec {:items x} false]
+    [:mal::Val.Map {:kvs x} false]
+    [:mal::Val.Builtin {:name x} false]
+    [:mal::Val.Closure {:params p :body b :env e} false]))
 
 ;; one character of a String, as a String (wat has no character access)
 (:wat::core::defn :mal::char-at [s <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String

@@ -32,7 +32,12 @@
     [:mal::Val.List {:items xs} (:mal::pr-seq "(" xs ")" readably)]
     [:mal::Val.Vec {:items xs} (:mal::pr-seq "[" xs "]" readably)]
     [:mal::Val.Map {:kvs xs} (:mal::pr-seq "{" xs "}" readably)]
-    [:mal::Val.Builtin {:name name} (:wat::string::concat "#<builtin " name ">")]))
+    [:mal::Val.Builtin {:name name} (:wat::string::concat "#<builtin " name ">")]
+    [:mal::Val.Closure {:params p :body b :env e} "#<function>"]))
+
+;; the arguments' printed forms, joined
+(:wat::core::defn :mal::pr-args [args <- :mal::Vals readably <- :wat::core::bool sep <- :wat::core::String] -> :wat::core::String
+  (:wat::string::join sep (:wat::core::mapv (:wat::core::fn [x <- :mal::Val] -> :wat::core::String (:mal::pr-str x readably)) args)))
 
 ;; what the REPL prints for an evaluation
 (:wat::core::defn :mal::pr-res [r <- :mal::Res] -> :wat::core::String
