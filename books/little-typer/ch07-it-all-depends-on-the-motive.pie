@@ -1,0 +1,49 @@
+#lang pie
+;; The Little Typer, chapter 7 (It All Depends on the Motive): ind-Nat, whose motive makes
+;; the result's type depend on the target; peas, last and drop-last. Our own examples on
+;; the chapter's topics. Racket's Pie prints each expression's (the TYPE NORMAL-FORM);
+;; wat-Pie reads this same file and must print the same.
+
+;; a constant motive: ind-Nat does what rec-Nat does
+(ind-Nat 3 (lambda (k) Nat) 0 (lambda (n-1 almost) (add1 almost)))
+(ind-Nat 0 (lambda (k) Atom) 'zero (lambda (n-1 almost) 'more))
+
+(claim mot-peas (-> Nat U))
+(define mot-peas (lambda (k) (Vec Atom k)))
+(claim step-peas (Pi ((l-1 Nat)) (-> (mot-peas l-1) (mot-peas (add1 l-1)))))
+(define step-peas (lambda (l-1 peas-l-1) (vec:: 'pea peas-l-1)))
+(claim peas (Pi ((how-many-peas Nat)) (Vec Atom how-many-peas)))
+(define peas (lambda (how-many-peas) (ind-Nat how-many-peas mot-peas vecnil step-peas)))
+(peas 0)
+(peas 2)
+peas
+(mot-peas 4)
+step-peas
+(the (Pi ((n Nat)) (Vec Atom (add1 n))) (lambda (n) (peas (add1 n))))
+
+(claim base-last (Pi ((E U)) (-> (Vec E (add1 zero)) E)))
+(define base-last (lambda (E) (lambda (es) (head es))))
+(claim mot-last (-> U Nat U))
+(define mot-last (lambda (E k) (-> (Vec E (add1 k)) E)))
+(claim step-last (Pi ((E U) (l-1 Nat)) (-> (mot-last E l-1) (mot-last E (add1 l-1)))))
+(define step-last (lambda (E l-1) (lambda (last-l-1) (lambda (es) (last-l-1 (tail es))))))
+(claim last (Pi ((E U) (l Nat)) (-> (Vec E (add1 l)) E)))
+(define last (lambda (E l) (ind-Nat l (mot-last E) (base-last E) (step-last E))))
+(last Atom 1 (vec:: 'carrot (vec:: 'celery vecnil)))
+(last Atom 0 (vec:: 'only vecnil))
+(last Atom 2)
+(mot-last Atom 3)
+last
+
+(claim mot-drop-last (-> U Nat U))
+(define mot-drop-last (lambda (E k) (-> (Vec E (add1 k)) (Vec E k))))
+(claim base-drop-last (Pi ((E U)) (mot-drop-last E zero)))
+(define base-drop-last (lambda (E) (lambda (es) vecnil)))
+(claim step-drop-last (Pi ((E U) (l-1 Nat)) (-> (mot-drop-last E l-1) (mot-drop-last E (add1 l-1)))))
+(define step-drop-last (lambda (E l-1) (lambda (drop-last-l-1) (lambda (es) (vec:: (head es) (drop-last-l-1 (tail es)))))))
+(claim drop-last (Pi ((E U) (l Nat)) (mot-drop-last E l)))
+(define drop-last (lambda (E l) (ind-Nat l (mot-drop-last E) (base-drop-last E) (step-drop-last E))))
+(drop-last Atom 2 (vec:: 'a (vec:: 'b (vec:: 'c vecnil))))
+(drop-last Atom 0)
+(drop-last Atom 1)
+drop-last

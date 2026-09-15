@@ -1,0 +1,7 @@
+refused: Expected (-> Nat U) but given U
+refused: Expected (Vec Atom 0) but given (Vec Atom 1)
+refused: Expected (Vec Atom (add1 n-1)) but given (Vec Atom n-1)
+refused: Expected Nat but given Atom
+refused: U is a type, but it does not have a type.
+refused: full.pie:2:0: ind-Nat: expected more terms starting with any term at: () within: (ind-Nat 2 0 (lambda (n-1 almost) almost)) in: (ind-Nat 2 0 (lambda (n-1 almost) almost))
+refused: vecnil requires that the length be zero, not 1

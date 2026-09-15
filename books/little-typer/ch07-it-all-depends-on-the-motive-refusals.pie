@@ -1,0 +1,27 @@
+#lang pie
+;; The Little Typer, chapter 7: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; the motive is a function from Nat to a type, not a type
+(ind-Nat 2 Nat 0 (lambda (n-1 almost) almost))
+
+;; the base must have the motive's type at zero
+(ind-Nat 2 (lambda (k) (Vec Atom k)) (the (Vec Atom 1) (vec:: 'pea vecnil)) (lambda (n-1 v) (vec:: 'pea v)))
+
+;; the step must go from the motive at n-1 to the motive at (add1 n-1)
+(the (Vec Atom 2) (ind-Nat 2 (lambda (k) (Vec Atom k)) vecnil (lambda (n-1 v) v)))
+
+;; the target must be a Nat
+(ind-Nat 'two (lambda (k) Nat) 0 (lambda (n-1 almost) almost))
+
+;; a motive's result must be a U, and U is not
+(ind-Nat 2 (lambda (k) U) Nat (lambda (n-1 T) T))
+
+;; ind-Nat takes a target, a motive, a base and a step
+(ind-Nat 2 0 (lambda (n-1 almost) almost))
+
+;; last needs a Vec one longer than its l
+(claim last (Pi ((E U) (l Nat)) (-> (Vec E (add1 l)) E)))
+(define last (lambda (E l) (ind-Nat l (lambda (k) (-> (Vec E (add1 k)) E)) (lambda (es) (head es)) (lambda (l-1 last-l-1) (lambda (es) (last-l-1 (tail es)))))))
+(last Atom 1 (vec:: 'only vecnil))

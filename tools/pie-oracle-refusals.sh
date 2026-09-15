@@ -53,7 +53,8 @@ for c in "$work"/case*; do
   # joined to one line with the ASCII spellings, as tools/pie-oracle.sh does.
   msg=$(awk '/^[[:space:]]*location\.\.\.:/ { exit } { print }' "$work/full.err" | tr '\n' ' ' \
     | sed -e 's/→/->/g' -e 's/λ/lambda/g' -e 's/Π/Pi/g' -e 's/Σ/Sigma/g' \
-          -e 's/[[:space:]][[:space:]]*/ /g' -e 's/( /(/g' -e 's/ )/)/g' -e 's/^ //' -e 's/ $//')
+          -e 's/[[:space:]][[:space:]]*/ /g' -e 's/( /(/g' -e 's/ )/)/g' -e 's/^ //' -e 's/ $//' \
+          -e "s#$work/##g")   # a parse error names the temporary file
   printf 'refused: %s\n' "$msg" >> "$out"
 done
 echo "pie-oracle-refusals: $count cases refused -> $out"

@@ -5,7 +5,7 @@
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
 ;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
-;; ::, rec-List, Vec, vecnil, vec::, head, tail, claim, define, check-same.
+;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
@@ -16,6 +16,7 @@
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
 ;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
 ;;             (NRecList target elem-type base-type base step) (NHead neutral) (NTail neutral)
+;;             (NIndNat target motive base step)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -161,6 +162,9 @@
     ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "ind-Nat")
+      (:pie::do-ind-nat (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))
+                        (:pie::eval env (:pie::arg e 2)) (:pie::eval env (:pie::arg e 3))))
     ((:wat::core::= h "Vec") (:pie::t2 "VVec" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "vec::") (:pie::t2 "VVecCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "head") (:pie::do-head (:pie::eval env (:pie::arg e 0))))
@@ -261,6 +265,23 @@
     ((:pie::tag? t "VNeu")
       (:pie::t2 "VNeu" bt (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "NNat") (:pie::sym elim) (:pie::arg t 1) bt b s))))
     (:else (:pie::fail (:wat::string::concat elim " of a non-Nat")))))
+
+;; ind-Nat: zero gives the base; (add1 n) gives (step n (ind-Nat n mot base step)). The type
+;; is (mot target), so a stuck ind-Nat has type (mot target) too.
+;; The step's type, (Pi ((n-1 Nat)) (-> (mot n-1) (mot (add1 n-1)))), as a value: its closure
+;; reaches the motive through a private environment name.
+(:wat::core::defn :pie::ind-nat-step-type [mot <- :wat::WatAST] -> :wat::WatAST
+  (:pie::t3 "VPi" (:pie::sym "n-1") (:pie::t0 "VNat")
+            (:pie::clos (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "%mot") mot))))
+                        "n-1"
+                        (:pie::t2 "->" (:pie::t1 "%mot" (:pie::sym "n-1")) (:pie::t1 "%mot" (:pie::t1 "add1" (:pie::sym "n-1")))))))
+
+(:wat::core::defn :pie::do-ind-nat [t <- :wat::WatAST mot <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VZero") b)
+    ((:pie::tag? t "VAdd1") (:pie::do-ap (:pie::do-ap s (:pie::arg t 0)) (:pie::do-ind-nat (:pie::arg t 0) mot b s)))
+    ((:pie::tag? t "VNeu") (:pie::t2 "VNeu" (:pie::do-ap mot t) (:pie::t4 "NIndNat" (:pie::arg t 1) mot b s)))
+    (:else (:pie::fail "ind-Nat of a non-Nat"))))
 
 ;; head and tail of a Vec. A stuck one has type (Vec E (add1 l)); the checker saw to that.
 (:wat::core::defn :pie::do-head [v <- :wat::WatAST] -> :wat::WatAST
@@ -375,6 +396,14 @@
 
 (:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
+    ((:pie::tag? ne "NIndNat")
+      (:wat::core::let [mot (:pie::arg ne 1)]
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym "ind-Nat")
+                    (:pie::rb-neu used (:pie::arg ne 0))
+                    (:pie::rb used (:pie::arrow-value (:pie::t0 "VNat") (:pie::t0 "VU")) mot)
+                    (:pie::rb used (:pie::do-ap mot (:pie::t0 "VZero")) (:pie::arg ne 2))
+                    (:pie::rb used (:pie::ind-nat-step-type mot) (:pie::arg ne 3))))))
     ((:pie::tag? ne "NHead") (:pie::t1 "head" (:pie::rb-neu used (:pie::arg ne 0))))
     ((:pie::tag? ne "NTail") (:pie::t1 "tail" (:pie::rb-neu used (:pie::arg ne 0))))
     ((:pie::tag? ne "NVar") (:pie::arg ne 0))
@@ -457,7 +486,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -602,6 +631,13 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::= h "ind-Nat")
+      (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat"))
+                        mc (:pie::check ctx env (:pie::arg e 1) (:pie::arrow-value (:pie::t0 "VNat") (:pie::t0 "VU")))
+                        mv (:pie::eval env mc)
+                        bc (:pie::check ctx env (:pie::arg e 2) (:pie::do-ap mv (:pie::t0 "VZero")))
+                        sc (:pie::check ctx env (:pie::arg e 3) (:pie::ind-nat-step-type mv))]
+        (:pie::syn (:pie::do-ap mv (:pie::eval env tc)) (:pie::t4 "ind-Nat" tc mc bc sc))))
     ((:wat::core::if (:wat::core::= h "head") true (:wat::core::= h "tail"))
       (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
                         vt (:pie::syn-type s)]
