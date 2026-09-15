@@ -7,68 +7,47 @@
 (:wat::load-file! "lib/ch10-under-the-hood.wat")
 
 ;; appendo, as the book writes it in ch 4, to drive the engine forwards and backwards.
-(wat.core/defn rsx/appendo [l :- :rs::Term t :- :rs::Term out :- :rs::Term] :- :rs::Goal
-  (rs/delay
-    (wat.core/fn [] :- :rs::Goal
-      (rs/conde
-        [[(rs/== l (rs/nil)) (rs/== t out)]
-         [(rs/fresh3 (:wat::core::fn [a <- :rs::Term d <- :rs::Term res <- :rs::Term] -> :rs::Goal
-                       (rs/conj [(rs/== (rs/cons a d) l)
-                                 (rs/== (rs/cons a res) out)
-                                 (rsx/appendo d t res)])))]]))))
+(rs/defrel (rsx/appendo l t out)
+  (rs/conde ((rs/== l (rs/nil)) (rs/== t out))
+            ((rs/fresh (a d res)
+               (rs/== (rs/cons a d) l)
+               (rs/== (rs/cons a res) out)
+               (rsx/appendo d t res)))))
 
-;; nevero: a relation that never succeeds and never fails.
-(wat.core/defn rsx/nevero [] :- :rs::Goal
-  (rs/delay (wat.core/fn [] :- :rs::Goal (rsx/nevero))))
-
-;; alwayso: succeeds forever.
-(wat.core/defn rsx/alwayso [] :- :rs::Goal
-  (rs/delay (wat.core/fn [] :- :rs::Goal
-              (rs/conde [[(rs/succeed)] [(rsx/alwayso)]]))))
+;; nevero never succeeds and never fails; alwayso succeeds forever.
+(rs/defrel (rsx/nevero) (rsx/nevero))
+(rs/defrel (rsx/alwayso) (rs/conde ((rs/succeed)) ((rsx/alwayso))))
 
 (wat.core/defn user/main [] :- wat.type/nil
   (wat.core/do
-    ;; walk, unify, occurs check
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal (rs/fail))) '())
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal (rs/succeed))) '(_0))
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal (rs/== q (rs/q 'pea)))) '(pea))
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                   (rs/== (rs/q '(a b)) (rs/list [(rs/q 'a) q]))))
-                        '(b))
-    ;; occurs check: q cannot equal a list containing q
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal (rs/== q (rs/list [q]))))
-                        '())
+    ;; unify, walk, reify
+    (wat.test/assert-eq (rs/run* q (rs/fail)) '())
+    (wat.test/assert-eq (rs/run* q (rs/succeed)) '(_0))
+    (wat.test/assert-eq (rs/run* q (rs/== q (rs/q 'pea))) '(pea))
+    (wat.test/assert-eq (rs/run* q (rs/== (rs/q '(a b)) (rs/list [(rs/q 'a) q]))) '(b))
+    ;; the occurs check: q cannot equal a list containing q
+    (wat.test/assert-eq (rs/run* q (rs/== q (rs/list [q]))) '())
     ;; fresh variables reify in order of appearance
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                   (rs/fresh2 (:wat::core::fn [x <- :rs::Term y <- :rs::Term] -> :rs::Goal
-                                                (rs/== q (rs/list [y x y]))))))
-                        '((_0 _1 _0)))
+    (wat.test/assert-eq (rs/run* q (rs/fresh (x y) (rs/== q (rs/list [y x y])))) '((_0 _1 _0)))
     ;; an improper tail
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                   (rs/fresh (:wat::core::fn [d <- :rs::Term] -> :rs::Goal
-                                               (rs/== q (rs/list* [(rs/q 'a) (rs/q 'b)] d))))))
+    (wat.test/assert-eq (rs/run* q (rs/fresh (d) (rs/== q (rs/list* [(rs/q 'a) (rs/q 'b)] d))))
                         '((a b & _0)))
     ;; conde's answers, in the book's order
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                   (rs/conde [[(rs/== q (rs/q 'olive))]
-                                              [(rs/fail)]
-                                              [(rs/== q (rs/q 'oil))]])))
+    (wat.test/assert-eq (rs/run* q (rs/conde ((rs/== q (rs/q 'olive)))
+                                             ((rs/fail))
+                                             ((rs/== q (rs/q 'oil)))))
                         '(olive oil))
-    ;; appendo forwards
-    (wat.test/assert-eq (rs/run* (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                   (rsx/appendo (rs/q '(a b)) (rs/q '(c d)) q)))
-                        '((a b c d)))
-    ;; appendo backwards: every way to split (a b c)
-    (wat.test/assert-eq (rs/run2 -1 (:wat::core::fn [x <- :rs::Term y <- :rs::Term] -> :rs::Goal
-                                      (rsx/appendo x y (rs/q '(a b c)))))
+    ;; appendo forwards, then backwards: every way to split (a b c)
+    (wat.test/assert-eq (rs/run* q (rsx/appendo (rs/q '(a b)) (rs/q '(c d)) q)) '((a b c d)))
+    (wat.test/assert-eq (rs/run* (x y) (rsx/appendo x y (rs/q '(a b c))))
                         '((() (a b c)) ((a) (b c)) ((a b) (c)) ((a b c) ())))
     ;; interleaving: a branch that never answers does not starve its sibling
-    (wat.test/assert-eq (rs/run 1 (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                    (rs/conde [[(rsx/nevero)] [(rs/== q (rs/q 'tea))]])))
-                        '(tea))
+    (wat.test/assert-eq (rs/run 1 q (rs/conde ((rsx/nevero)) ((rs/== q (rs/q 'tea))))) '(tea))
     ;; an infinite stream, taken finitely
-    (wat.test/assert-eq (rs/run 3 (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-                                    (rs/conj [(rsx/alwayso) (rs/== q (rs/q 'onion))])))
-                        '(onion onion onion))
+    (wat.test/assert-eq (rs/run 3 q (rsx/alwayso) (rs/== q (rs/q 'onion))) '(onion onion onion))
+    ;; the functions under the macros, called directly
+    (wat.test/assert-eq (rs/run-goal -1 (wat.core/fn [q :- :rs::Term] :- :rs::Goal
+                                          (rs/disj2 (rs/== q (rs/q 'a)) (rs/== q (rs/q 'b)))))
+                        '(a b))
 
     (wat.kernel/println "reasoned-schemer ch10 under-the-hood: ok")))

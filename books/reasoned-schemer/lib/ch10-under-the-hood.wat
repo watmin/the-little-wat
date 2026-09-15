@@ -168,27 +168,12 @@
     ((wat.core/empty? (wat.core/rest gs)) (wat.core/first gs))
     (:else (rs/conj2 (wat.core/first gs) (rs/conj (wat.core/rest gs))))))
 
-;; (conde [g …] …): each line is a conjunction, the lines a disjunction.
-(wat.core/defn rs/conde [lines :- (wat.type/Vector :- [(wat.type/Vector :- [:rs::Goal])])] :- :rs::Goal
-  (rs/disj (wat.core/into [] (:wat::core::map (wat.core/fn [line :- (wat.type/Vector :- [:rs::Goal])] :- :rs::Goal (rs/conj line))
-                                              lines))))
-
-;; fresh: f receives new variables and returns the goal that uses them.
-(wat.core/defn rs/fresh [f :- [:rs::Term :-> :rs::Goal]] :- :rs::Goal
+;; call/fresh: f receives a new variable and returns the goal that uses it. The fresh macro
+;; below nests one call per variable.
+(wat.core/defn rs/call-fresh [f :- [:rs::Term :-> :rs::Goal]] :- :rs::Goal
   (wat.core/fn [st :- :rs::State] :- :rs::Stream
     (wat.core/let [c (:rs::State/c st)]
       ((f (rs/var c)) (:rs::State :s (:rs::State/s st) :c (wat.core/+ c 1))))))
-
-(wat.core/defn rs/fresh2 [f :- [:rs::Term :rs::Term :-> :rs::Goal]] :- :rs::Goal
-  (wat.core/fn [st :- :rs::State] :- :rs::Stream
-    (wat.core/let [c (:rs::State/c st)]
-      ((f (rs/var c) (rs/var (wat.core/+ c 1))) (:rs::State :s (:rs::State/s st) :c (wat.core/+ c 2))))))
-
-(wat.core/defn rs/fresh3 [f :- [:rs::Term :rs::Term :rs::Term :-> :rs::Goal]] :- :rs::Goal
-  (wat.core/fn [st :- :rs::State] :- :rs::Stream
-    (wat.core/let [c (:rs::State/c st)]
-      ((f (rs/var c) (rs/var (wat.core/+ c 1)) (rs/var (wat.core/+ c 2)))
-       (:rs::State :s (:rs::State/s st) :c (wat.core/+ c 3))))))
 
 ;; The book's defrel: a relation's body is built only when the goal runs, behind a
 ;; suspension. Without it, a recursive relation would build its goal tree forever before
@@ -256,19 +241,87 @@
 (wat.core/defn rs/start [] :- :rs::State
   (:rs::State :s {} :c 1))
 
-;; (run n q g): the first n values of the query variable q, as a quoted list. q is variable 0.
-(wat.core/defn rs/run [n :- wat.type/i64 f :- [:rs::Term :-> :rs::Goal]] :- :wat::WatAST
+;; The first n values (n < 0: all) of the query variable handed to f, as a quoted list. The
+;; query is variable 0. The run and run* macros below are the book's spelling of this.
+(wat.core/defn rs/run-goal [n :- wat.type/i64 f :- [:rs::Term :-> :rs::Goal]] :- :wat::WatAST
   (wat.core/let [q (rs/var 0)
                  sts (rs/take n [] ((f q) (rs/start)))]
     (:wat::core::foldl (wat.core/fn [acc :- :wat::WatAST st :- :rs::State] :- :wat::WatAST
                          (wat.core/quasiquote (~@acc ~(rs/reify q st))))
                        '() sts)))
 
-(wat.core/defn rs/run* [f :- [:rs::Term :-> :rs::Goal]] :- :wat::WatAST
-  (rs/run -1 f))
+;; ---- the book's surface: run, run*, fresh, conde, defrel, as macros
+;;
+;; Called with symbol heads like any fn, (rs/run* q g …). Rules learned in probes/mk/:
+;; - A computed unquote ~(expr) in a template has the macro's params SUBSTITUTED into expr as
+;;   code, so ~(first form) would evaluate form. Arguments are taken apart in a PROGRAM body
+;;   (a let or if outside the template), where params are bound as data; the templates use
+;;   only plain ~x and ~@xs.
+;; - A macro may not call a user defn at expansion time (the F5 purity gate). A helper that
+;;   walks a list is a second macro that recurses by expanding to itself.
+;; - A program body's template may not introduce a literal binder (hygiene gate E), so run
+;;   hands the several-variable case to a pure template macro, where q0 is renamed hygienically.
+;; - In a program body, ~@ splices a list form but not a vector form [...] (F-021), so a
+;;   parameter list is carried between expansions as a list.
+;; - Nothing emits an empty () into code (F-004): each recursion stops one element early.
 
-;; (run n (x y) g): each value is the list (x y).
-(wat.core/defn rs/run2 [n :- wat.type/i64 f :- [:rs::Term :rs::Term :-> :rs::Goal]] :- :wat::WatAST
-  (rs/run n (wat.core/fn [q :- :rs::Term] :- :rs::Goal
-              (rs/fresh2 (:wat::core::fn [x <- :rs::Term y <- :rs::Term] -> :rs::Goal
-                           (rs/conj [(rs/== q (rs/list [x y])) (f x y)]))))))
+;; (run n q g …) or (run n (x …) g …)
+(:wat::core::defmacro :rs::run
+  [n <- :wat::WatAST q <- :wat::WatAST & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::if (:wat::core::List? q)
+    `(:rs::run-vars ~n ~q ~@goals)
+    `(rs/run-goal ~n (:wat::core::fn [~q <- :rs::Term] -> :rs::Goal (rs/conj [~@goals])))))
+
+(:wat::core::defmacro :rs::run-vars
+  [n <- :wat::WatAST vars <- :wat::WatAST & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  `(rs/run-goal ~n (:wat::core::fn [q0 <- :rs::Term] -> :rs::Goal
+                     (:rs::fresh ~vars (rs/== q0 (rs/list [~@vars])) ~@goals))))
+
+;; (run* q g …) or (run* (x …) g …)
+(:wat::core::defmacro :rs::run*
+  [q <- :wat::WatAST & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  `(:rs::run -1 ~q ~@goals))
+
+;; (fresh (x …) g …)
+(:wat::core::defmacro :rs::fresh
+  [vars <- :wat::WatAST & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::if (:wat::core::empty? vars)
+    `(rs/conj [~@goals])
+    (:wat::core::let [v (:wat::core::first vars)
+                      more (:wat::core::rest vars)]
+      (:wat::core::if (:wat::core::empty? more)
+        `(rs/call-fresh (:wat::core::fn [~v <- :rs::Term] -> :rs::Goal (rs/conj [~@goals])))
+        `(rs/call-fresh (:wat::core::fn [~v <- :rs::Term] -> :rs::Goal (:rs::fresh ~more ~@goals)))))))
+
+;; (conde (g …) …): each line a conjunction, the lines a disjunction.
+(:wat::core::defmacro :rs::conde
+  [& lines <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::let [conjs (:wat::core::foldl
+                            (:wat::core::fn [acc <- (:wat::core::Vector :- [:wat::WatAST]) line <- :wat::WatAST]
+                              -> (:wat::core::Vector :- [:wat::WatAST])
+                              (:wat::core::conj acc `(rs/conj [~@line])))
+                            [] lines)]
+    `(rs/disj [~@conjs])))
+
+;; (defrel (name arg …) g …): a defn whose body is built only when the goal runs.
+(:wat::core::defmacro :rs::defrel
+  [head <- :wat::WatAST & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::let [name (:wat::core::first head)
+                    args (:wat::core::rest head)]
+    (:wat::core::if (:wat::core::empty? args)
+      `(:wat::core::defn ~name [] -> :rs::Goal
+         (rs/delay (:wat::core::fn [] -> :rs::Goal (rs/conj [~@goals]))))
+      `(:rs::defrel-params ~name (params) ~args ~@goals))))
+
+;; Moves one arg at a time into the typed parameter list (params x <- :rs::Term …), then
+;; emits the defn.
+(:wat::core::defmacro :rs::defrel-params
+  [name <- :wat::WatAST typed <- :wat::WatAST args <- :wat::WatAST
+   & goals <- (:wat::core::Vector :- [:wat::WatAST])] -> :wat::WatAST
+  (:wat::core::let [ps (:wat::core::rest typed)
+                    a (:wat::core::first args)
+                    more (:wat::core::rest args)]
+    (:wat::core::if (:wat::core::empty? more)
+      `(:wat::core::defn ~name [~@ps ~a <- :rs::Term] -> :rs::Goal
+         (rs/delay (:wat::core::fn [] -> :rs::Goal (rs/conj [~@goals]))))
+      `(:rs::defrel-params ~name (params ~@ps ~a <- :rs::Term) ~more ~@goals))))

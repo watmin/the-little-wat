@@ -8,6 +8,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 |---|---|---|
 | The Little Schemer | 10 / 10 | all pass (`./run.sh`), including the ch 10 interpreter running the untyped Y |
 | The Seasoned Schemer | 10 / 10 | all pass. letrec via Y (C-012); letcc via `Result/try`, with the abandoned work measured (C-013, C-015); `set!` on Cell services (C-014); mutable, shared and cyclic lists on an Arena (C-016); generators as lazy streams (C-017); the ch 20 interpreter with a store and escaping letcc (C-018). Refused by design: Y-bang (R-002) and re-entrant continuations (R-003) |
+| The Reasoned Schemer | 1 / 10 | in progress. The ch 10 engine was built first, since every chapter runs on it; the book's surface (`run`, `fresh`, `conde`, `defrel`) works as wat macros (C-019) |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs
@@ -27,6 +28,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   match breaks (loudly, with a misleading message).
 - **F-018:** `(wat.core/def u/x …)` defines nothing, and reports its own name as an unresolved
   reference.
+- **F-022:** `wat.core/defmacro` defines nothing. With a keyword name the definition passes
+  silently and only the calls fail.
 
 **Other defects:**
 - **F-001:** every debug build panics during startup (`Option`/`Result` registered twice).
@@ -43,6 +46,13 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   "unresolved" at the call site.
 - **F-016:** a flat Clojure `cond` crashes inside the cond macro, with no hint about the
   clause syntax.
+- **F-019:** a variant constructor inside a collection or stream literal keeps its narrowed
+  type, and type arguments unify invariantly, so `[(Option.Some {…})]` is not a
+  `Vector<Option<i64>>`.
+- **F-020:** a bare user-enum unit variant (`:u::T.Nil`) is typed as a nullary function
+  everywhere, contradicting the checker's own comment. Only `(:u::T.Nil {})` works.
+- **F-021:** in a program-body macro, `~@` refuses a vector-form argument that a pure
+  template splices fine.
 
 ## Classes
 
@@ -870,6 +880,126 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** GAP. In Rust `vec![Some(1)]` is a `Vec<Option<i32>>`, and in Clojure the
   question never comes up. Widening a variant to its enum where it becomes a type argument
   would keep channel invariance while ending this.
+- **Repro:** the probes named above.
+
+### F-020: a bare user-enum unit variant is typed as a nullary function, so it cannot be used as a value
+
+- **Where:** Reasoned Schemer ch 10's engine: `rs/nil`, the empty-list term
+  `:rs::Term.Nil`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`), for `:u::T` with `:Nil []`:
+  - Bare `:u::T.Nil` as a fn's return is refused (`probes/mk/unit-variant-bare.wat`):
+    > `:u::nil: body produces [:-> :u::T.Nil]; signature declares :u::T`
+  - The same as a call argument and as a let value (`probes/mk/unit-variant-bare-arg.wat`):
+    > `:u::show: parameter #1 expects :u::T; got [:-> :u::T.Nil]`
+  - Calling it, `(:u::T.Nil)`, the spelling that type suggests, is refused
+    (`probes/mk/unit-variant-call.wat`):
+    > `positional variant construction is retired; write (:u::T.Nil {:field value …}) or (:u::T.Nil {}) for a unit variant`
+  - The pre-dot spelling `:u::T::Nil` is typed `:wat::core::keyword`, with the remedy
+    `:u::T.Nil` (`probes/mk/unit-variant-bare-colons.wat`).
+  - What works is `(:u::T.Nil {})`, which is narrowed (F-019), so inside a collection it
+    also needs a widening helper.
+- **Against the checker's own account:** the bare built-in `:wat::core::Option.None` is a
+  value (its own arm in `infer`, `check.rs:1962`). The next arm, for user enums, says "The
+  bare keyword resolves to the enum's type" (`check.rs:1968`), and its map is built from
+  every declared enum in the dot spelling (`types.rs:698–719`, `compose_variant` at
+  `crates/wat-reader/src/identifier.rs:362`). The behavior contradicts that. I have not
+  found where the `[:-> :u::T.Nil]` type comes from. A smaller stale doc sits nearby:
+  `decompose_variant`'s comment says the separator is `::`, while its code splits on `.`.
+- **Class:** GAP (a defect). The documented route is dead for user enums, and the
+  diagnostic names a function type and offers no remedy.
+- **Repro:** the probes named above.
+
+### C-019: the book's surface syntax ports as wat macros, called with either head spelling
+
+- **Where:** the book writes every chapter with `run`, `run*`, `fresh`, `conde` and
+  `defrel`, which are macros (it defines them in ch 10).
+- **How:** the last section of `books/reasoned-schemer/lib/ch10-under-the-hood.wat`. The
+  macros are defined with `:wat::core::defmacro` (F-022) and called with symbol heads. The
+  book's paren syntax is kept: `(rs/run* (x y) g …)`, `(rs/fresh (a d) g …)`,
+  `(rs/conde (g …) (g …))`, `(rs/defrel (rs/appendo l t out) g …)`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - `probes/mk/surface.wat` passes 4 of 4. That includes the order-sensitive
+    `(run* (x y) (conde ((teacupo x) (== y #t)) ((== x #f) (== y #t))))`, which answers
+    `((false true) (tea true) (cup true))`. The relation suspends, so conde's second line
+    answers first, as in the book.
+  - Symbol-headed macro calls expand, including a relation with a symbol name
+    (`probes/mk/macros-symbol-head.wat`).
+- **Cost:** four rules had to be found by probing (R-004, the friction entry below, F-021,
+  F-004). `defrel`'s parameter list needs a second macro that recurses by expanding to
+  itself.
+- **Class:** CLEAN, with the cost noted.
+
+### R-004: a macro may not call a user function while it expands
+
+- **What happened:** `probes/mk/macro-calls-defn.wat` is refused when the macro is defined:
+  > `malformed defmacro: program-body macro purity check failed at definition: keyword head :u::wrap refused at macro expand time — not on the pure-combinator allow-list (default-deny F5 gate, arc 249 stone 249.2b-i); only pure-total heads are permitted`
+- **Doctrine:** expansion runs in a fenced evaluator that must be pure and total
+  (`src/macros/eval.rs`). What may run there is each intrinsic's `@ExpandTime` ruling
+  (`is_expand_time_legal`, `eval.rs:424`). A user fn carries no ruling.
+- **Route:** a helper that walks a list becomes a second macro that expands to itself
+  (`:rs::defrel-params`).
+- **Class:** REFUSAL (principled). In Clojure a macro may call any fn defined before it.
+
+### Friction: a computed unquote in a template evaluates the macro's arguments as code
+
+- `~(:wat::core::first form)` in a template substitutes the argument
+  `(:u::whatever 1 2)` into the expression and evaluates it:
+  - with a keyword head, the F5 gate refuses it: `keyword head :u::whatever refused at macro expand time`
+    (`probes/mk/macro-arg-data-kw.wat`);
+  - with a symbol head, it fails at expansion: `unbound symbol: u/whatever`
+    (`probes/mk/macro-arg-data-sym.wat`).
+- This is documented: "Computed-unquote `,(expr)`: a List whose head is a Keyword is
+  evaluated at expand-time via `macro_eval` … with macro params substituted"
+  (`src/macros/mod.rs:89–92`). In Clojure, `~(first form)` takes apart the *unevaluated*
+  form, the most common move a macro makes.
+- **Route:** take arguments apart in a *program* body (a `let` or `if` outside the
+  template), where parameters are bound as data (`probes/mk/macro-arg-program-body.wat`).
+  But a program body's template may not introduce a literal binder (hygiene gate E,
+  `mod.rs:70–72`). So `:rs::run` takes its arguments apart in a program body and hands off
+  to `:rs::run-vars`, a pure template, whose binder `q0` is renamed hygienically.
+- **Related:** Clojure's bare `quote` is not the quote form in this dialect (it is
+  `wat.core/quote`, `:wat::core::quote` or `'`). Written bare, the only error is about its
+  contents: `(quote (u/whatever 1 2))` reports `:u::whatever` unresolved
+  (`probes/mk/quote-bare-symbol.wat`). This is how a template's `(quote ~form)` first
+  failed (`probes/mk/macro-arg-variants.wat`); with `:wat::core::quote` it works
+  (`probes/mk/macro-template-kw-quote.wat`).
+
+### F-021: in a program-body macro, `~@` does not splice a vector-form argument
+
+- **Where:** `defrel`'s parameter list, built one parameter at a time by a program-body
+  macro that splices the list so far, `[~@typed ~a <- :rs::Term]`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - From a program body (the template inside a `let`), splicing the argument `[1 2 3]`
+    fails at expansion (`probes/mk/splice-vector-form-program-body.wat`):
+    > `,@: expected sequence (Vec value or list form), got wat::WatAST <WatAST>`
+  - The same macro given `(1 2 3)` works and prints 6
+    (`probes/mk/splice-list-form-program-body.wat`).
+  - A pure template splices `[1 2 3]` fine (`probes/mk/splice-vector-form.wat`).
+  - The file's second macro (the template under an `if`, no `let`) was not reached, since
+    startup stops at the first failure.
+- **So:** the same `~@xs` accepts a vector form or not depending on whether the macro has a
+  program body. The error renders the value as `<WatAST>` (F-011's class).
+- **Workaround:** carry the list between expansions as a list form with a marker head,
+  `(params x <- :rs::Term …)`, and splice its `rest` (`:rs::defrel-params`).
+- **Class:** GAP. Clojure's `~@` splices any seq, vectors included.
+- **Repro:** the probes named above.
+
+### F-022: `wat.core/defmacro` defines nothing, and `:wat::core::defmacro` refuses a symbol name
+
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - `(wat.core/defmacro u/twice …)` reports `2 unresolved references`, both `:u::twice`:
+    the definition's own name and the call (`probes/mk/defmacro-clj.wat`).
+  - With a keyword name, `(wat.core/defmacro :u::twice …)`, the definition passes silently
+    and the call fails: `call head — not a builtin, not a registered function`
+    (`probes/mk/defmacro-clj-kwname.wat`).
+  - The keyword head with a symbol name, `(:wat::core::defmacro u/twice …)`, is refused:
+    `malformed defmacro: macro name (item 1) must be a keyword-path (e.g. :my::macro)`
+    (`probes/mk/defmacro-kw-clj-params.wat`).
+- **Control:** a keyword head with a keyword name works (every macro in the ch 10 lib), and
+  such a macro can be called with a symbol head.
+- **Class:** GAP (migration surface), in F-018's family. A codemod that respells
+  `:wat::core::defmacro` as `wat.core/defmacro` would drop every macro without a word at
+  the definitions.
 - **Repro:** the probes named above.
 
 ## Predicted, unverified
