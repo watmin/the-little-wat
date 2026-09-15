@@ -1,0 +1,7 @@
+refused: The expressions 2 and 1 are not the same Nat
+refused: The expressions 2 and 3 are not the same Nat
+refused: Expected Nat but given Atom
+refused: Can't determine a type
+refused: Expected =, got Nat
+refused: Expected Atom but given Nat
+refused: The expressions (iter-Nat n (the Nat 1) (lambda (k) (add1 k))) and (add1 n) are not the same Nat

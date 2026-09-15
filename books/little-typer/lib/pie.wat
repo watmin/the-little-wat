@@ -5,18 +5,20 @@
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
 ;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
-;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, claim, define, check-same.
+;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, =, same, cong, claim, define,
+;; check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
 ;;             (VPi x dom clos) (VSigma x car-type clos) (VLam x clos) (VCons a d)
 ;;             (VList elem-type) (VNil) (VLCons e es)
-;;             (VVec elem-type length) (VVecNil) (VVecCons e es) (VNeu type neutral)
+;;             (VVec elem-type length) (VVecNil) (VVecCons e es) (VEq type from to) (VSame v)
+;;             (VNeu type neutral)
 ;; - closures: (CLOS env x body): an environment, a variable, and a body in core form
 ;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
 ;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
 ;;             (NRecList target elem-type base-type base step) (NHead neutral) (NTail neutral)
-;;             (NIndNat target motive base step)
+;;             (NIndNat target motive base step) (NCong target from-type to-type f)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -162,6 +164,11 @@
     ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "=") (:pie::t3 "VEq" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1)) (:pie::eval env (:pie::arg e 2))))
+    ((:wat::core::= h "same") (:pie::t1 "VSame" (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "cong")
+      (:pie::do-cong (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))
+                     (:pie::eval env (:pie::arg e 2)) (:pie::eval env (:pie::arg e 3))))
     ((:wat::core::= h "ind-Nat")
       (:pie::do-ind-nat (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))
                         (:pie::eval env (:pie::arg e 2)) (:pie::eval env (:pie::arg e 3))))
@@ -266,6 +273,17 @@
       (:pie::t2 "VNeu" bt (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "NNat") (:pie::sym elim) (:pie::arg t 1) bt b s))))
     (:else (:pie::fail (:wat::string::concat elim " of a non-Nat")))))
 
+;; cong, in core (cong target X Y f): (same x) gives (same (f x)); a stuck target, of type
+;; (= X from to), gives a stuck cong of type (= Y (f from) (f to)).
+(:wat::core::defn :pie::do-cong [t <- :wat::WatAST x <- :wat::WatAST y <- :wat::WatAST f <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VSame") (:pie::t1 "VSame" (:pie::do-ap f (:pie::arg t 0))))
+    ((:pie::tag? t "VNeu")
+      (:wat::core::let [tt (:pie::arg t 0)]
+        (:pie::t2 "VNeu" (:pie::t3 "VEq" y (:pie::do-ap f (:pie::arg tt 1)) (:pie::do-ap f (:pie::arg tt 2)))
+                         (:pie::t4 "NCong" (:pie::arg t 1) x y f))))
+    (:else (:pie::fail "cong of a non-equality"))))
+
 ;; ind-Nat: zero gives the base; (add1 n) gives (step n (ind-Nat n mot base step)). The type
 ;; is (mot target), so a stuck ind-Nat has type (mot target) too.
 ;; The step's type, (Pi ((n-1 Nat)) (-> (mot n-1) (mot (add1 n-1)))), as a value: its closure
@@ -341,6 +359,8 @@
     ((:pie::tag? v "VNat") (:pie::sym "Nat"))
     ((:pie::tag? v "VList") (:pie::t1 "List" (:pie::rb-type used (:pie::arg v 0))))
     ((:pie::tag? v "VVec") (:pie::t2 "Vec" (:pie::rb-type used (:pie::arg v 0)) (:pie::rb used (:pie::t0 "VNat") (:pie::arg v 1))))
+    ((:pie::tag? v "VEq")
+      (:pie::t3 "=" (:pie::rb-type used (:pie::arg v 0)) (:pie::rb used (:pie::arg v 0) (:pie::arg v 1)) (:pie::rb used (:pie::arg v 0) (:pie::arg v 2))))
     ((:pie::tag? v "VPi") (:pie::rb-binder used v "Pi"))
     ((:pie::tag? v "VSigma") (:pie::rb-binder used v "Sigma"))
     ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
@@ -373,6 +393,7 @@
                     (:pie::rb used (:pie::arg t 1) a)
                     (:pie::rb used (:pie::inst (:pie::arg t 2) a) (:pie::do-cdr v))))))
     ((:pie::tag? t "VVec") (:pie::rb-vec used t v))
+    ((:wat::core::if (:pie::tag? t "VEq") (:pie::tag? v "VSame") false) (:pie::t1 "same" (:pie::rb used (:pie::arg t 0) (:pie::arg v 0))))
     ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
     ((:pie::tag? v "VNil") (:pie::sym "nil"))
     ((:pie::tag? v "VLCons")
@@ -396,6 +417,8 @@
 
 (:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
+    ((:pie::tag? ne "NCong")
+      (:pie::t2 "cong" (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arrow-value (:pie::arg ne 1) (:pie::arg ne 2)) (:pie::arg ne 3))))
     ((:pie::tag? ne "NIndNat")
       (:wat::core::let [mot (:pie::arg ne 1)]
         (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
@@ -486,7 +509,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -616,7 +639,7 @@
       (:wat::core::let [tc (:pie::check-type ctx env (:pie::arg e 0))
                         tv (:pie::eval env tc)]
         (:pie::syn tv (:pie::t2 "the" tc (:pie::check ctx env (:pie::arg e 1) tv)))))
-    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma" "List" "Vec") h)
+    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma" "List" "Vec" "=") h)
       (:pie::syn (:pie::t0 "VU") (:pie::type-at ctx env e true)))
     ((:wat::core::= h "car")
       (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
@@ -631,6 +654,25 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ;; cong's function must synthesize: its type gives Y.
+    ((:wat::core::= h "cong")
+      (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
+                        tt (:pie::syn-type ts)
+                        fs (:pie::synth ctx env (:pie::arg e 1))
+                        ft (:pie::syn-type fs)
+                        used (:pie::used ctx)]
+        (:wat::core::cond
+          ((:wat::core::not (:pie::tag? tt "VEq")) (:pie::fail (:wat::string::concat "cong needs an equality, not " (:pie::show-type ctx tt))))
+          ((:wat::core::not (:pie::tag? ft "VPi")) (:pie::fail (:wat::string::concat "cong needs a function, not " (:pie::show-type ctx ft))))
+          ((:wat::core::not (:pie::alpha? (:pie::rb-type used (:pie::arg ft 1)) (:pie::rb-type used (:pie::arg tt 0))
+                                          (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String])))
+            (:pie::fail (:wat::string::concat "cong's function takes " (:pie::show-type ctx (:pie::arg ft 1)) ", not " (:pie::show-type ctx (:pie::arg tt 0)))))
+          (:else
+            (:wat::core::let [x (:pie::arg tt 0)
+                              y (:pie::inst (:pie::arg ft 2) (:pie::arg tt 1))
+                              fv (:pie::eval env (:pie::syn-core fs))]
+              (:pie::syn (:pie::t3 "VEq" y (:pie::do-ap fv (:pie::arg tt 1)) (:pie::do-ap fv (:pie::arg tt 2)))
+                         (:pie::t4 "cong" (:pie::syn-core ts) (:pie::rb-type used x) (:pie::rb-type used y) (:pie::syn-core fs))))))))
     ((:wat::core::= h "ind-Nat")
       (:wat::core::let [tc (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat"))
                         mc (:pie::check ctx env (:pie::arg e 1) (:pie::arrow-value (:pie::t0 "VNat") (:pie::t0 "VU")))
@@ -667,7 +709,7 @@
                         x (:pie::syn-type bs)
                         sc (:pie::check ctx env (:pie::arg e 2) (:pie::nat-step-type h x))]
         (:pie::syn x (:pie::t3 h tc (:pie::t2 "the" (:pie::rb-type (:pie::used ctx) x) (:pie::syn-core bs)) sc))))
-    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "cons" "lambda" "vec::") h)
+    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "cons" "lambda" "vec::" "same") h)
       (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e) "; use the")))
     (:else
       (:wat::core::let [fs (:pie::synth ctx env (:wat::core::first (:pie::kids e)))]
@@ -698,6 +740,10 @@
       ((:wat::core::= h "List") (:pie::t1 "List" (:pie::type-at ctx env (:pie::arg e 0) u?)))
       ((:wat::core::= h "Vec")
         (:pie::t2 "Vec" (:pie::type-at ctx env (:pie::arg e 0) u?) (:pie::check ctx env (:pie::arg e 1) (:pie::t0 "VNat"))))
+      ((:wat::core::= h "=")
+        (:wat::core::let [xc (:pie::type-at ctx env (:pie::arg e 0) u?)
+                          xv (:pie::eval env xc)]
+          (:pie::t3 "=" xc (:pie::check ctx env (:pie::arg e 1) xv) (:pie::check ctx env (:pie::arg e 2) xv))))
       ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->"))
         (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym h)) (:pie::check-types ctx env (:pie::args e) u?))))
       ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
@@ -743,6 +789,19 @@
                               (:pie::check ctx env (:pie::arg e 1) (:pie::t2 "VVec" (:pie::arg t 0) (:pie::arg len 0))))
             (:pie::fail (:wat::string::concat "vec:: needs add1 at the top of the length, not "
                                               (:wat::core::ast->source (:pie::sugar (:pie::rb (:pie::used ctx) (:pie::t0 "VNat") len))))))))
+      ;; (same e) is an (= X from to) when e is an X, and from, e and to are the same X.
+      ((:wat::core::if (:wat::core::= h "same") (:pie::tag? t "VEq") false)
+        (:wat::core::let [x (:pie::arg t 0)
+                          ec (:pie::check ctx env (:pie::arg e 0) x)
+                          used (:pie::used ctx)
+                          nf (:pie::rb used x (:pie::eval env ec))
+                          from (:pie::rb used x (:pie::arg t 1))
+                          to (:pie::rb used x (:pie::arg t 2))
+                          none (:wat::core::Vector :- [:wat::core::String])]
+          (:wat::core::if (:wat::core::if (:pie::alpha? from nf none none) (:pie::alpha? nf to none none) false)
+            (:pie::t1 "same" ec)
+            (:pie::fail (:wat::string::concat "same: " (:wat::core::ast->source (:pie::sugar nf)) " is not both "
+                                              (:wat::core::ast->source (:pie::sugar from)) " and " (:wat::core::ast->source (:pie::sugar to)))))))
       ((:wat::core::if (:wat::core::= h "cons") (:pie::tag? t "VSigma") false)
         (:wat::core::let [ac (:pie::check ctx env (:pie::arg e 0) (:pie::arg t 1))]
           (:pie::t2 "cons" ac (:pie::check ctx env (:pie::arg e 1) (:pie::inst (:pie::arg t 2) (:pie::eval env ac))))))
@@ -778,7 +837,7 @@
   (:wat::core::let [h (:pie::head e)]
     (:wat::core::cond
       ((:wat::core::= (:pie::name-of e) "U") true)
-      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "List" "Vec") h) (:pie::any-large? (:pie::args e)))
+      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "List" "Vec" "=") h) (:pie::any-large? (:pie::args e)))
       ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
         (:wat::core::if (:pie::any-large? (:pie::binder-types (:pie::kids (:pie::arg e 0)))) true (:pie::large? (:pie::arg e 1))))
       (:else false))))

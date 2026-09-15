@@ -1,0 +1,27 @@
+#lang pie
+;; The Little Typer, chapter 8: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; same needs the two sides to be the same
+(the (= Nat 1 2) (same 1))
+
+;; same's argument must be the value on both sides
+(the (= Nat 2 2) (same 3))
+
+;; the sides must have the type given
+(= Nat 'one 1)
+
+;; same by itself: the type cannot be determined
+(same 1)
+
+;; cong's target must be an equality
+(cong 5 (the (-> Nat Nat) (lambda (n) n)))
+
+;; cong's function must take the equality's type
+(cong (the (= Nat 1 1) (same 1)) (the (-> Atom Atom) (lambda (a) a)))
+
+;; (incr n) is stuck on n, so same alone cannot prove incr=add1
+(claim incr (-> Nat Nat))
+(define incr (lambda (n) (iter-Nat n 1 (lambda (k) (add1 k)))))
+(the (Pi ((n Nat)) (= Nat (incr n) (add1 n))) (lambda (n) (same (add1 n))))
