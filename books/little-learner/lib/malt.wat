@@ -410,6 +410,68 @@
         t
         (((:ll::k-relu (:wat::core::- k 1)) ((:ll::relu t) theta)) (:ll::refr theta 2))))))
 
+;; ---- correlation (learner/ext-ops/G-correlate.rkt)
+;;
+;; malt's correlate has its own dot product, counting down from the last entry with the scalar
+;; prims, signal row times filter row; ported as written, so gradients accumulate in its order.
+
+(:wat::core::defn :ll::dotted-product [t <- :ll::V u <- :ll::V i <- :wat::core::i64 a <- :ll::V] -> :ll::V
+  (:wat::core::let [a-hat (:ll::+-0-0 a (:ll::*-0-0 (:ll::tref t i) (:ll::tref u i)))]
+    (:wat::core::if (:wat::core::= i 0) a-hat (:ll::dotted-product t u (:wat::core::- i 1) a-hat))))
+
+(:wat::core::defn :ll::corr-dot [t <- :ll::V u <- :ll::V] -> :ll::V
+  (:ll::dotted-product t u (:wat::core::- (:ll::tlen t) 1) (:ll::num 0.0)))
+
+;; the filter's rows, last to first, against the signal rows they overlap from position from
+(:wat::core::defn :ll::sum-dp [filter <- :ll::V signal <- :ll::V from <- :wat::core::i64 i <- :wat::core::i64 a <- :ll::V] -> :ll::V
+  (:wat::core::let [si (:wat::core::+ from i)
+                    a-hat (:wat::core::if (:wat::core::if (:wat::core::>= si 0) (:wat::core::< si (:ll::tlen signal)) false)
+                            (:ll::+-0-0 a (:ll::corr-dot (:ll::tref signal si) (:ll::tref filter i)))
+                            a)]
+    (:wat::core::if (:wat::core::= i 0) a-hat (:ll::sum-dp filter signal from (:wat::core::- i 1) a-hat))))
+
+(:wat::core::defn :ll::correlate-overlap [filter <- :ll::V signal <- :ll::V segment <- :wat::core::i64] -> :ll::V
+  (:wat::core::let [q (:wat::i64::quot (:wat::core::- (:ll::tlen filter) 1) 2)]
+    (:ll::sum-dp filter signal (:wat::core::- segment q) (:wat::core::- (:ll::tlen filter) 1) (:ll::num 0.0))))
+
+;; a bank of filters (b m d) along a signal (n d): an (n b) tensor
+(:wat::core::defn :ll::correlate-3-2 [bank <- :ll::V signal <- :ll::V] -> :ll::V
+  (:ll::build-tensor (:wat::core::Vector :- [:wat::core::i64] (:ll::tlen signal) (:ll::tlen bank))
+    (:wat::core::fn [idx <- :ll::Ints] -> :ll::V
+      (:ll::correlate-overlap (:ll::tref bank (:wat::core::nth idx 1)) signal (:wat::core::nth idx 0)))))
+
+(:wat::core::defn :ll::correlate [bank <- :ll::V signal <- :ll::V] -> :ll::V
+  ((:ll::ext2 :ll::correlate-3-2 3 2) bank signal))
+
+;; ---- grid search (tools/A-hypers.rkt)
+;;
+;; malt's grid-search is a macro over dynamically bound hypers: every combination of the
+;; values given, the first hyper outermost, until the trained theta is good enough. Here the
+;; hypers searched are revs and alpha, and each combination is a Hypers value handed to body.
+(:wat::core::defn :ll::grid-search
+  [good-enough? <- [:ll::V :-> :wat::core::bool]
+   revs-list <- :ll::Ints
+   alphas <- (:wat::core::Vector :- [:wat::core::f64])
+   body <- [:ll::Hypers :-> :ll::V]]
+  -> (:wat::core::Option :- [:ll::V])
+  (:ll::first-good good-enough? body
+    (:wat::core::foldl (:wat::core::fn [acc <- (:wat::core::Vector :- [:ll::Hypers]) r <- :wat::core::i64] -> (:wat::core::Vector :- [:ll::Hypers])
+                         (:wat::core::concat acc (:wat::core::mapv (:wat::core::fn [a <- :wat::core::f64] -> :ll::Hypers (:ll::hypers r a)) alphas)))
+                       (:wat::core::Vector :- [:ll::Hypers])
+                       revs-list)))
+
+(:wat::core::defn :ll::first-good
+  [good-enough? <- [:ll::V :-> :wat::core::bool]
+   body <- [:ll::Hypers :-> :ll::V]
+   hs <- (:wat::core::Vector :- [:ll::Hypers])]
+  -> (:wat::core::Option :- [:ll::V])
+  (:wat::core::if (:wat::core::empty? hs)
+    :wat::core::Option.None
+    (:wat::core::let [theta (body (:wat::core::first hs))]
+      (:wat::core::if (good-enough? theta)
+        (:wat::core::Option.Some {:value theta})
+        (:ll::first-good good-enough? body (:wat::core::rest hs))))))
+
 ;; ---- argmax, comparators, models and accuracy
 ;; (learner/ext-ops/E-argmax.rkt, B-comparators.rkt; malted/L-accuracy.rkt)
 

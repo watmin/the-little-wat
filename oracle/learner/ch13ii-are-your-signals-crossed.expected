@@ -1,0 +1,5 @@
+(tensor (tensor 50.0 110.0 170.0 230.0) (tensor 91.0 217.0 343.0 469.0) (tensor 133.0 331.0 529.0 727.0) (tensor 175.0 445.0 715.0 985.0) (tensor 217.0 559.0 901.0 1243.0) (tensor 110.0 362.0 614.0 866.0))
+(tensor (tensor -2.0) (tensor -3.0) (tensor -6.0) (tensor -12.0) (tensor 8.0))
+(tensor (tensor 0.275) (tensor 0.55) (tensor 0.5499999999999999) (tensor 0.425))
+(list (tensor (tensor (tensor 25.0 30.0) (tensor 36.0 42.0) (tensor 35.0 40.0)) (tensor (tensor 25.0 30.0) (tensor 36.0 42.0) (tensor 35.0 40.0)) (tensor (tensor 25.0 30.0) (tensor 36.0 42.0) (tensor 35.0 40.0)) (tensor (tensor 25.0 30.0) (tensor 36.0 42.0) (tensor 35.0 40.0))))
+(list (tensor (tensor 88.0 96.0) (tensor 144.0 156.0) (tensor 144.0 156.0) (tensor 144.0 156.0) (tensor 144.0 156.0) (tensor 104.0 112.0)))
