@@ -42,7 +42,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-001:** every debug build panics during startup (`Option`/`Result` registered twice).
 - **F-002:** a newly added `wat-tests/` file is never discovered (a false green).
 - **F-006 / F-008:** some diagnostics point into wat-rs's own Rust source, with no user
-  file or line.
+  file or line. Seen again in the Little Learner: the Pure-enum containment rule is located
+  at `src/check.rs:15104`, and an i64 overflow at `wat/core.wat:66` rather than at the
+  user's call (F-035).
 - **F-007:** an unknown *bare* call name passes the checker and fails only at runtime.
 - **F-008:** a `<` in a name is a lex error (fallout from retiring turbofish).
 - **F-009 (second defect):** a constructor applied to a function's own type variables fails
@@ -86,6 +88,10 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-034:** an f64 prints without its decimal point (`100.0` as `100`, `1e21` as 22
   digits), both from `:wat::f64::to-string` and in failure records, so a printed float
   reads back as an integer. Clojure and Racket print `100.0`.
+- **F-035:** integers have no bit operations: no and, or, xor, not, shift or wrapping
+  arithmetic, in any namespace. Xorshift, splitmix, PCG, hashes, checksums and bit-field
+  parsing can't be written.
+- **F-036:** there are no random numbers, not even a seeded generator.
 - **F-032:** the lexer rejects `λ`, `Π`, `Σ`, `→` in symbols but accepts `é`, and its
   error is located in `crates/wat-reader/src/parser.rs` with a byte offset, not in the
   user's file and line.
@@ -1592,6 +1598,54 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Route:** the Little Learner's checks will compare f64 values, not their printed forms.
 - **Class:** GAP (EDN fidelity of printed floats).
 - **Repro:** the two probes.
+
+### F-035: integers have no bit operations
+
+- **Where:** The Little Learner needs random numbers (F-036), and writing a generator
+  needs bit operations. So will NEXT.md's packet detector, and anything else that hashes,
+  checksums, or reads flags and bit fields.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - The i64 verbs registered in wat-rs's source are arithmetic, comparisons and conversions:
+    `- < > mod quot rem to-bigint to-f64 to-rational to-string`. No verb in `src/` or `wat/`
+    has a name containing bit, xor, shift, shl, shr, wrapping, popcount, band or bor.
+  - Overflow is checked, and loud (`probes/learner/i64-overflow.wat`):
+    > `#wat.runtime/IntegerOverflow {:message "i64 overflow: 9223372036854775807 :wat::i64::+ 1 does not fit in 64 bits" :location #wat.core/Span {:file "wat/core.wat" :line 66 …}`
+
+    It is located in wat's own stdlib, not at the user's call.
+- **So:** xorshift, splitmix64, PCG, FNV and xxhash, CRCs, and parsing flags or bit
+  fields can't be written. The only generator left is a multiplicative one small enough
+  never to overflow (Park–Miller: 48271·x mod 2³¹−1). For a language headed for
+  networking, bit operations are table stakes.
+- **Class:** GAP. Extend: add and, or, xor, not, shifts, and wrapping and checked arithmetic.
+  Correct: locate the overflow at the user's call.
+- **Repro:** the probe, and the verb grep above.
+
+### F-036: there are no random numbers
+
+- **Where:** The Little Learner. `init-theta` draws normal random numbers, `sampling-obj`
+  draws random batch indices, and malt makes its normals with the ziggurat method from
+  uniform `(random)` draws.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): no verb in `src/` or `wat/` has a name
+  containing rand, and the docs list none. There is neither a seeded generator nor a source
+  of seeds. `:wat::time::now` is the only observation of the world that could stand in
+  for a seed.
+- **So:** a program that needs randomness must write its own generator, and F-035 limits
+  that to Park–Miller.
+- **Class:** GAP. Extend: add a seeded, pure generator to the stdlib (state in, a value and the
+  next state out, e.g. splitmix64), plus a seed from the world alongside `:wat::time::now`.
+- **Repro:** the verb grep.
+
+### Friction: the user guide still names verbs that are retired
+
+- **What happened** (2026-09-15): three verbs I took from `docs/USER-GUIDE.md` while writing
+  the Learner's probes are retired. Each time the checker refused the call and named the
+  replacement exactly, which is good:
+  - `:wat::core::f64::to-string` ("use `:wat::f64::to-string`");
+  - `:wat::std::math::exp` ("use `:wat::math::exp`");
+  - `:wat::core::i64::to-f64` ("use `:wat::i64::to-f64`").
+- **So:** the retirement is handled well at the call. The docs just haven't followed
+  (compare the `first` Friction entry in The Little Typer).
+- **Class:** GAP. Clean: sweep the guide for retired names.
 
 ## Predicted, unverified
 

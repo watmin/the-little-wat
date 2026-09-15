@@ -195,6 +195,28 @@ These are fixes, not additions, but each is something users currently write them
   that clones one child, not all of them.
 - **Evidence:** F-033; `probes/typer/ast-children-cost.wat`, `probes/typer/value-copy-cost.wat`.
 
+### P-015: bit operations on integers
+
+- **What we would have to write:** nothing we can write. Without and, or, xor or shifts,
+  the operations can only be emulated with division and remainder, one bit at a time.
+- **Why:** hashes, checksums, generators, flags and wire formats all need them, and the
+  networking work ahead needs them first.
+- **Suggested shape:** `:wat::i64::bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`,
+  `shift-right` (arithmetic and logical), plus `wrapping-+`, `wrapping-*` beside today's
+  checked arithmetic.
+- **Evidence:** F-035.
+
+### P-016: a seeded, pure random number generator
+
+- **What we will write:** a Park–Miller generator for the Little Learner, since F-035
+  rules out the better ones.
+- **Why:** sampling, initialization, shuffling and property-based tests all need one. A pure
+  generator (state in, value and next state out) fits wat's immutable style and keeps runs
+  reproducible.
+- **Suggested shape:** splitmix64 or PCG in the stdlib, with a uniform f64 in [0, 1), an
+  integer below n, and a normal; and a seed taken from the world beside `:wat::time::now`.
+- **Evidence:** F-036.
+
 ## Optional libraries
 
 ### P-010: a relational (miniKanren) library
