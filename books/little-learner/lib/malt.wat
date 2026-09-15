@@ -319,3 +319,15 @@
 (:wat::core::defn :ll::line [xs <- :ll::V] -> [:ll::V :-> :ll::V]
   (:wat::core::fn [theta <- :ll::V] -> :ll::V
     (:ll::+ (:ll::* (:ll::ref theta 0) xs) (:ll::ref theta 1))))
+
+;; (((l2-loss target) xs ys) theta): the sum of the squared differences between ys and the
+;; target's predictions (malted/C-loss.rkt).
+(:wat::core::defn :ll::l2-loss [target <- [:ll::V :-> [:ll::V :-> :ll::V]]] -> [:ll::V :ll::V :-> [:ll::V :-> :ll::V]]
+  (:wat::core::fn [xs <- :ll::V ys <- :ll::V] -> [:ll::V :-> :ll::V]
+    (:wat::core::fn [theta <- :ll::V] -> :ll::V
+      (:wat::core::let [pred-ys ((target xs) theta)]
+        (:ll::sum (:ll::sqr (:ll::- ys pred-ys)))))))
+
+;; revise: f applied to theta revs times (malted/D-gradient-descent.rkt).
+(:wat::core::defn :ll::revise [f <- [:ll::V :-> :ll::V] revs <- :wat::core::i64 theta <- :ll::V] -> :ll::V
+  (:wat::core::if (:wat::core::= revs 0) theta (:ll::revise f (:wat::core::- revs 1) (f theta))))
