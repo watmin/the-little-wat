@@ -1,0 +1,5 @@
+refused: The expressions 6 and 1 are not the same Nat
+refused: Expected Absurd but given Trivial
+refused: Expected Absurd but given Trivial
+refused: Expected (= Nat 0 0) but given Trivial
+refused: Expected Absurd but given Nat

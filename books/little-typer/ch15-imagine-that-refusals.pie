@@ -1,0 +1,23 @@
+#lang pie
+;; The Little Typer, chapter 15: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; 1 and 6 are not the same Nat
+(the (= Nat 1 6) (same 1))
+
+;; sole is not an Absurd, so ind-Absurd cannot start from it
+(ind-Absurd sole Nat)
+
+;; (=consequence 0 0) is Trivial, not Absurd: 0 = 0 is no contradiction
+(claim =consequence (-> Nat Nat U))
+(define =consequence (lambda (n j) (which-Nat n (which-Nat j Trivial (lambda (j-1) Absurd)) (lambda (n-1) (which-Nat j Absurd (lambda (j-1) (= Nat n-1 j-1)))))))
+(the (-> (= Nat 0 0) Absurd) (lambda (z) (replace z (lambda (k) (=consequence 0 k)) sole)))
+
+;; the base of replace must be the consequence at the equality's from: sole is not an Absurd
+(claim =consequence (-> Nat Nat U))
+(define =consequence (lambda (n j) (which-Nat n (which-Nat j Trivial (lambda (j-1) Absurd)) (lambda (n-1) (which-Nat j Absurd (lambda (j-1) (= Nat n-1 j-1)))))))
+(the (-> (= Nat 1 0) Absurd) (lambda (z) (replace z (lambda (k) (=consequence 1 k)) sole)))
+
+;; a function into Absurd cannot be made from an ordinary value
+(the (-> Nat Absurd) (lambda (n) n))
