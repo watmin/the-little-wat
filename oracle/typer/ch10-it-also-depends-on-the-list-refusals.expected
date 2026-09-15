@@ -1,0 +1,6 @@
+refused: Not List: Nat
+refused: Expected (-> (List Nat) U) but given (-> (List Atom) U)
+refused: Expected Nat but given Atom
+refused: Expected Nat but given Atom
+refused: vecnil requires that the length be zero, not 2
+refused: Expected (Vec E (add1 (rec-List es₁ (the Nat 0) (lambda (e₁ es₂ length-es) (add1 length-es))))) but given (Vec E (rec-List es₁ (the Nat 0) (lambda (e₁ es₂ length-es) (add1 length-es))))

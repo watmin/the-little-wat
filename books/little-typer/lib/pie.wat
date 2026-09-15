@@ -5,8 +5,8 @@
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
 ;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
-;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, =, same, cong, replace, symm,
-;; trans, claim, define, check-same.
+;; ::, rec-List, ind-List, Vec, vecnil, vec::, head, tail, ind-Nat, =, same, cong,
+;; replace, symm, trans, claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
@@ -21,6 +21,7 @@
 ;;             (NIndNat target motive base step) (NCong target from-type to-type f)
 ;;             (NReplace target target-type motive base) (NSymm target) (NTrans p q type),
 ;;             where p and q are values, either of which may be stuck
+;;             (NIndList target elem-type motive base step)
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -184,6 +185,9 @@
     ((:wat::core::= h "tail") (:pie::do-tail (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "List") (:pie::t1 "VList" (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "::") (:pie::t2 "VLCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
+    ((:wat::core::= h "ind-List")
+      (:pie::do-ind-list (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))
+                         (:pie::eval env (:pie::arg e 2)) (:pie::eval env (:pie::arg e 3))))
     ((:wat::core::= h "rec-List")
       (:wat::core::let [base (:pie::arg e 1)]
         (:pie::do-rec-list (:pie::eval env (:pie::arg e 0))
@@ -369,6 +373,30 @@
                                       (:pie::sym "NRecList") (:pie::arg t 1) (:pie::arg (:pie::arg t 0) 0) bt b s))))
     (:else (:pie::fail "rec-List of a non-list"))))
 
+;; ind-List: nil gives the base; (:: e es) gives (step e es (ind-List es mot base step)). The
+;; type is (mot target). The step's type,
+;; (Pi ((e E) (es (List E))) (-> (mot es) (mot (:: e es)))), as a value closes over E and mot.
+(:wat::core::defn :pie::ind-list-step-type [et <- :wat::WatAST mot <- :wat::WatAST] -> :wat::WatAST
+  (:pie::t3 "VPi" (:pie::sym "e") et
+            (:pie::clos (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "%mot") mot))
+                                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "%E") et))))
+                        "e"
+                        (:pie::t2 "Pi"
+                                  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "es") (:pie::t1 "List" (:pie::sym "%E"))))))
+                                  (:pie::t2 "->" (:pie::t1 "%mot" (:pie::sym "es"))
+                                                 (:pie::t1 "%mot" (:pie::t2 "::" (:pie::sym "e") (:pie::sym "es"))))))))
+
+(:wat::core::defn :pie::do-ind-list [t <- :wat::WatAST mot <- :wat::WatAST b <- :wat::WatAST s <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VNil") b)
+    ((:pie::tag? t "VLCons")
+      (:pie::do-ap (:pie::do-ap (:pie::do-ap s (:pie::arg t 0)) (:pie::arg t 1)) (:pie::do-ind-list (:pie::arg t 1) mot b s)))
+    ((:pie::tag? t "VNeu")
+      (:pie::t2 "VNeu" (:pie::do-ap mot t)
+                (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "NIndList") (:pie::arg t 1) (:pie::arg (:pie::arg t 0) 0) mot b s))))
+    (:else (:pie::fail "ind-List of a non-list"))))
+
 ;; ---- reading back
 
 (:wat::core::defn :pie::subscript [i <- :wat::core::i64] -> :wat::core::String
@@ -461,6 +489,13 @@
 
 (:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
+    ((:pie::tag? ne "NIndList")
+      (:wat::core::let [et (:pie::arg ne 1)
+                        mot (:pie::arg ne 2)]
+        (:pie::t4 "ind-List" (:pie::rb-neu used (:pie::arg ne 0))
+                             (:pie::rb used (:pie::arrow-value (:pie::t1 "VList" et) (:pie::t0 "VU")) mot)
+                             (:pie::rb used (:pie::do-ap mot (:pie::t0 "VNil")) (:pie::arg ne 3))
+                             (:pie::rb used (:pie::ind-list-step-type et mot) (:pie::arg ne 4)))))
     ((:pie::tag? ne "NSymm") (:pie::t1 "symm" (:pie::rb-neu used (:pie::arg ne 0))))
     ((:pie::tag? ne "NReplace")
       (:wat::core::let [tt (:pie::arg ne 1)
@@ -562,7 +597,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong" "replace" "symm" "trans") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong" "replace" "symm" "trans" "ind-List") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -707,6 +742,17 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::= h "ind-List")
+      (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
+                        lt (:pie::syn-type ts)]
+        (:wat::core::if (:pie::tag? lt "VList")
+          (:wat::core::let [et (:pie::arg lt 0)
+                            mc (:pie::check ctx env (:pie::arg e 1) (:pie::arrow-value lt (:pie::t0 "VU")))
+                            mv (:pie::eval env mc)
+                            bc (:pie::check ctx env (:pie::arg e 2) (:pie::do-ap mv (:pie::t0 "VNil")))
+                            sc (:pie::check ctx env (:pie::arg e 3) (:pie::ind-list-step-type et mv))]
+            (:pie::syn (:pie::do-ap mv (:pie::eval env (:pie::syn-core ts))) (:pie::t4 "ind-List" (:pie::syn-core ts) mc bc sc)))
+          (:pie::fail (:wat::string::concat "not a List: " (:pie::show-type ctx lt))))))
     ((:wat::core::= h "replace")
       (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
                         tt (:pie::syn-type ts)]

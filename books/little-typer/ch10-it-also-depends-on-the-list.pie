@@ -1,0 +1,42 @@
+#lang pie
+;; The Little Typer, chapter 10 (It Also Depends on the List): ind-List, whose motive
+;; depends on the list; replicate and list->vec; Sigma as a Vec of some length. Our own
+;; examples on the chapter's topics. Racket's Pie prints each expression's
+;; (the TYPE NORMAL-FORM); wat-Pie reads this same file and must print the same.
+
+(claim length (Pi ((E U)) (-> (List E) Nat)))
+(define length (lambda (E es) (rec-List es 0 (lambda (e es length-es) (add1 length-es)))))
+
+;; a constant motive: ind-List does what rec-List does
+(ind-List (:: 'a (:: 'b nil)) (lambda (xs) Nat) 0 (lambda (e es n) (add1 n)))
+(ind-List (the (List Nat) nil) (lambda (xs) Atom) 'empty (lambda (e es a) 'full))
+
+(claim replicate (Pi ((E U) (l Nat)) (-> E (Vec E l))))
+(define replicate (lambda (E l e) (ind-Nat l (lambda (k) (Vec E k)) vecnil (lambda (l-1 replicate-l-1) (vec:: e replicate-l-1)))))
+(replicate Atom 3 'x)
+(replicate Nat 0 7)
+replicate
+
+(claim mot-list->vec (Pi ((E U)) (-> (List E) U)))
+(define mot-list->vec (lambda (E es) (Vec E (length E es))))
+(claim step-list->vec (Pi ((E U) (e E) (es (List E))) (-> (mot-list->vec E es) (mot-list->vec E (:: e es)))))
+(define step-list->vec (lambda (E e es list->vec-es) (vec:: e list->vec-es)))
+(claim list->vec (Pi ((E U) (es (List E))) (Vec E (length E es))))
+(define list->vec (lambda (E es) (ind-List es (mot-list->vec E) vecnil (step-list->vec E))))
+(list->vec Atom (:: 'a (:: 'b nil)))
+(list->vec Nat nil)
+list->vec
+(the (Pi ((es (List Atom))) (Vec Atom (add1 (length Atom es)))) (lambda (es) (list->vec Atom (:: 'head es))))
+
+;; Sigma: a pair whose cdr's type depends on its car
+(the (Sigma ((l Nat)) (Vec Atom l)) (cons 2 (vec:: 'a (vec:: 'b vecnil))))
+(car (the (Sigma ((l Nat)) (Vec Atom l)) (cons 2 (vec:: 'a (vec:: 'b vecnil)))))
+(cdr (the (Sigma ((l Nat)) (Vec Atom l)) (cons 2 (vec:: 'a (vec:: 'b vecnil)))))
+(the (Sigma ((A U)) A) (cons Nat 5))
+(claim list->some-vec (Pi ((E U)) (-> (List E) (Sigma ((l Nat)) (Vec E l)))))
+(define list->some-vec
+  (lambda (E es)
+    (rec-List es (the (Sigma ((l Nat)) (Vec E l)) (cons 0 vecnil))
+      (lambda (e es p) (cons (add1 (car p)) (vec:: e (cdr p)))))))
+(list->some-vec Atom (:: 'x (:: 'y nil)))
+list->some-vec

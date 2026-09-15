@@ -1,0 +1,24 @@
+#lang pie
+;; The Little Typer, chapter 10: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; ind-List's target must be a list
+(ind-List 5 (lambda (xs) Nat) 0 (lambda (e es n) n))
+
+;; the motive must be over the target's list type
+(ind-List (the (List Nat) nil) (the (-> (List Atom) U) (lambda (xs) Nat)) 0 (lambda (e es n) n))
+
+;; the base must have the motive's type at nil
+(ind-List (the (List Nat) nil) (lambda (xs) Nat) 'zero (lambda (e es n) n))
+
+;; the step must give the motive's type
+(ind-List (the (List Nat) nil) (lambda (xs) Nat) 0 (lambda (e es n) 'more))
+
+;; the cdr's type depends on the car: 3 needs a Vec of length 3
+(the (Sigma ((l Nat)) (Vec Atom l)) (cons 3 (vec:: 'a vecnil)))
+
+;; a step that forgets the entry has the wrong length
+(claim length (Pi ((E U)) (-> (List E) Nat)))
+(define length (lambda (E es) (rec-List es 0 (lambda (e es length-es) (add1 length-es)))))
+(the (Pi ((E U) (es (List E))) (Vec E (length E es))) (lambda (E es) (ind-List es (lambda (xs) (Vec E (length E xs))) vecnil (lambda (e es v) v))))
