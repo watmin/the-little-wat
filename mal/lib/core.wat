@@ -5,7 +5,21 @@
 ;; map, swap!) or touch the store are in the step programs that have them.
 
 (:wat::core::defn :mal::core-names [] -> :mal::Strs
-  ["+" "-" "*" "/" "<" "<=" ">" ">=" "=" "list" "list?" "empty?" "count" "not" "pr-str" "str" "prn" "println"])
+  ["+" "-" "*" "/" "<" "<=" ">" ">=" "=" "list" "list?" "empty?" "count" "not" "pr-str" "str" "prn" "println"
+   "cons" "concat" "vec"])
+
+;; a list's or a vector's elements, and nil's none
+(:wat::core::defn :mal::items-or-none [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
+  (:wat::core::if (:wat::core::= (:mal::kind-of v) :nil)
+    (:wat::core::Option.Some {:value (:wat::core::Vector :- [:mal::Val])})
+    (:mal::seq-of v)))
+
+(:wat::core::defn :mal::concat-all [args <- :mal::Vals acc <- :mal::Vals] -> :mal::Res
+  (:wat::core::if (:wat::core::empty? args)
+    (:mal::ok (:mal::list acc))
+    (:wat::core::match (:mal::items-or-none (:wat::core::first args))
+      [:wat::core::Option.Some {:value xs} (:mal::concat-all (:wat::core::rest args) (:wat::core::concat acc xs))]
+      [:wat::core::Option.None {} (:mal::fail "concat: expected lists")])))
 
 (:wat::core::defn :mal::arith [name <- :wat::core::String a <- :wat::core::i64 b <- :wat::core::i64] -> :mal::Val
   (:wat::core::cond
@@ -82,4 +96,13 @@
       (:wat::core::do (:wat::kernel::println (:mal::pr-args args true " ")) (:mal::ok (:mal::nil))))
     ((:wat::core::= name "println")
       (:wat::core::do (:wat::kernel::println (:mal::pr-args args false " ")) (:mal::ok (:mal::nil))))
+    ((:wat::core::= name "cons")
+      (:wat::core::match (:mal::items-or-none (:mal::first-arg (:wat::core::rest args)))
+        [:wat::core::Option.Some {:value xs} (:mal::ok (:mal::list (:wat::core::concat (:wat::core::Vector :- [:mal::Val] (:mal::first-arg args)) xs)))]
+        [:wat::core::Option.None {} (:mal::fail "cons: expected a list")]))
+    ((:wat::core::= name "concat") (:mal::concat-all args (:wat::core::Vector :- [:mal::Val])))
+    ((:wat::core::= name "vec")
+      (:wat::core::match (:mal::items-or-none (:mal::first-arg args))
+        [:wat::core::Option.Some {:value xs} (:mal::ok (:mal::vec xs))]
+        [:wat::core::Option.None {} (:mal::fail "vec: expected a list")]))
     (:else (:mal::fail (:wat::string::concat "unknown builtin " name)))))

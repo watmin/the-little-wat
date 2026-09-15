@@ -219,6 +219,30 @@
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
 
+;; a value's variant, as a keyword: written once with every variant, so a test of a value's kind
+;; elsewhere is a comparison, not another match of every variant
+(:wat::core::defn :mal::kind-of [v <- :mal::Val] -> :wat::core::keyword
+  (:wat::core::match v
+    [:mal::Val.Nil {} :nil]
+    [:mal::Val.True {} :true]
+    [:mal::Val.False {} :false]
+    [:mal::Val.Int {:n n} :int]
+    [:mal::Val.Str {:s s} :str]
+    [:mal::Val.Sym {:name x} :sym]
+    [:mal::Val.Kw {:name x} :kw]
+    [:mal::Val.List {:items x} :list]
+    [:mal::Val.Vec {:items x} :vec]
+    [:mal::Val.Map {:kvs x} :map]
+    [:mal::Val.Builtin {:name x} :builtin]
+    [:mal::Val.Closure {:params p :body b :env e} :closure]
+    [:mal::Val.Atom {:id i} :atom]))
+
+;; is v the symbol name?
+(:wat::core::defn :mal::sym-is? [v <- :mal::Val name <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::match (:mal::sym-of v)
+    [:wat::core::Option.Some {:value x} (:wat::core::= x name)]
+    [:wat::core::Option.None {} false]))
+
 ;; nil and false are false; everything else is true
 (:wat::core::defn :mal::falsy? [v <- :mal::Val] -> :wat::core::bool
   (:wat::core::match v
