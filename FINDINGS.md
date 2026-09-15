@@ -14,6 +14,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
 | The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
+| The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure, ported with only the namespace changed: 29 run literally (C-030). F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-045 |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -23,11 +24,11 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime |
-| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` of an empty Vector |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
 | **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · PROVIDE.md's P-001–P-017 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -117,6 +118,16 @@ give each one's detail.
   "cannot be reconstructed from EDN bytes". The error's only suggestion is to make the enum
   `:wat::enum::Impure`; the actual fix, declaring the point with `defrecord`, is never named. It
   is located at `src/check.rs:15104`.
+- **F-041:** `:wat::core::str` takes exactly one argument, and a call with more passes the
+  checker in either spelling; Clojure's `str`, and wat-rs's own parity corpus, are variadic.
+- **F-042:** the reader takes `#(…)` as the symbol `#` followed by a list, and the program
+  fails only when it runs ("unbound symbol: #").
+- **F-043:** a map literal in call position passes the checker, and fails at runtime as a
+  "malformed map form".
+- **F-044:** a keyword lookup, `(:k m)`, answers an Option but isn't typed by the checker, so
+  `(= 2 (:y m))` passes in the keyword spelling and dies at runtime.
+- **F-045:** `first` and `rest` die on an empty collection, labelled a malformed form, while
+  `last` answers an Option.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -1948,6 +1959,148 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   out that wat has `defsurface` and `extend-type` for exactly this, as Clojure has protocols,
   and the chapters were rewritten on surfaces. Every finding above comes from the surface
   version.
+
+## The Clojure Koans
+
+### C-030: the Clojure Koans' topics, ported literally: 29 of 229 rows run, and the rest say exactly why
+
+- **Where:** `koans/` (NEXT.md §1, `koans/README.md`). There are 229 rows of our own on the
+  koans' 27 topics, each true in Clojure 1.12.6. `tools/koans.clj` ports each row with only
+  its namespaces changed (`wat.core/…`, or `:wat::core::…` with `SPELLING=keyword`), and runs
+  each row as its own program.
+- **Results** (2026-09-15, wat-rs `a3218644d`):
+
+  | 229 rows | literal | wrong | refused | died |
+  |---|---|---|---|---|
+  | Clojure spelling | 29 | 2 | 147 | 51 |
+  | keyword spelling | 29 | 0 | 187 | 13 |
+
+- **What ports literally:**
+  - equality of numbers, keywords, strings and nil;
+  - `count`, `conj`, `nth`, `first` of a Vector;
+  - `assoc`, `dissoc`, `contains?`;
+  - quoting, and `->` through plain functions.
+- **What doesn't, by kind:**
+  - names wat lacks (the next entry);
+  - Clojure's untyped forms: `(fn [x] …)`, a `defn` without types, an `if` without an else;
+  - typed nil: `get`, `last` and `(:k m)` answer an Option, so comparing one with a plain
+    value is a type error;
+  - quoted lists are code (`WatAST`), not data, so `(first '(4 5 6))` is not 4 (C-004);
+  - reader syntax: `#(…)` (F-042).
+- **F-014, measured:** of the 51 rows that die at runtime in the Clojure spelling, 38 are
+  refused at startup in the keyword spelling. They are arity errors, type errors, and
+  malformed special forms. The 13 rows that die in both spellings are F-041 to F-045, F-007
+  and F-031.
+- **F-022, again:** the 2 wrong rows define a macro with `wat.core/defmacro`, which defines
+  nothing, so `macroexpand` hands back the form unchanged and the koan is silently false
+  (`probes/koans/defmacro-macroexpand.wat`).
+- **Class:** acceptance result. Every refusal is evidence.
+
+### Clojure core names wat lacks, by the rows they block
+
+Across both runs, wat's resolver refused 74 names that the rows use. Five exist under another
+name. Rows blocked are counted once per row.
+
+| Kind | Names (rows blocked) | wat's route |
+|---|---|---|
+| numbers | `inc` (13), `dec` (11), `even?` (7), `==` (2), `odd?` (1), `zero?` (1) | none; write `(+ n 1)` |
+| functions | `comp` (7), `partial` (2), `complement`, `juxt`, `identity` (1 each) | none; write the `fn` |
+| predicates | `nil?` (3), `string?` (2), `char?` (2), `false?`, `keyword?` (1 each) | none (types are static; `nil?` becomes a match on Option) |
+| collections | `list` (10), `cons` (5), `merge` (3), `vec`, `hash-map`, `set`, `pop` (2 each), `vector`, `merge-with`, `peek`, `subvec`, `get-in`, `update-in` (1 each) | none; `vals` is `:wat::hashmap::values` |
+| sequences | `for` (5), `partition` (5), `group-by` (5), `iterate`, `repeat`, `sequence`, `transduce` (2 each), `partition-all` (1) | streams (C-017) for some; `:wat::seq::window` may serve for `partition` |
+| strings | `blank?` (3), `index-of` (2), `last-index-of`, `split-lines`, `symbol` (1 each) | `subs` is `:wat::string::subs`, `reverse` is `:wat::core::reverse`, `keyword` is `:wat::keyword::from-string` |
+| sets | `union`, `intersection`, `difference` (1 each) | none |
+| control | `case` (2), `try`/`catch` (2), `if-not`, `loop`/`recur` (1 each) | `match`; `Result/try` (C-006); recursion |
+| state | `atom` (7), `ref` (7), `reset!`, `ref-set`, `dosync` (5 each), `swap!`, `alter` (3 each), `compare-and-set!` (2), `deref` (1) | services, by doctrine (C-014) |
+| types and dispatch | `defmulti`/`defmethod` (8), `deftype` (3), `defprotocol` (1) | `defsurface` + `extend-type` (C-029); `match` on the dispatch value |
+| metadata | `meta`, `with-meta` (6 each), `vary-meta` (3) | none |
+| printing | `pr-str` (1) | `:wat::edn::write` |
+| host | `class`, `Math/pow` (1 each) | none (no JVM, and no power function) |
+
+- **So:** most of what a Clojure programmer reaches for first is missing under its Clojure
+  name, even where the spelling claims to be Clojure's: the number helpers, `comp` and
+  `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`. The state, dispatch and
+  exception names are refused by doctrine, and each has a route that earlier books took. The
+  rest are ordinary gaps.
+- **Class:** Extend (the small functions: PROVIDE.md P-017), and Clean (a Clojure-name to
+  wat-route table, where one exists; `CLOJURE-ROSETTA.md` has none of these).
+
+### F-041: `str` takes exactly one argument, and a call with more passes the checker in either spelling
+
+- **Where:** the Clojure Koans, 02-strings row 3 and 25-threading-macros row 2.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/koans/str-arity.wat`:
+  `(:wat::core::str "pear" " and " "plum")` passes the checker in the keyword spelling, and
+  dies at runtime:
+  > `#wat.runtime/ArityMismatch {:message ":wat::core::str: expected 1 arguments, got 3" …}`
+- **So:** Clojure's `str` is variadic, and so is the one wat-rs's own Clojure-parity corpus
+  expects (`tests/clj_expr_oracle/corpus.txt`: `(wat.core/str "a" "b" 1)` → `"ab1"`; that
+  test is `#[ignore]`d). The arity of this builtin isn't checked at all, and in the keyword
+  spelling F-014 doesn't explain that.
+- **Class:** GAP. Fix: check `str`'s arity. Extend: make `str` variadic, as the parity corpus
+  expects.
+- **Repro:** the probe.
+
+### F-042: the reader takes `#(…)` as the symbol `#` followed by a list, and the program fails only when it runs
+
+- **Where:** the Clojure Koans, 07-functions rows 4–6 and 23-meta row 6.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/koans/anon-fn-literal.wat`:
+  `(#(:wat::core::+ % 1) 2)` parses and passes the checker, and then:
+  > `#wat.runtime/UnboundSymbol {:message "unbound symbol: #" …}`
+- **So:** Clojure's anonymous-function literal is neither supported nor refused. The reader
+  takes `#` for a symbol, and the program ships until the line runs. F-013 (`#_`) is the
+  same reader family. There, the reader refuses loudly.
+- **Class:** GAP. Fix: refuse `#(` at read time, naming it. Extend: read it as `fn`.
+- **Repro:** the probe.
+
+### F-043: a map in call position passes the checker, and fails at runtime as a "malformed map form"
+
+- **Where:** the Clojure Koans, 06-maps rows 5 and 7. In Clojure a map is a function of its
+  keys: `({:x 1 :y 2} :x)` is 1.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/koans/map-as-function.wat`: the
+  program starts, and then:
+  > `#wat.runtime/MalformedForm {:message "malformed map form: call head must be a keyword, symbol, or list" …}`
+- **So:** a call head the runtime can never accept is seen only at runtime, in either
+  spelling.
+- **Class:** GAP. Fix: refuse it at check time (the message is already right). Extend: a
+  map as a function of its keys, as a keyword already is (F-044).
+- **Repro:** the probe.
+
+### F-044: a keyword lookup, `(:k m)`, answers an Option, and the checker doesn't type it
+
+- **Where:** the Clojure Koans, 06-maps row 6: `(= 2 (:y {:x 1 :y 2}))`.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/koans/keyword-as-function.wat`: `(:y {:x 1 :y 2})` is
+    `#wat.core/Option.Some {:value 2}`, and `(:z …)` is `Option.None`. As with `get`, this
+    is typed nil, and consistent.
+  - `probes/koans/keyword-lookup-equals.wat`: in the keyword spelling,
+    `(:wat::core::= 2 (:y {:x 1 :y 2}))` passes the checker, and dies at runtime:
+    > `#wat.runtime/TypeMismatch {:message ":wat::core::=: expected matching comparable pair, got wat::core::i64 `2`" …}`
+- **So:** comparing an i64 with an Option is a type error the checker catches everywhere
+  else. A keyword-headed lookup reaches the runtime untyped, so a mistake with one ships.
+- **Class:** GAP. Fix: give `(:k m)` its type, `Option<V>`, at check time.
+- **Repro:** the two probes.
+
+### F-045: `first` and `rest` die on an empty collection, and are labelled a malformed form; `first` answers T but `last` an Option
+
+- **Where:** the Clojure Koans, 03-lists row 12 (`(rest '())`) and 04-vectors row 7
+  (`(last v)`). Clojure's `first`, `last` and `rest` are total: nil, nil and `()`.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/koans/rest-of-empty.wat`: `(rest <empty Vector>)` dies:
+    > `#wat.runtime/MalformedForm {:message "malformed :wat::core::rest form: cannot take rest of empty Vec" …}`
+
+    `(rest '())` dies the same way ("cannot take rest of empty form").
+  - `first` of an empty Vector dies labelled a malformed form too (Friction, Little Typer).
+  - `probes/koans/first-last.wat`: on `[4 5 6]`, `first` answers `4`, and `last` answers
+    `#wat.core/Option.Some {:value 6}`.
+- **So:**
+  - Two of the three are partial, and nothing at check time says so.
+  - Their failure is labelled a malformed *form*, when the form is fine and the collection is
+    empty.
+  - The pair that Clojure makes symmetric answers different types. `last` is the one that
+    is total, which is Clojure's contract written in types, so `first` looks like the outlier.
+- **Class:** GAP. Correct: say "empty collection", not "malformed form". Improve: give
+  `first` and `rest` the totality `last` has (an Option, and an empty collection).
+- **Repro:** the probes.
 
 ## Predicted, unverified
 

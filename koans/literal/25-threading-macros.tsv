@@ -1,0 +1,9 @@
+row	verdict	clojure	wat said	koan
+1	literal	true		(= {:n 1} (-> {} (assoc :n 1)))
+2	died	true	ArityMismatch: :wat::core::str: expected 1 arguments, got 2	(= "fig, and plum, and pear" (-> "fig" (str ", and plum") (str ", and pear")))
+3	literal	true		(= "padded" (-> " padded " clojure.string/trim))
+4	refused	true	unresolved: :wat::core::get-in :wat::core::update-in :wat::core::inc	(= 6 (-> {} (assoc :a 1) (assoc :c {:d 4 :e 5}) (update-in [:c :e] inc) (get-in [:c :e])))
+5	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= 1 (-> {} (assoc :n 1) (n-of-map "x" "y")))
+6	refused	true	unresolved: :wat::core::inc	(= '(2 3 4) (->> [1 2 3] (map inc)))
+7	refused	true	unresolved: :wat::core::even? :wat::core::inc	(= 12 (->> nums (map inc) (filter even?) (into []) (reduce +)))
+8	refused	true	MalformedForm: malformed :wat::core::fn form: expected [name <- :T ...] -> :Ret body ...; got 2 element(s)	(= [1 2 3] (->> rows-of-maps (ns-of-coll "x" "y") (into [])))

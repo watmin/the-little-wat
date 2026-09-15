@@ -32,6 +32,7 @@ the names and the design are the builder's call.
 | P-014 | A WatAST whose children are shared, not copied | runtime (F-033) | open |
 | P-015 | Bit operations on integers | core (F-035) | open |
 | P-016 | A seeded, pure random number generator | stdlib (F-036) | open |
+| P-017 | Clojure core's small functions (`inc`, `comp`, `partial`, `merge`, `group-by`, set operations …) | stdlib (C-030) | open |
 
 ## Stdlib
 
@@ -110,6 +111,30 @@ the names and the design are the builder's call.
   conses constantly, and the quasiquote spelling hides a copy of the whole list.
 - **Suggested shape:** `(:wat::core::cons x ast-list)`.
 - **Evidence:** C-003.
+
+### P-017: Clojure core's small functions
+
+- **What we wrote:** in the books, each by hand at its point of use: `(+ n 1)` for `inc`, a
+  `fn` for every `comp` or `partial`, a fold for `merge`. In the Clojure Koans, nothing: their
+  literal port stops at these names (C-030).
+- **What wat has:** none of the following, under any name that the koans' refusals or the
+  stdlib's registry show:
+  - `inc`, `dec`, `even?`, `odd?`, `zero?`;
+  - `comp`, `partial`, `complement`, `juxt`, `identity`;
+  - `list`, `merge`, `merge-with`, `get-in`, `update-in`;
+  - `group-by`, `partition`;
+  - set union, intersection and difference;
+  - `blank?`, `index-of`, `split-lines`.
+
+  `vals` is `:wat::hashmap::values`, and `pr-str` is `:wat::edn::write`.
+- **Why users shouldn't write it:** each is a line, but every program needs a dozen, and
+  each one written by hand is a place to get a type or an edge case wrong. They are also
+  the words a Clojure reader expects the Clojure spelling to have. In the koans, `inc` alone
+  blocks 13 rows and `dec` 11.
+- **Suggested shape:** Clojure's names and argument order, typed. For example, `comp` generic
+  over its functions' types; `(group-by f coll)` answering a `HashMap` of `Vector`s; the set
+  operations on `HashSet`.
+- **Evidence:** the Clojure Koans table in FINDINGS.md; `koans/literal/*.tsv`.
 
 ## Checker and runtime
 

@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::ref :wat::core::deref	(= "earth" (deref planet))
+2	refused	true	unresolved: :wat::core::ref	(= "earth" @planet)
+3	refused	true	unresolved: :wat::core::ref :wat::core::dosync :wat::core::ref-set	(= "mars" (do (dosync (ref-set planet "mars")) @planet))
+4	refused	true	unresolved: :wat::core::ref :wat::core::dosync :wat::core::ref-set :wat::core::alter	(= "mars!!" (let [bang (fn [x] (str x "!"))] (dosync (ref-set planet "mars") (alter planet bang) (alter planet bang)) @planet))
+5	refused	true	unresolved: :wat::core::ref :wat::core::dosync :wat::core::ref-set	(= 0 (do (dosync (ref-set planet 0)) @planet))
+6	refused	true	unresolved: :wat::core::ref :wat::core::dosync :wat::core::ref-set :wat::core::alter	(= 20 (do (dosync (ref-set planet 10) (alter planet (fn [x] (* 2 x))))))
+7	refused	true	unresolved: :wat::core::ref :wat::core::dosync :wat::core::ref-set :wat::core::alter	(= ["Luna" "Phobos"] (do (dosync (ref-set planet {}) (alter planet assoc :moon "Luna") (alter moons assoc :moon "Phobos")) [(:moon @planet) (:moon @moons)]))

@@ -1,0 +1,7 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 0 @counter)
+2	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 1 (do (reset! counter 0) (swap! counter inc) @counter))
+3	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 5 (do (reset! counter 5) @counter))
+4	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 15 (do (reset! counter 0) (swap! counter + 1 2 3 4 5) @counter))
+5	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 15 (do (reset! counter 15) (compare-and-set! counter 100 :done) @counter))
+6	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= :done (do (reset! counter 15) (compare-and-set! counter 15 :done) @counter))

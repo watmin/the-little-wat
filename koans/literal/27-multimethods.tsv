@@ -1,0 +1,5 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "hot and bright" (describe :sun))
+2	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod	(= "cold and pale" (describe :moon))
+3	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod :wat::core::inc	(= 7 (handle :pick {:chosen 7 :items [1 2]}))
+4	refused	true	unresolved: :wat::core::defmulti :wat::core::defmethod :wat::core::inc	(= 9 (handle :total {:chosen 7 :items [1 2 3]}))

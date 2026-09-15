@@ -1,0 +1,7 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::atom	(= 0 @counter)
+2	refused	true	unresolved: :wat::core::atom :wat::core::reset! :wat::core::swap! :wat::core::inc	(= 1 (do (reset! counter 0) (swap! counter inc) @counter))
+3	refused	true	unresolved: :wat::core::atom :wat::core::reset!	(= 5 (do (reset! counter 5) @counter))
+4	refused	true	unresolved: :wat::core::atom :wat::core::reset! :wat::core::swap!	(= 15 (do (reset! counter 0) (swap! counter + 1 2 3 4 5) @counter))
+5	refused	true	unresolved: :wat::core::atom :wat::core::reset! :wat::core::compare-and-set!	(= 15 (do (reset! counter 15) (compare-and-set! counter 100 :done) @counter))
+6	refused	true	unresolved: :wat::core::atom :wat::core::reset! :wat::core::compare-and-set!	(= :done (do (reset! counter 15) (compare-and-set! counter 15 :done) @counter))

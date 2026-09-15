@@ -1,0 +1,7 @@
+row	verdict	clojure	wat said	koan
+1	died	true	UnboundSymbol: unbound symbol: greeting	(= "Hi, macros" (greeting "macros"))
+2	refused	true	unresolved: :wat::core::list	(= 12 (infix (8 + 4)))
+3	refused	true	unresolved: :wat::core::list	(= '(+ 8 4) (macroexpand '(infix (8 + 4))))
+4	wrong	true	printed "false"	(= '(* 6 7) (macroexpand '(infix-concise (6 * 7))))
+5	wrong	true	printed "false"	(= '(+ 6 (7 * 2)) (macroexpand '(infix-concise (6 + (7 * 2)))))
+6	refused	true	MalformedTemplate: malformed template: cond: non-exhaustive — needs a terminal :else arm	(= 42 (recursive-infix (6 + (4 * 5) + (2 * 8))))

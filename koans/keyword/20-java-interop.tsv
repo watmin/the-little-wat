@@ -1,0 +1,6 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::class	(= java.lang.String (class "fig"))
+2	died	true	UnboundSymbol: unbound symbol: .toUpperCase	(= "SELECT * FROM" (.toUpperCase "select * from"))
+3	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::String]); got (:wat::stream::Stream :- [:?])	(= ["FIG" "PLUM"] (map (fn [s] (.toUpperCase s)) ["fig" "plum"]))
+4	died	true	UnboundSymbol: unbound symbol: java.util.concurrent.CountDownLatch.	(= 3 (let [latch (java.util.concurrent.CountDownLatch. 3)] (.getCount latch)))
+5	refused	true	unresolved: :Math::pow	(== 1024 (Math/pow 2 10))

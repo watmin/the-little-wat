@@ -1,0 +1,7 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= "Hi, macros" (greeting "macros"))
+2	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= 12 (infix (8 + 4)))
+3	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= '(+ 8 4) (macroexpand '(infix (8 + 4))))
+4	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= '(* 6 7) (macroexpand '(infix-concise (6 * 7))))
+5	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= '(+ 6 (7 * 2)) (macroexpand '(infix-concise (6 + (7 * 2)))))
+6	refused	true	MalformedDefmacro: malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ...] -> :Ret body) — 6 items (or 7 with metadata-map); got 4 elements	(= 42 (recursive-infix (6 + (4 * 5) + (2 * 8))))

@@ -1,0 +1,11 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= {:league "Coastal"} (meta team))
+2	refused	true	unresolved: :wat::core::meta	(= {:division "North"} (meta '^{:division "North"} Gulls))
+3	refused	true	MalformedForm: malformed :wat::core::try form: ':wat::core::try' is retired (Stone 241.15); use ':wat::core::Result/try' instead	(= "no metadata" (try (with-meta 7 {:prime true}) (catch ClassCastException e "no metadata")))
+4	refused	true	unresolved: :wat::core::meta :wat::core::merge	(= {:foo :bar} (meta (merge '^{:foo :bar} {:a 1 :b 2} {:b 3 :c 4})))
+5	refused	true	unresolved: :wat::core::meta :wat::core::merge	(= nil (meta (merge {:a 1 :b 2} '^{:foo :bar} {:b 3 :c 4})))
+6	died	true	UnboundSymbol: unbound symbol: #	(= \C (#(.charAt ^String % 0) "Cast me"))
+7	refused	true	unresolved: :wat::core::with-meta :wat::core::atom :wat::core::swap! :wat::core::meta	(= 8 (let [t (with-meta 'Gulls {:titles (atom 7)})] (swap! (:titles (meta t)) inc) @(:titles (meta t))))
+8	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= {:league "Coastal" :ground "Pier Park"} (meta (vary-meta team assoc :ground "Pier Park")))
+9	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= 'Gulls (vary-meta team dissoc :league))
+10	refused	true	MalformedForm: malformed :wat::core::def form: first arg must be a keyword name (e.g. `:my::name`); got Symbol(Identifier { name: 	(= "Gulls" (pr-str (vary-meta team dissoc :league)))

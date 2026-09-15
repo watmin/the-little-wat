@@ -1,0 +1,6 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	ArityMismatch: :wat::core::map: expected 2 argument(s); got 1	(= '(2 3 4) (sequence add-one [1 2 3]))
+2	refused	true	ArityMismatch: :wat::core::filter: expected 2 argument(s); got 1	(= [2 4] (transduce evens-after-inc conj [1 2 3]))
+3	refused	true	NoMatchingClauseAtCallSite: no clause of `:wat::core::into` matches arity 3 with types [(:wat::core::Vector :- [:?]), :?, (:wat::core::Vector :- [:wat::core::i64])]; clauses attempted: (2: [(:wat::core::Vector :- [:T]), (:wat::core::Vector :- [:T])]); (2: [(:wat::core::Vector :- [:T]), (:wat::stream	(= [2 4] (into [] evens-after-inc [1 2 3]))
+4	refused	true	ArityMismatch: :wat::core::filter: expected 2 argument(s); got 1	(= '(2 4) (sequence evens-after-inc [1 2 3]))
+5	refused	true	ArityMismatch: :wat::core::filter: expected 2 argument(s); got 1	(= 6 (transduce evens-after-inc + [1 2 3]))

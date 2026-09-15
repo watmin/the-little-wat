@@ -1,0 +1,6 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	unresolved: :wat::core::inc :wat::core::sequence	(= '(2 3 4) (sequence add-one [1 2 3]))
+2	refused	true	unresolved: :wat::core::comp :wat::core::inc :wat::core::even? :wat::core::transduce	(= [2 4] (transduce evens-after-inc conj [1 2 3]))
+3	refused	true	unresolved: :wat::core::comp :wat::core::inc :wat::core::even?	(= [2 4] (into [] evens-after-inc [1 2 3]))
+4	refused	true	unresolved: :wat::core::comp :wat::core::inc :wat::core::even? :wat::core::sequence	(= '(2 4) (sequence evens-after-inc [1 2 3]))
+5	refused	true	unresolved: :wat::core::comp :wat::core::inc :wat::core::even? :wat::core::transduce	(= 6 (transduce evens-after-inc + [1 2 3]))

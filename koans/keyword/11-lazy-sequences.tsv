@@ -1,8 +1,8 @@
 row	verdict	clojure	wat said	koan
 1	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::WatAST; got (:wat::core::Vector :- [:wat::core::i64])	(= '(2 3 4) (range 2 5))
 2	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::WatAST; got (:wat::core::Vector :- [:wat::core::i64])	(= '(0 1 2) (range 3))
-3	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?8251])	(= [0 1 2 3] (take 4 (range 50)))
-4	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?6570])	(= [47 48 49] (drop 47 (range 50)))
-5	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?4862])	(= [1 3 9 27 81] (take 5 (iterate (fn [x] (* x 3)) 1)))
+3	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?])	(= [0 1 2 3] (take 4 (range 50)))
+4	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?])	(= [47 48 49] (drop 47 (range 50)))
+5	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::core::i64]); got (:wat::stream::Stream :- [:?])	(= [1 3 9 27 81] (take 5 (iterate (fn [x] (* x 3)) 1)))
 6	refused	true	unresolved: :wat::core::repeat	(= [:z :z :z] (repeat 3 :z))
 7	refused	true	TypeMismatch: :wat::core::=: parameter #1 expects an equatable type (i64, u8, f64, bigint, rational, String, bool, keyword, Uuid, char, Instant, Duration, wat::holon::Vector, HolonAST, WatAST, (Vector :- [T]), (List :- [T]), (Option :- [T]), (Result :- [T E]), HashMap, HashSet, PersistentVector, Tup	(= (repeat 5 "hi") (take 5 (iterate identity "hi")))

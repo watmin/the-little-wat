@@ -116,6 +116,17 @@ surfaces the port was better, and it found more:
   the enum Impure", was right in the Little Learner. Here the fix was `defrecord`, which it
   never names (F-040).
 
+**The Clojure Koans asked whether wat is the Clojure its spelling promises.** I wrote 229
+small koans of my own, each true in Clojure, then ported each one with only its namespaces
+changed and ran it. 29 ran. The failures sort cleanly:
+- names wat lacks;
+- Clojure's untyped forms;
+- typed nil.
+
+The run also measured the finding that cost me most in the first books. Spelled with
+keywords, 38 rows are refused at startup that the Clojure spelling lets through to die at
+runtime (F-014).
+
 **What remains is speed.** The interpreter runs the miniKanren search at about 0.35 ms per
 answer, roughly 300 to 430 times slower than the JVM on the same algorithm. The two
 quadratic costs we found along the way were ours or the data structures', not the
@@ -127,13 +138,15 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-040 are gaps and defects.
+  - F-001 to F-045 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-029 are clean ports.
+  - C-001 to C-030 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
-- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-016).
+- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-017).
+- [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
+  in both of wat's spellings.
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -142,12 +155,15 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             228 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             237 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
 tools/learner-oracle.sh             malt on a Little Learner chapter's oracle file: its values, draws and data
 tools/java-oracle.sh                the JDK on a Little Java chapter's Java (oracle/java/chNN-*.java): its printed results
+tools/koans.clj                     ports each koan to wat, runs it, and judges it against Clojure
+koans/src/NN-<topic>.clj            the Clojure Koans' topics: our own filled-in koans, each true in Clojure
+koans/literal/, koans/keyword/      each koan's verdict in each of wat's spellings, with wat's message
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
@@ -168,6 +184,7 @@ clojure -M oracle/ch07.clj                                        # one Reasoned
 tools/pie-oracle.sh books/little-typer/ch08-pick-a-number-any-number.pie   # one Typer chapter's expected results
 tools/learner-oracle.sh ch04-slip-slidin-away                     # one Learner chapter's expected values (needs racket + malt)
 tools/java-oracle.sh ch07-oh-my                                   # one Little Java chapter's expected results (needs a JDK)
+clojure -M tools/koans.clj 02-strings                            # one koan topic, ported and judged (SPELLING=keyword for the other spelling)
 ```
 
 A chapter passes when it exits 0 and prints its final `ok` line. Its checks stop at the

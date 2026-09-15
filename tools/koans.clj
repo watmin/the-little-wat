@@ -142,7 +142,9 @@
         s (cond (seq paths) (str "unresolved: " (str/join " " paths))
                 kind (str kind ": " msg)
                 :else (str/trim text))
-        s (str/replace s #"\s+" " ")]
+        s (-> s
+              (str/replace #"\s+" " ")
+              (str/replace #":\?\d+" ":?"))]   ; fresh type variables differ run to run
     (subs s 0 (min 300 (count s)))))
 
 (defn judge [{:keys [exit out err]}]
@@ -165,22 +167,32 @@
                                      "(?![\\w\\-*?!])"))
                     row)))
 
+;; the setups a row names, and the ones those name in turn (a record names its protocol), in
+;; file order
+(defn needed-setups [setups row]
+  (loop [need #{} frontier [row]]
+    (let [found (set (for [text frontier s setups :when (and (not (need s)) (uses? text s))] s))]
+      (if (empty? found)
+        (filter need setups)
+        (recur (into need found) found)))))
+
 (defn run-topic [tmp topic]
   (let [all-rows (vec (rows (slurp (str "koans/src/" topic ".clj"))))
         _ (doseq [s (filter setup? all-rows)] (binding [*ns* (find-ns 'user)] (eval (read-string s))))
         koans (vec (keep-indexed (fn [i row]
                                    (when-not (setup? row)
                                      {:row row
-                                      :setups (filter #(uses? row %) (filter setup? (subvec all-rows 0 i)))}))
+                                      :setups (needed-setups (filter setup? (subvec all-rows 0 i)) row)}))
                                  all-rows))
+        ;; in order, one at a time: rows over refs and atoms share their state in Clojure
+        clj-results (mapv #(oracle (:row %)) koans)
         results (doall
-                  (pmap (fn [k {:keys [row setups]}]
-                          (let [clj (oracle row)
-                                f (io/file tmp (format "%s-%s-%02d.wat" spelling topic (inc k)))]
+                  (pmap (fn [k {:keys [row setups]} clj]
+                          (let [f (io/file tmp (format "%s-%s-%02d.wat" spelling topic (inc k)))]
                             (spit f (program setups row))
                             (let [[v detail] (judge (sh/sh "timeout" "-s" "KILL" "60" wat (.getPath f)))]
                               {:k (inc k) :verdict v :clj clj :detail detail :row row})))
-                        (range) koans))]
+                        (range) koans clj-results))]
     (with-open [w (io/writer (str out-dir "/" topic ".tsv"))]
       (.write w "row\tverdict\tclojure\twat said\tkoan\n")
       (doseq [{:keys [k verdict clj detail row]} results]

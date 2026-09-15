@@ -2,7 +2,7 @@ row	verdict	clojure	wat said	koan
 1	literal	true		(= "plum" "plum")
 2	literal	true		(= "fig" (str 'fig))
 3	died	true	ArityMismatch: :wat::core::str: expected 1 arguments, got 3	(= "pear and plum" (str "pear" " and " "plum"))
-4	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::core::char; got (:wat::core::Option :- [:?6272])	(= \e (get "pear" 1))
+4	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::core::char; got (:wat::core::Option :- [:?])	(= \e (get "pear" 1))
 5	died	true	TypeMismatch: :wat::core::length: expected (Vector :- [T]), (HashMap :- [K V]), (PersistentMap :- [K V]), (PersistentVector :- [T]), (HashSet :- [T]), or (List :- [T]), got wat::core::String `\\	(= 9 (count "fig tree!"))
 6	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects :wat::core::char; got :wat::core::String	(= false (= \p "p"))
 7	refused	true	unresolved: :wat::core::subs	(= "tree" (subs "fig tree" 4 8))

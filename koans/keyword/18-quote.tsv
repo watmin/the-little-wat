@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	literal	true		(= (quote (4 5 6)) '(4 5 6))
+2	literal	true		(= '(4 5 6) (quote (4 5 6)))
+3	literal	true		(= 'age (let [age 9] (quote age)))
+4	refused	true	MalformedForm: malformed :wat::core::vec form: first argument must be a `(Head :- [T])` type param-spec	(= (cons 1 '(2 3)) (list 1 2 3) (cons 1 [2 3]))
+5	refused	true	TypeMismatch: :wat::core::=: parameter #2 expects (:wat::core::Vector :- [:wat::WatAST]); got :wat::WatAST	(= (list 1 '(+ 2 3)) '(1 (+ 2 3)))
+6	refused	true	MalformedForm: malformed :wat::core::vec form: first argument must be a `(Head :- [T])` type param-spec	(= (list 1 2 3) `(1 2 3) '(1 2 3))
+7	refused	true	MalformedForm: malformed :wat::core::vec form: first argument must be a `(Head :- [T])` type param-spec	(= (list 1 5) `(1 ~(+ 2 3)) '(1 5))

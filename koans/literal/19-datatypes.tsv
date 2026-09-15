@@ -1,0 +1,8 @@
+row	verdict	clojure	wat said	koan
+1	refused	true	TypeMismatch: :wat::keyword::to-string: expected keyword, got wat::WatAST `<WatAST>`	(= "gold" (.metal (Medal. "gold")))
+2	refused	true	unresolved: :wat::core::deftype	(= "golf" (.sport (Trophy. "golf")))
+3	refused	true	TypeMismatch: :wat::keyword::to-string: expected keyword, got wat::WatAST `<WatAST>`	(= "silver" (:metal (Medal. "silver")))
+4	refused	true	unresolved: :wat::core::deftype	(= nil (:sport (Trophy. "chess")))
+5	refused	true	TypeMismatch: :wat::keyword::to-string: expected keyword, got wat::WatAST `<WatAST>`	(= [true false] (map map? [(Medal. "tin") (Trophy. "darts")]))
+6	refused	true	TypeMismatch: :wat::keyword::to-string: expected keyword, got wat::WatAST `<WatAST>`	(= "Ada wins gold in chess." (announce (Gold. "chess") "Ada"))
+7	refused	true	unresolved: :wat::core::defprotocol :wat::core::deftype	(= "Bob takes bronze in golf." (announce (Bronze. "golf") "Bob"))
