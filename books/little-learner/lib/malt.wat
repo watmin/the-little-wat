@@ -410,6 +410,40 @@
         t
         (((:ll::k-relu (:wat::core::- k 1)) ((:ll::relu t) theta)) (:ll::refr theta 2))))))
 
+;; ---- blocks (malted/N-blocks.rkt)
+
+;; A block: a target function, (λ (t) (λ (theta) ...)), and the shapes of the theta it takes.
+(:wat::core::defstruct :ll::Block
+  [fn <- [:ll::V :-> [:ll::V :-> :ll::V]]
+   ls <- (:wat::core::Vector :- [:ll::Ints])])
+
+(:wat::core::defn :ll::block [f <- [:ll::V :-> [:ll::V :-> :ll::V]] shape-list <- (:wat::core::Vector :- [:ll::Ints])] -> :ll::Block
+  (:ll::Block :fn f :ls shape-list))
+
+;; fb on fa's output, fa taking theta's first j members and fb the rest
+(:wat::core::defn :ll::compose-block-fns
+  [fa <- [:ll::V :-> [:ll::V :-> :ll::V]]
+   fb <- [:ll::V :-> [:ll::V :-> :ll::V]]
+   j <- :wat::core::i64]
+  -> [:ll::V :-> [:ll::V :-> :ll::V]]
+  (:wat::core::fn [t <- :ll::V] -> [:ll::V :-> :ll::V]
+    (:wat::core::fn [theta <- :ll::V] -> :ll::V
+      ((fb ((fa t) theta)) (:ll::refr theta j)))))
+
+(:wat::core::defn :ll::stack2 [ba <- :ll::Block bb <- :ll::Block] -> :ll::Block
+  (:ll::block (:ll::compose-block-fns (:ll::Block/fn ba) (:ll::Block/fn bb) (:wat::core::length (:ll::Block/ls ba)))
+              (:wat::core::concat (:ll::Block/ls ba) (:ll::Block/ls bb))))
+
+;; malt's stacked-blocks: the first block, then stack2 with each next one in turn
+(:wat::core::defn :ll::stack-blocks [bls <- (:wat::core::Vector :- [:ll::Block])] -> :ll::Block
+  (:wat::core::foldl :ll::stack2 (:wat::core::first bls) (:wat::core::rest bls)))
+
+;; A block's shapes as a value, a list of lists of numbers, the way malt's print.
+(:wat::core::defn :ll::shapes-value [ls <- (:wat::core::Vector :- [:ll::Ints])] -> :ll::V
+  (:ll::lst (:wat::core::mapv (:wat::core::fn [s <- :ll::Ints] -> :ll::V
+                                (:ll::lst (:wat::core::mapv (:wat::core::fn [k <- :wat::core::i64] -> :ll::V (:ll::num (:wat::i64::to-f64 k))) s)))
+                              ls)))
+
 ;; ((quad x) theta) = a*x^2 + (b*x + c), theta = (a b c) (malted/B-layer-fns.rkt)
 (:wat::core::defn :ll::quad [x <- :ll::V] -> [:ll::V :-> :ll::V]
   (:wat::core::fn [theta <- :ll::V] -> :ll::V
