@@ -123,8 +123,10 @@ the names and the design are the builder's call.
   - `comp`, `partial`, `complement`, `juxt`, `identity`;
   - `list`, `merge`, `merge-with`, `get-in`, `update-in`;
   - `group-by`, `partition`;
-  - set union, intersection and difference;
-  - `blank?`, `index-of`, `split-lines`.
+  - set union, intersection and difference (which first need a HashSet to be enumerable,
+    F-046);
+  - `blank?`, `index-of`, `last-index-of`, `split-lines`, a String's `reverse`, and its
+    characters.
 
   `vals` is `:wat::hashmap::values`, and `pr-str` is `:wat::edn::write`.
 - **Why users shouldn't write it:** each is a line, but every program needs a dozen, and

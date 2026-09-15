@@ -46,7 +46,7 @@ while IFS= read -r f; do
   if [ -n "${RECORD:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$WAT_REV" "$f" "$ms" "$rc" >> timings.tsv
   fi
-done < <(find books -name '*.wat' -not -path '*/lib/*' | sort)   # lib/ files are definitions only, no main
+done < <(find books koans/idiom -name '*.wat' -not -path '*/lib/*' 2>/dev/null | sort)   # lib/ files are definitions only, no main
 
 echo "---"
 echo "$pass passed, $fail failed  (wat-rs $WAT_REV)"

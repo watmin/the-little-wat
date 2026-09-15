@@ -19,8 +19,9 @@ language, and each assumes the one before it works.
 | The Little Typer | dependent types (Pie) | 16/16 chapters: all 290 printed results match Racket's Pie, and all 108 forms it refuses are refused |
 | The Little Learner | tensors, automatic differentiation, gradient descent | 22/22 (chapters 1–15, Interludes I–VII): all 194 values match malt, the book's own library, exactly |
 | A Little Java, A Few Patterns | objects, interfaces, the visitor pattern, mutable fields | 10/10: all 130 results match Java's |
+| The Clojure Koans (our own koans on its 27 topics) | Clojure itself, form by form | of 229 koans, 29 port literally and 163 more run the wat way; 17 have no route today, and 20 are refused by design |
 
-97 chapters and 1,399 checks pass (`./run.sh`). The code is our own implementation of what
+97 chapters (1,399 checks) and 27 koan programs (163 checks) pass (`./run.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
 and translated into wat by a wat program (`tools/jbob2wat.wat`). The book's proofs then run
@@ -123,6 +124,9 @@ changed and ran it. 29 ran. The failures sort cleanly:
 - Clojure's untyped forms;
 - typed nil.
 
+Written the wat way, 163 more run. The other 37 were marked instead: 17 have no route today,
+such as set union (a set's elements can't be read back, F-046), and 20 are refused by design.
+
 The run also measured the finding that cost me most in the first books. Spelled with
 keywords, 38 rows are refused at startup that the Clojure spelling lets through to die at
 runtime (F-014).
@@ -138,7 +142,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-045 are gaps and defects.
+  - F-001 to F-048 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
   - C-001 to C-030 are clean ports and acceptance results.
 
@@ -155,7 +159,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             237 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             243 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
@@ -164,6 +168,8 @@ tools/java-oracle.sh                the JDK on a Little Java chapter's Java (ora
 tools/koans.clj                     ports each koan to wat, runs it, and judges it against Clojure
 koans/src/NN-<topic>.clj            the Clojure Koans' topics: our own filled-in koans, each true in Clojure
 koans/literal/, koans/keyword/      each koan's verdict in each of wat's spellings, with wat's message
+koans/idiom/NN-<topic>.wat          the koans that don't port literally, said the way wat says it (run by run.sh)
+tools/koan-tiers.sh                 every koan's tier: literal, wat idiom, missing, or refused
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers

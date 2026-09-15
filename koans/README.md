@@ -48,3 +48,38 @@ the same, so the two runs differ only in what wat's checker sees (F-014).
 
 Each topic has a table in `literal/NN-topic.tsv` and `keyword/NN-topic.tsv`. Its columns are
 the row number, the verdict, Clojure's answer, wat's message, and the koan.
+
+## The idiom tier
+
+Each row that doesn't port literally is then said the way wat says it, in
+`idiom/NN-topic.wat`. Each such file is a program of assertions in the keyword spelling
+(so the checker sees every call), and `./run.sh` runs it. Every row is marked one of three
+ways:
+- **idiom:** an assertion ending `; row K`;
+- **missing:** `;; row K missing: …`, meaning there is no route in wat today (a gap);
+- **refused:** `;; row K refused: …`, meaning wat excludes it on purpose (a doctrine).
+
+`tools/koan-tiers.sh` reads the markers and the literal run, and writes `tiers.tsv`. It
+fails if any row has no tier, or has two.
+
+| 229 rows | literal | wat idiom | missing | refused |
+|---|---|---|---|---|
+| | 29 | 163 | 17 | 20 |
+
+- **Missing:**
+  - metadata;
+  - a String's `index-of`, `last-index-of` and `reverse`;
+  - set union, intersection and difference: a HashSet's elements can't be enumerated
+    (F-046);
+  - the rest of an empty collection (F-045).
+- **Refused:**
+  - `=` between different types;
+  - predicates that static types leave nothing to decide;
+  - collections that mix types;
+  - a cell that changes type;
+  - transactions;
+  - host classes and objects.
+- **Written by hand to make the idioms run:** `or-else`, `merge`, `merge-with`, set building,
+  `iterate`, `partition-all`, `group-by`, `partial`, `comp`, two-level `update-in` and
+  `get-in`, and a service holding one String. Each is a line or a page that Clojure provides
+  (PROVIDE.md P-017).
