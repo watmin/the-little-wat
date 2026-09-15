@@ -1501,6 +1501,23 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** GAP (minor, output noise).
 - **Repro:** `wat books/little-typer/ch01-the-more-things-change.wat 2>&1 >/dev/null | grep -c AssertionFailure` prints 9.
 
+### Friction: the cheatsheet says a Vector's `first` returns an Option; it returns the element, and an empty Vector dies at runtime labelled a malformed form
+
+- **Where:** The Little Typer. wat-Pie takes Pie forms apart with `:wat::core::first` on
+  `(:wat::core::Vector :- [:wat::WatAST])`, typed as the element itself, and a malformed
+  Pie form runs off the end of its arguments.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/typer/first-of-empty-vector.wat`:
+  - The checker accepts `(:wat::core::first xs)` as an `i64` for `xs` a
+    `(:wat::core::Vector :- [:wat::core::i64])`, and `[7 8]` gives 7.
+  - On the empty Vector the program dies, loudly and located in the user's file:
+    > `#wat.runtime/MalformedForm {:message "malformed :wat::core::first form: :wat::core::first: sequence has 0 element(s); no element at index 0" :location #wat.core/Span {:file "probes/typer/first-of-empty-vector.wat" :line 6 :col 22 …}`
+  - `docs/WAT-CHEATSHEET.md` says `first` on a Vec returns `(Option :- [T])` ("arc 047 — Vec
+    accessors return Option to honestly signal empty/short").
+- **So:** nothing is silent here. But the doc describes a different verb from the one that
+  runs, and the error calls a well-formed call on an empty sequence a "malformed form".
+- **Class:** GAP (a doc that has fallen behind the code, and a misleading error label).
+- **Repro:** `probes/typer/first-of-empty-vector.wat`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

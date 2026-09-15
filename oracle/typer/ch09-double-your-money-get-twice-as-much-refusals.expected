@@ -1,0 +1,7 @@
+refused: Expected an expression with = type, but the type was Nat
+refused: Expected (Vec Atom 1) but given (Vec Atom 0)
+refused: Expected U but given Nat
+refused: Expected =, got Nat
+refused: The expressions 1 and 2 are not the same Nat
+refused: The expressions (iter-Nat n (the Nat 0) (lambda (j) (add1 (add1 j)))) and (iter-Nat n (the Nat n) (lambda (k) (add1 k))) are not the same Nat
+refused: Can't determine a type

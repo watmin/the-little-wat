@@ -5,8 +5,8 @@
 ;;
 ;; The language so far: U, Atom, 'atoms, Nat, zero, add1, numerals, Pair and Sigma, cons,
 ;; car, cdr, -> and Pi, lambda, application, the, which-Nat, iter-Nat, rec-Nat, List, nil,
-;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, =, same, cong, claim, define,
-;; check-same.
+;; ::, rec-List, Vec, vecnil, vec::, head, tail, ind-Nat, =, same, cong, replace, symm,
+;; trans, claim, define, check-same.
 ;;
 ;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
 ;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
@@ -19,6 +19,8 @@
 ;;             (NNat ELIM target base-type base step), ELIM being which-Nat, iter-Nat or rec-Nat
 ;;             (NRecList target elem-type base-type base step) (NHead neutral) (NTail neutral)
 ;;             (NIndNat target motive base step) (NCong target from-type to-type f)
+;;             (NReplace target target-type motive base) (NSymm target) (NTrans p q type),
+;;             where p and q are values, either of which may be stuck
 ;; - an environment is a list of (name value); a context a list of (name kind type [value]),
 ;;   kind being claim, def or var.
 ;; Checking elaborates: synth gives (TYPE CORE) and check gives CORE. Core is the source with
@@ -166,6 +168,10 @@
     ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
     ((:wat::core::= h "=") (:pie::t3 "VEq" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1)) (:pie::eval env (:pie::arg e 2))))
     ((:wat::core::= h "same") (:pie::t1 "VSame" (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "replace")
+      (:pie::do-replace (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1)) (:pie::eval env (:pie::arg e 2))))
+    ((:wat::core::= h "symm") (:pie::do-symm (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "trans") (:pie::do-trans (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
     ((:wat::core::= h "cong")
       (:pie::do-cong (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))
                      (:pie::eval env (:pie::arg e 2)) (:pie::eval env (:pie::arg e 3))))
@@ -283,6 +289,38 @@
         (:pie::t2 "VNeu" (:pie::t3 "VEq" y (:pie::do-ap f (:pie::arg tt 1)) (:pie::do-ap f (:pie::arg tt 2)))
                          (:pie::t4 "NCong" (:pie::arg t 1) x y f))))
     (:else (:pie::fail "cong of a non-equality"))))
+
+;; replace: (same x) gives the base; a stuck target, of type (= X from to), gives a stuck
+;; replace of type (mot to).
+(:wat::core::defn :pie::do-replace [t <- :wat::WatAST mot <- :wat::WatAST b <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VSame") b)
+    ((:pie::tag? t "VNeu")
+      (:wat::core::let [tt (:pie::arg t 0)]
+        (:pie::t2 "VNeu" (:pie::do-ap mot (:pie::arg tt 2)) (:pie::t4 "NReplace" (:pie::arg t 1) tt mot b))))
+    (:else (:pie::fail "replace of a non-equality"))))
+
+;; symm: (same x) stays; a stuck target of type (= X from to) gives one of type (= X to from).
+(:wat::core::defn :pie::do-symm [t <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VSame") t)
+    ((:pie::tag? t "VNeu")
+      (:wat::core::let [tt (:pie::arg t 0)]
+        (:pie::t2 "VNeu" (:pie::t3 "VEq" (:pie::arg tt 0) (:pie::arg tt 2) (:pie::arg tt 1)) (:pie::t1 "NSymm" (:pie::arg t 1)))))
+    (:else (:pie::fail "symm of a non-equality"))))
+
+;; An equality value's from and to: a (same x)'s are x; a stuck one's are in its type.
+(:wat::core::defn :pie::eq-from [p <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::if (:pie::tag? p "VSame") (:pie::arg p 0) (:pie::arg (:pie::arg p 0) 1)))
+(:wat::core::defn :pie::eq-to [p <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::if (:pie::tag? p "VSame") (:pie::arg p 0) (:pie::arg (:pie::arg p 0) 2)))
+
+;; trans: two sames give a same; otherwise a stuck trans of type (= X (from p) (to q)).
+(:wat::core::defn :pie::do-trans [p <- :wat::WatAST q <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::if (:wat::core::if (:pie::tag? p "VSame") (:pie::tag? q "VSame") false)
+    p
+    (:wat::core::let [x (:wat::core::if (:pie::tag? p "VNeu") (:pie::arg (:pie::arg p 0) 0) (:pie::arg (:pie::arg q 0) 0))]
+      (:pie::t2 "VNeu" (:pie::t3 "VEq" x (:pie::eq-from p) (:pie::eq-to q)) (:pie::t3 "NTrans" p q x)))))
 
 ;; ind-Nat: zero gives the base; (add1 n) gives (step n (ind-Nat n mot base step)). The type
 ;; is (mot target), so a stuck ind-Nat has type (mot target) too.
@@ -415,8 +453,23 @@
       ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
       (:else (:pie::fail (:wat::string::concat "cannot read back Vec " (:wat::core::ast->source v)))))))
 
+;; One side of a stuck trans, over X: a (same x), or stuck itself.
+(:wat::core::defn :pie::rb-eq-part [used <- :pie::Names x <- :wat::WatAST p <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::if (:pie::tag? p "VSame")
+    (:pie::t1 "same" (:pie::rb used x (:pie::arg p 0)))
+    (:pie::rb-neu used (:pie::arg p 1))))
+
 (:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
   (:wat::core::cond
+    ((:pie::tag? ne "NSymm") (:pie::t1 "symm" (:pie::rb-neu used (:pie::arg ne 0))))
+    ((:pie::tag? ne "NReplace")
+      (:wat::core::let [tt (:pie::arg ne 1)
+                        mot (:pie::arg ne 2)]
+        (:pie::t3 "replace" (:pie::rb-neu used (:pie::arg ne 0))
+                            (:pie::rb used (:pie::arrow-value (:pie::arg tt 0) (:pie::t0 "VU")) mot)
+                            (:pie::rb used (:pie::do-ap mot (:pie::arg tt 1)) (:pie::arg ne 3)))))
+    ((:pie::tag? ne "NTrans")
+      (:pie::t2 "trans" (:pie::rb-eq-part used (:pie::arg ne 2) (:pie::arg ne 0)) (:pie::rb-eq-part used (:pie::arg ne 2) (:pie::arg ne 1))))
     ((:pie::tag? ne "NCong")
       (:pie::t2 "cong" (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arrow-value (:pie::arg ne 1) (:pie::arg ne 2)) (:pie::arg ne 3))))
     ((:pie::tag? ne "NIndNat")
@@ -509,7 +562,7 @@
     (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
 
 (:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
-  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong") h))
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the" "which-Nat" "iter-Nat" "rec-Nat" "List" "::" "rec-List" "Vec" "vec::" "head" "tail" "ind-Nat" "=" "same" "cong" "replace" "symm" "trans") h))
 
 (:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
@@ -654,6 +707,38 @@
         (:wat::core::if (:pie::tag? pt "VSigma")
           (:pie::syn (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env pc))) (:pie::t1 "cdr" pc))
           (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::= h "replace")
+      (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
+                        tt (:pie::syn-type ts)]
+        (:wat::core::if (:pie::tag? tt "VEq")
+          (:wat::core::let [mc (:pie::check ctx env (:pie::arg e 1) (:pie::arrow-value (:pie::arg tt 0) (:pie::t0 "VU")))
+                            mv (:pie::eval env mc)
+                            bc (:pie::check ctx env (:pie::arg e 2) (:pie::do-ap mv (:pie::arg tt 1)))]
+            (:pie::syn (:pie::do-ap mv (:pie::arg tt 2)) (:pie::t3 "replace" (:pie::syn-core ts) mc bc)))
+          (:pie::fail (:wat::string::concat "replace needs an equality, not " (:pie::show-type ctx tt))))))
+    ((:wat::core::= h "symm")
+      (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))
+                        tt (:pie::syn-type ts)]
+        (:wat::core::if (:pie::tag? tt "VEq")
+          (:pie::syn (:pie::t3 "VEq" (:pie::arg tt 0) (:pie::arg tt 2) (:pie::arg tt 1)) (:pie::t1 "symm" (:pie::syn-core ts)))
+          (:pie::fail (:wat::string::concat "symm needs an equality, not " (:pie::show-type ctx tt))))))
+    ((:wat::core::= h "trans")
+      (:wat::core::let [ps (:pie::synth ctx env (:pie::arg e 0))
+                        pt (:pie::syn-type ps)
+                        qs (:pie::synth ctx env (:pie::arg e 1))
+                        qt (:pie::syn-type qs)
+                        used (:pie::used ctx)
+                        none (:wat::core::Vector :- [:wat::core::String])]
+        (:wat::core::cond
+          ((:wat::core::not (:wat::core::if (:pie::tag? pt "VEq") (:pie::tag? qt "VEq") false))
+            (:pie::fail (:wat::string::concat "trans needs two equalities, not " (:pie::show-type ctx pt) " and " (:pie::show-type ctx qt))))
+          ((:wat::core::not (:pie::alpha? (:pie::rb-type used (:pie::arg pt 0)) (:pie::rb-type used (:pie::arg qt 0)) none none))
+            (:pie::fail (:wat::string::concat "trans: equalities over " (:pie::show-type ctx (:pie::arg pt 0)) " and " (:pie::show-type ctx (:pie::arg qt 0)))))
+          ((:wat::core::not (:pie::alpha? (:pie::rb used (:pie::arg pt 0) (:pie::arg pt 2)) (:pie::rb used (:pie::arg qt 0) (:pie::arg qt 1)) none none))
+            (:pie::fail (:wat::string::concat "trans: " (:wat::core::ast->source (:pie::sugar (:pie::rb used (:pie::arg pt 0) (:pie::arg pt 2))))
+                                              " is not " (:wat::core::ast->source (:pie::sugar (:pie::rb used (:pie::arg qt 0) (:pie::arg qt 1)))))))
+          (:else
+            (:pie::syn (:pie::t3 "VEq" (:pie::arg pt 0) (:pie::arg pt 1) (:pie::arg qt 2)) (:pie::t2 "trans" (:pie::syn-core ps) (:pie::syn-core qs)))))))
     ;; cong's function must synthesize: its type gives Y.
     ((:wat::core::= h "cong")
       (:wat::core::let [ts (:pie::synth ctx env (:pie::arg e 0))

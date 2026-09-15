@@ -1,0 +1,27 @@
+#lang pie
+;; The Little Typer, chapter 9: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; replace's target must be an equality
+(replace 5 (lambda (k) Nat) 0)
+
+;; replace's base must have the motive's type at the equality's from
+(replace (the (= Nat 1 1) (same 1)) (lambda (k) (Vec Atom k)) (the (Vec Atom 0) vecnil))
+
+;; replace's motive must give a type
+(replace (the (= Nat 1 1) (same 1)) (lambda (k) k) 1)
+
+;; symm needs an equality
+(symm 5)
+
+;; trans needs the first equality's to to be the second's from
+(trans (the (= Nat 1 1) (same 1)) (the (= Nat 2 2) (same 2)))
+
+;; (twice n) and (double n) are both stuck on n, and not the same, so same cannot prove it
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(the (Pi ((n Nat)) (= Nat (+ n n) (iter-Nat n 0 (+ 2)))) (lambda (n) (same (+ n n))))
+
+;; trans synthesizes both its arguments, and a bare same cannot be synthesized
+(the (Pi ((a Nat) (b Nat)) (-> (= Nat a b) (= Nat a b))) (lambda (a b ab) (trans ab (same b))))
