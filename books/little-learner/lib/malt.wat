@@ -320,6 +320,23 @@
   (:wat::core::fn [theta <- :ll::V] -> :ll::V
     (:ll::+ (:ll::* (:ll::ref theta 0) xs) (:ll::ref theta 1))))
 
+;; (dot-product w t) = (sum (* w t)) (malted/A-core.rkt)
+(:wat::core::defn :ll::dot-product [w <- :ll::V t <- :ll::V] -> :ll::V
+  (:ll::sum (:ll::* w t)))
+
+;; ((quad x) theta) = a*x^2 + (b*x + c), theta = (a b c) (malted/B-layer-fns.rkt)
+(:wat::core::defn :ll::quad [x <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:wat::core::let [a (:ll::ref theta 0)
+                      b (:ll::ref theta 1)
+                      c (:ll::ref theta 2)]
+      (:ll::+ (:ll::* a (:ll::sqr x)) (:ll::+ (:ll::* b x) c)))))
+
+;; ((plane t) theta) = (dot-product w t) + b, theta = (w b)
+(:wat::core::defn :ll::plane [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:ll::+ (:ll::dot-product (:ll::ref theta 0) t) (:ll::ref theta 1))))
+
 ;; (((l2-loss target) xs ys) theta): the sum of the squared differences between ys and the
 ;; target's predictions (malted/C-loss.rkt).
 (:wat::core::defn :ll::l2-loss [target <- [:ll::V :-> [:ll::V :-> :ll::V]]] -> [:ll::V :ll::V :-> [:ll::V :-> :ll::V]]
@@ -331,3 +348,43 @@
 ;; revise: f applied to theta revs times (malted/D-gradient-descent.rkt).
 (:wat::core::defn :ll::revise [f <- [:ll::V :-> :ll::V] revs <- :wat::core::i64 theta <- :ll::V] -> :ll::V
   (:wat::core::if (:wat::core::= revs 0) theta (:ll::revise f (:wat::core::- revs 1) (f theta))))
+
+;; ---- hyperparameters and gradient descent (malted/D- through I-)
+
+;; malt's hyperparameters (revs, alpha, batch-size, mu, beta) are dynamically bound globals,
+;; set by with-hypers inside a dynamic-wind (tools/A-hypers.rkt). wat has no dynamic binding
+;; and no ambient mutable state, so they are a value, passed to whatever needs them.
+(:wat::core::defstruct :ll::Hypers
+  [revs <- :wat::core::i64
+   alpha <- :wat::core::f64
+   batch-size <- :wat::core::i64
+   mu <- :wat::core::f64
+   beta <- :wat::core::f64])
+
+(:wat::core::defn :ll::hypers [revs <- :wat::core::i64 alpha <- :wat::core::f64] -> :ll::Hypers
+  (:ll::Hypers :revs revs :alpha alpha :batch-size 0 :mu 0.0 :beta 0.0))
+
+(:wat::core::defn :ll::each [f <- [:ll::V :-> :ll::V] l <- :ll::V] -> :ll::V
+  (:ll::lst (:wat::core::mapv f (:ll::elems l))))
+
+;; malt's (gradient-descent inflate deflate update): inflate each parameter, then revs times
+;; update each inflated parameter with the gradient taken at the deflated ones, then deflate.
+(:wat::core::defn :ll::gradient-descent
+  [h <- :ll::Hypers
+   inflate <- [:ll::V :-> :ll::V]
+   deflate <- [:ll::V :-> :ll::V]
+   update <- [:ll::V :ll::V :-> :ll::V]]
+  -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
+  (:wat::core::fn [obj <- [:ll::V :-> :ll::V] theta <- :ll::V] -> :ll::V
+    (:wat::core::let [f (:wat::core::fn [big-theta <- :ll::V] -> :ll::V
+                          (:wat::core::let [g (:ll::gradient-of obj (:ll::each deflate big-theta))]
+                            (:ll::lst (:wat::core::mapv (:wat::core::fn [i <- :wat::core::i64] -> :ll::V (update (:ll::ref big-theta i) (:ll::ref g i)))
+                                                        (:wat::core::range 0 (:ll::len big-theta))))))]
+      (:ll::each deflate (:ll::revise f (:ll::Hypers/revs h) (:ll::each inflate theta))))))
+
+(:wat::core::defn :ll::identity [p <- :ll::V] -> :ll::V p)
+
+;; naked: p - alpha * g (malted/F-naked.rkt)
+(:wat::core::defn :ll::naked-gradient-descent [h <- :ll::Hypers] -> [[:ll::V :-> :ll::V] :ll::V :-> :ll::V]
+  (:ll::gradient-descent h :ll::identity :ll::identity
+    (:wat::core::fn [pa <- :ll::V g <- :ll::V] -> :ll::V (:ll::- pa (:ll::* (:ll::num (:ll::Hypers/alpha h)) g)))))
