@@ -1,0 +1,7 @@
+refused: Can't determine a type
+refused: Expected Nat but given Atom
+refused: Expected Atom but given Nat
+refused: left constructs an Either, but it was used where a Nat was expected.
+refused: Expected an Either, but got a Nat
+refused: Expected Nat but given Atom
+refused: U is a type, but it does not have a type.

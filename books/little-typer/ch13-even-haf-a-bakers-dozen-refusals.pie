@@ -1,0 +1,25 @@
+#lang pie
+;; The Little Typer, chapter 13: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; left by itself: the other side's type cannot be determined
+(left 3)
+
+;; left holds the left type
+(the (Either Nat Atom) (left 'a))
+
+;; right holds the right type
+(the (Either Nat Atom) (right 3))
+
+;; left makes an Either, not a Nat
+(the Nat (left 3))
+
+;; ind-Either's target must be an Either
+(ind-Either 3 (lambda (x) Nat) (lambda (n) n) (lambda (a) 0))
+
+;; the left base takes the left type
+(ind-Either (the (Either Nat Atom) (left 3)) (lambda (x) Nat) (lambda (a) 'a) (lambda (a) 0))
+
+;; an Either of U is not a U
+(the U (Either U Nat))
