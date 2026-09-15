@@ -85,6 +85,32 @@
 
 (defmacro conde [& lines] `(disj* ~@(map (fn [l] `(conj* ~@l)) lines)))
 
+;; ch 9's impure operators: if-then-else on the first answer of g1, and at most one answer.
+(defn ifte [g1 g2 g3]
+  (fn [s]
+    (letfn [(lp [s-inf]
+              (cond (nil? s-inf) (g3 s)
+                    (vector? s-inf) (append-map-inf g2 s-inf)
+                    :else (fn [] (lp (s-inf)))))]
+      (lp (g1 s)))))
+
+(defn once [g]
+  (fn [s]
+    (letfn [(lp [s-inf]
+              (cond (nil? s-inf) nil
+                    (vector? s-inf) [(first s-inf) nil]
+                    :else (fn [] (lp (s-inf)))))]
+      (lp (g s)))))
+
+(defmacro conda [& lines]
+  (let [[l & more] lines]
+    (if (empty? more)
+      `(conj* ~@l)
+      `(ifte ~(first l) (conj* ~@(rest l)) (conda ~@more)))))
+
+(defmacro condu [& lines]
+  `(conda ~@(map (fn [l] (cons `(once ~(first l)) (rest l))) lines)))
+
 ;; ---- reification
 (defn walk* [v s]
   (let [v (walk v s)]

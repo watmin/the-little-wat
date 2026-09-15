@@ -1,14 +1,15 @@
-;; The Reasoned Schemer, chapter 8 (Just a Bit More): multiplication, comparison and division
-;; on little-endian bit lists, run forwards and backwards. Our own code and examples. Every
-;; expected value here is the output of oracle/ch08.clj, the same queries in a Clojure
-;; transliteration of the book's engine; the arithmetic ones are checked in decimal in the
-;; comments too.
+;; The Reasoned Schemer, chapter 8 (Just a Bit More): multiplication, comparison, division,
+;; logarithm and exponent on little-endian bit lists, run forwards and backwards. Our own
+;; code and examples. Every expected value here is the output of oracle/ch08.clj or
+;; oracle/ch08b.clj, the same queries in a Clojure transliteration of the book's engine; the
+;; arithmetic ones are checked in decimal in the comments too.
 ;;
 ;; Run: wat books/reasoned-schemer/ch08-just-a-bit-more.wat   (exit 0 and a final "ok" line = pass)
 
 (:wat::load-file! "../little-schemer/lib/ch01-toys.wat")
 (:wat::load-file! "lib/ch10-under-the-hood.wat")
 (:wat::load-file! "lib/ch02-old-toys.wat")
+(:wat::load-file! "lib/ch04-double-your-fun.wat")
 (:wat::load-file! "lib/ch07-a-bit-too-much.wat")
 (:wat::load-file! "lib/ch08-just-a-bit-more.wat")
 
@@ -65,5 +66,11 @@
     (wat.test/assert-eq (rs/run 4 (n m q r) (rs/divo n m q r))
                         '((() (_0 & _1) () ()) ((1) (_0 _1 & _2) () (1)) ((_0 1) (_1 _2 _3 & _4) () (_0 1))
                           ((_0 _1 1) (_2 _3 _4 _5 & _6) () (_0 _1 1))))
+
+    ;; logarithm: 14 = 2^3 + 6; 8 = 2^3 exactly; 68 = 3^3 + 41. The costlier queries (3^5, and
+    ;; the nine ways to write 68 as b^q + r) run in probes/mk/logo-heavy.wat.
+    (wat.test/assert-eq (rs/run* r (rs/logo (rs/q '(0 1 1 1)) (rs/q '(0 1)) (rs/q '(1 1)) r)) '((0 1 1)))
+    (wat.test/assert-eq (rs/run* q (rs/logo (rs/build-num 8) (rs/build-num 2) q (rs/nil))) '((1 1)))
+    (wat.test/assert-eq (rs/run* r (rs/logo (rs/build-num 68) (rs/build-num 3) (rs/build-num 3) r)) '((1 0 0 1 0 1)))
 
     (wat.kernel/println "reasoned-schemer ch08 just-a-bit-more: ok")))

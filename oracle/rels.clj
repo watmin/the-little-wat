@@ -301,3 +301,11 @@
             (*o nq1 n nq)))))
 
 (defrel (expo b q n) (logo n b q ()))
+
+;; ch 9
+(defrel (not-pastao x)
+  (conda ((== 'pasta x) fail)
+         (succeed)))
+
+;; onceo takes a goal, not a term, so it is a plain function in both twins.
+(defn onceo [g] (condu (g succeed) (fail)))
