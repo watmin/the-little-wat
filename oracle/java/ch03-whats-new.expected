@@ -1,0 +1,13 @@
+(Anchovy (Olive (Anchovy (Anchovy (Cheese (Crust))))))
+(Olive (Cheese (Crust)))
+(Cheese (Anchovy (Olive (Cheese (Anchovy (Cheese (Anchovy (Cheese (Crust)))))))))
+(Cheese (Olive (Cheese (Cheese (Cheese (Crust))))))
+(Sausage (Crust))
+(Sausage (Cheese (Anchovy (Crust))))
+(Sausage (Cheese (Crust)))
+(Crust)
+(Cheese (Olive (Cheese (Cheese (Cheese (Crust))))))
+(Cheese (Olive (Cheese (Cheese (Cheese (Crust))))))
+true
+false
+true
