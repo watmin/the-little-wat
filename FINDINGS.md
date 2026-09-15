@@ -97,7 +97,7 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
   debug profile.
 - **What happened** (2026-09-14, wat-rs `a3218644d`), verbatim:
   ```
-  thread 'wat-test:::friedman::smoke::one-plus-one' panicked at /home/watmin/Work/holon/wat-rs/src/types.rs:660:9:
+  thread 'wat-test:::friedman::smoke::one-plus-one' panicked at …/wat-rs/src/types.rs:660:9:
   builtin leaf :wat::core::Option already registered as a structured TypeDef
   ```
 - **Root cause** (read in wat-rs source this session):
