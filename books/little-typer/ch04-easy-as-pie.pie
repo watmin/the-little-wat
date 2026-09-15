@@ -1,0 +1,57 @@
+#lang pie
+;; The Little Typer, chapter 4 (Easy as Pie): Pi, functions over types, elim-Pair, and
+;; types computed by functions. Our own examples on the chapter's topics. Racket's Pie
+;; prints each expression's (the TYPE NORMAL-FORM); wat-Pie reads this same file and must
+;; print the same.
+
+(claim flip (Pi ((A U) (D U)) (-> (Pair A D) (Pair D A))))
+(define flip (lambda (A D) (lambda (p) (cons (cdr p) (car p)))))
+flip
+(flip Nat Atom)
+((flip Nat Atom) (cons 17 'apple))
+(flip Atom Atom (cons 'a 'b))
+
+(claim elim-Pair (Pi ((A U) (D U) (X U)) (-> (Pair A D) (-> A D X) X)))
+(define elim-Pair (lambda (A D X) (lambda (p f) (f (car p) (cdr p)))))
+elim-Pair
+(elim-Pair Nat Nat Nat (cons 3 4) (lambda (a d) (add1 a)))
+
+(claim kar (-> (Pair Nat Nat) Nat))
+(define kar (lambda (p) (elim-Pair Nat Nat Nat p (lambda (a d) a))))
+kar
+(claim kdr (-> (Pair Nat Nat) Nat))
+(define kdr (lambda (p) (elim-Pair Nat Nat Nat p (lambda (a d) d))))
+(kdr (cons 1 2))
+(claim swap (-> (Pair Nat Atom) (Pair Atom Nat)))
+(define swap (lambda (p) (elim-Pair Nat Atom (Pair Atom Nat) p (lambda (a d) (cons d a)))))
+swap
+(swap (cons 3 'x))
+
+(claim twin (Pi ((Y U)) (-> Y (Pair Y Y))))
+(define twin (lambda (Y) (lambda (x) (cons x x))))
+twin
+(claim twin-Atom (-> Atom (Pair Atom Atom)))
+(define twin-Atom (twin Atom))
+twin-Atom
+(twin-Atom 'cherry-pie)
+(twin Nat 5)
+
+;; types are values, and Pi types print with their binders merged or as ->. A Pi over U is
+;; a type but not a U (U has no type), so these are over Atom and Nat.
+(the U (Pi ((a Atom) (n Nat)) (Pair Atom Nat)))
+(the U (Pi ((n Nat)) (-> Atom Nat)))
+(the U (Sigma ((n Nat)) Atom))
+(the U (Pair (-> Nat Nat) (Sigma ((a Atom) (n Nat)) Atom)))
+(the (Pi ((A U)) (-> A A)) (lambda (B) (lambda (b) b)))
+(check-same (Pi ((A U)) (-> A A)) (lambda (A a) a) (lambda (B b) b))
+(the (Pi ((A U)) (Pi ((A U)) (-> A A))) (lambda (A B) (lambda (x) x)))
+
+;; functions that give types
+(claim Pairy (-> U U))
+(define Pairy (lambda (A) (Pair A A)))
+(Pairy Nat)
+(the (Pairy Atom) (cons 'a 'b))
+(claim double-Pairy (Pi ((A U)) (-> A (Pairy A))))
+(define double-Pairy (lambda (A a) (cons a a)))
+double-Pairy
+(double-Pairy (Pairy Nat) (cons 1 2))

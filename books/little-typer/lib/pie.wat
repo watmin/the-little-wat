@@ -514,7 +514,7 @@
                         tv (:pie::eval env tc)]
         (:pie::syn tv (:pie::t2 "the" tc (:pie::check ctx env (:pie::arg e 1) tv)))))
     ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma") h)
-      (:pie::syn (:pie::t0 "VU") (:pie::check-type ctx env e)))
+      (:pie::syn (:pie::t0 "VU") (:pie::type-at ctx env e true)))
     ((:wat::core::= h "car")
       (:wat::core::let [s (:pie::synth ctx env (:pie::arg e 0))
                         pt (:pie::syn-type s)]
@@ -550,36 +550,42 @@
                          (:wat::core::conj done ac) (:wat::core::rest as)))
       (:pie::fail (:wat::string::concat "not a function type: " (:pie::show-type ctx ft))))))
 
-;; A type expression, elaborated.
+;; A type expression, elaborated. U is a type but has none, so a type former is a U only when
+;; its parts are: (Pi ((A U)) A) is a type, and not a U.
 (:wat::core::defn :pie::check-type [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
+  (:pie::type-at ctx env e false))
+
+;; u? says the type must itself be a U.
+(:wat::core::defn :pie::type-at [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST u? <- :wat::core::bool] -> :wat::WatAST
   (:wat::core::let [h (:pie::head e)
                     n (:pie::name-of e)]
     (:wat::core::cond
+      ((:wat::core::if u? (:wat::core::= n "U") false) (:pie::fail "U is a type, but it does not have a type"))
       ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) e)
       ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->"))
-        (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym h)) (:pie::check-types ctx env (:pie::args e)))))
+        (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym h)) (:pie::check-types ctx env (:pie::args e) u?))))
       ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma"))
-        (:pie::check-binders ctx env h (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+        (:pie::check-binders ctx env h (:pie::kids (:pie::arg e 0)) (:pie::arg e 1) u?))
       (:else (:pie::check ctx env e (:pie::t0 "VU"))))))
 
-(:wat::core::defn :pie::check-types [ctx <- :wat::WatAST env <- :wat::WatAST es <- :pie::Es] -> :pie::Es
+(:wat::core::defn :pie::check-types [ctx <- :wat::WatAST env <- :wat::WatAST es <- :pie::Es u? <- :wat::core::bool] -> :pie::Es
   (:wat::core::if (:wat::core::empty? es)
     (:wat::core::Vector :- [:wat::WatAST])
-    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::check-type ctx env (:wat::core::first es)))
-                        (:pie::check-types ctx env (:wat::core::rest es)))))
+    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::type-at ctx env (:wat::core::first es) u?))
+                        (:pie::check-types ctx env (:wat::core::rest es) u?))))
 
 ;; (Pi ((x A) (y B)) C) elaborates to (Pi ((x A)) (Pi ((y B)) C)).
-(:wat::core::defn :pie::check-binders [ctx <- :wat::WatAST env <- :wat::WatAST stag <- :wat::core::String binders <- :pie::Es body <- :wat::WatAST] -> :wat::WatAST
+(:wat::core::defn :pie::check-binders [ctx <- :wat::WatAST env <- :wat::WatAST stag <- :wat::core::String binders <- :pie::Es body <- :wat::WatAST u? <- :wat::core::bool] -> :wat::WatAST
   (:wat::core::let [b (:pie::kids (:wat::core::first binders))
                     x (:pie::name-of (:wat::core::first b))
-                    ac (:pie::check-type ctx env (:pie::nth b 1))
+                    ac (:pie::type-at ctx env (:pie::nth b 1) u?)
                     av (:pie::eval env ac)
                     ctx2 (:pie::extend-var ctx x av)
                     env2 (:pie::bind env x (:pie::var-value av x))
                     more (:wat::core::rest binders)
                     inner (:wat::core::if (:wat::core::empty? more)
-                            (:pie::check-type ctx2 env2 body)
-                            (:pie::check-binders ctx2 env2 stag more body))]
+                            (:pie::type-at ctx2 env2 body u?)
+                            (:pie::check-binders ctx2 env2 stag more body u?))]
     (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
                 (:pie::sym stag)
                 (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) ac))))
