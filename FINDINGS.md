@@ -92,6 +92,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   arithmetic, in any namespace. Xorshift, splitmix, PCG, hashes, checksums and bit-field
   parsing can't be written.
 - **F-036:** there are no random numbers, not even a seeded generator.
+- **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
+  reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
+  declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
 - **F-032:** the lexer rejects `λ`, `Π`, `Σ`, `→` in symbols but accepts `é`, and its
   error is located in `crates/wat-reader/src/parser.rs` with a byte offset, not in the
   user's file and line.
@@ -1634,6 +1637,25 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Class:** GAP. Extend: add a seeded, pure generator to the stdlib (state in, a value and the
   next state out, e.g. splitmix64), plus a seed from the world alongside `:wat::time::now`.
 - **Repro:** the verb grep.
+
+### F-037: an undefined function called on a struct is reported as a missing field of the struct
+
+- **Where:** The Little Learner. I moved part of `lib/malt.wat` into `lib/sampling.wat`, and
+  `naked-gradient-descent` went with it by mistake, so chapters that don't load
+  sampling.wat were left calling a function that didn't exist.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): the call
+  `(:ll::naked-gradient-descent h)`, where `h` is an `:ll::Hypers` struct, was reported as:
+  > `malformed :ll::naked-gradient-descent form: keyword accessor: field "ll::naked-gradient-descent" is not declared on :ll::Hypers (declared fields: revs, alpha, batch-size, mu, beta)`
+
+  The location, `books/little-learner/ch07-the-crazy-ates.wat` line 48, is right.
+- **So:** a keyword-headed call whose name isn't a function falls through to Clojure-style
+  keyword access, `(:field struct)`. The error then explains why the struct lacks that
+  field. That is plausible for `(:alpha h)`, and misleading for a fully qualified name that
+  is clearly meant as a function. The fix was a load, not a field.
+- **Class:** GAP. Correct: when the keyword names a namespace that isn't the struct's, or
+  looks like a function, say "unresolved function `:ll::naked-gradient-descent`" first, and
+  mention the accessor reading second.
+- **Repro:** call any undefined `:ns::f` with a struct argument.
 
 ### Friction: a variant pattern must name every field
 

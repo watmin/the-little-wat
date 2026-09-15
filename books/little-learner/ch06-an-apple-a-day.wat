@@ -12,6 +12,7 @@
 
 (:wat::load-file! "../seasoned-schemer/lib/counter.wat")
 (:wat::load-file! "lib/malt.wat")
+(:wat::load-file! "lib/sampling.wat")
 (:wat::load-file! "lib/check.wat")
 
 ;; A line of the draws file as integers.
