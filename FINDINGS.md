@@ -61,6 +61,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-025:** `match` treats a `_` arm, a bare binder `[v …]` or a hash-destructure as
   covering every variant, and its non-exhaustive error suggests adding `_`. That goes
   against the doctrine that an arm cannot be forgotten.
+- **F-026:** the retired nested pattern `(Variant binders…)` passes the checker, and fails
+  at runtime only when some input reaches that arm, so it can ship.
 
 ## Classes
 
@@ -1133,6 +1135,49 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   means refusing the three catch-all shapes on enums and dropping "or include `_`
   wildcard" from the diagnostic.
 - **Repro:** the three probes above.
+
+## The Little MLer
+
+### C-021: generic recursive enums, nested patterns, and exhaustiveness that sees inside them
+
+- **Where:** The Little MLer's datatypes, before any chapter: `'a open_faced_sandwich`
+  (`Bread of 'a | Slice of 'a open_faced_sandwich`), and a function that matches
+  `Onion(Onion(x))`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - A generic recursive enum, `(:wat::core::defenum :u::Sandwich :- [A] …)`, is built at
+    `i64` and at `String` and taken apart by one generic fn
+    (`probes/ml/generic-recursive-enum.wat`).
+  - A nested variant pattern is written as a sub-pattern with no body,
+    `[:u::Kebab.Onion {:k [:u::Kebab.Onion {:k inner}]} …]` (`check.rs:7894–7908`). With
+    every arm explicit, it distinguishes two onions from one
+    (`probes/ml/nested-pattern-vector.wat`).
+  - A variant covered **only** by a nested arm is refused at startup:
+    `non-exhaustive: enum :u::Kebab missing arm(s) for variant(s): Onion`
+    (`probes/ml/nested-pattern-hole.wat`). A nested arm does not count as covering its
+    variant, so the plain case cannot be forgotten. (The message still suggests `_`: F-025.)
+  - **Mutually recursive generic enums** (`'a slist` / `'a sexp`) and two mutually recursive
+    generic fns over them count the atoms of `(1 (2 3))` as 3
+    (`probes/ml/mutual-recursive-enums.wat`).
+  - **A datatype holding a function**, `chain = Link of int * (int -> chain)`, works when
+    declared `:wat::enum::Impure`. The containment rule keeps functions out of Pure enums
+    (R-002). A top-level fn passed as the `next` field unfolds 1, 2, 3
+    (`probes/ml/enum-holding-fn.wat`).
+- **Class:** CLEAN.
+
+### F-026: the retired nested pattern `(Variant binders…)` passes the checker and fails at runtime
+
+- **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/ml/nested-pattern-positional.wat`
+  writes the inner variant positionally, `{:k (:u::Kebab.Onion inner)}`. That is the shape
+  the checker's own Option message still shows (`(Some (1 _))`, `check.rs:6643`). It passes
+  startup, and the program dies when that arm is tried:
+  > `retired nested (Variant binders…) pattern; a nested variant is [Variant {:k v}] (no body) or bind the field and match it`
+- **And it is latent:** `probes/ml/nested-pattern-latent.wat` is the same program given only
+  a Skewer, so the arm holding the retired pattern is never tried. It exits 0.
+- **So:** wat knows the form is retired (the runtime says so), but only the runtime refuses
+  it, and only when some input reaches that arm. A retired shape in an arm no test reaches
+  ships.
+- **Class:** GAP (a defect), in F-007's family: refusal at runtime instead of at startup.
+- **Repro:** `probes/ml/nested-pattern-positional.wat`, `probes/ml/nested-pattern-latent.wat`.
 
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 
