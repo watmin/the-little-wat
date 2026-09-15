@@ -63,6 +63,9 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   against the doctrine that an arm cannot be forgotten.
 - **F-026:** the retired nested pattern `(Variant binders…)` passes the checker, and fails
   at runtime only when some input reaches that arm, so it can ship.
+- **F-027:** a `match` arm cannot destructure a tuple (tuple patterns are legal only inside
+  a variant's field), and a match on a tuple can be exhaustive only through `_` or a
+  binder.
 
 ## Classes
 
@@ -887,6 +890,11 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **Workaround:** a generic helper whose declared return does the widening:
   `(wat.core/defn u/some :- [T] [x :- T] :- (wat.type/Option :- [T]) (:wat::core::Option.Some {:value x}))`.
   Then `[(u/some 1)]` and the stream both check (`probes/mk/some-via-helper.wat`).
+- **Not every container:** a Tuple's element types do widen. `(:wat::core::Tuple
+  (:ml::Meza.Shrimp {}) (:ml::Main.Steak {}))` under a declared
+  `(:wat::core::Tuple :- [:ml::Meza :ml::Main])` is accepted and runs
+  (`probes/ml/tuple-of-variants-claim.wat`, 2026-09-14). I had predicted a refusal; it is
+  Vector's and Stream's type arguments that stay narrowed.
 - **Class:** GAP. In Rust `vec![Some(1)]` is a `Vec<Option<i32>>`, and in Clojure the
   question never comes up. Widening a variant to its enum where it becomes a type argument
   would keep channel invariance while ending this.
@@ -1079,6 +1087,11 @@ The things that were annoying while writing Little Schemer, now tested. All agai
     says to rename `:wat::core::vec` → `:wat::core::Vector`.
   - When F-014 is fixed, and symbol-headed calls get real types, every Clojure `let` that
     binds two different types will start failing with this error.
+  - It already blocks tuple destructuring. `(wat.core/let [[a b] (:wat::core::Tuple 1 2)] …)`
+    is refused (`:wat::core::vec: parameter #3 expects (:wat::core::Vector :- [:?6998]); got :(wat::core::i64,wat::core::i64)`,
+    `probes/ml/tuple-let-clj.wat`), because the binder `[a b]` is a vector next to a tuple.
+    The keyword let does it (`probes/ml/tuple-let-kw.wat`). So in the Clojure spelling a
+    tuple cannot be destructured at all today.
 - **Class:** GAP (a defect), and the most serious codemod hazard after F-014. The keyword
   `let` → `wat.core/let` rewrite turns off checking of every binding and body.
 - **Repro:** the probes in the table.
@@ -1178,6 +1191,31 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   ships.
 - **Class:** GAP (a defect), in F-007's family: refusal at runtime instead of at startup.
 - **Repro:** `probes/ml/nested-pattern-positional.wat`, `probes/ml/nested-pattern-latent.wat`.
+
+### F-027: a match arm cannot destructure a tuple, and a match on a tuple is exhaustive only with `_`
+
+- **Where:** The Little MLer ch 4 onward, whose functions match on tuples:
+  `fun has_steak (a, Steak, d) = true | has_steak (a, ns, d) = false`, and a pair of
+  variants like `(Shrimp, Sundae)`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - `[(a b) (+ a b)]` on a 2-tuple is refused (`probes/ml/tuple-match-binders.wat`):
+    > `arm #1: a match arm is [_ body], [<binder> body], [<literal> body], [<Variant> {:k v} body], or a record hash-destructure; got 2 element(s)`
+
+    It is also refused for being open-typed:
+    > `non-exhaustive: open-typed match needs at least one hash-destructure arm or a wildcard _ arm.`
+  - All four `(Meza, Dessert)` combinations as explicit arms of variant sub-patterns,
+    `[([:u::Meza.Shrimp {}] [:u::Dessert.Sundae {}]) …]`, are each refused the same way
+    (`probes/ml/tuple-match-variants.wat`).
+  - A tuple pattern is legal only nested inside a variant's field, where `check_subpattern`
+    handles it (`check.rs:7826–7846`).
+- **So:** matching on the shape of a tuple, ML's everyday move, is not expressible as an
+  arm. And under the no-`_` doctrine a match on a tuple cannot be made exhaustive at all.
+  The route is a keyword `let` destructure, `[[a b] t]` (`probes/ml/tuple-let-kw.wat`), and
+  then one match per position. For `eq_main` that means 16 leaf arms where ML writes five
+  lines (`books/little-mler/lib/ch04-look-to-the-stars.wat`).
+- **Class:** GAP. Enforcing F-025's doctrine would want this first: exhaustiveness over the
+  product of the positions' variants.
+- **Repro:** the probes above.
 
 ### R-005: SIGTERM does not stop a busy wat program; stopping is cooperative
 

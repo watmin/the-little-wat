@@ -27,6 +27,7 @@ the names and the design are the builder's call.
 | P-009 | Evaluation that a signal can stop | runtime (R-005) | open |
 | P-010 | A relational (miniKanren) library | optional library | open |
 | P-011 | A mutable graph/arena store | optional library, if at all | open |
+| P-012 | Tuple patterns in `match` arms, exhaustive over the product | checker (F-027) | open |
 
 ## Stdlib
 
@@ -148,6 +149,18 @@ These are fixes, not additions, but each is something users currently write them
 - **Suggested shape:** the evaluator checks the flag at a cheap point (a call, or a loop
   back-edge) and unwinds. The doctrine "stopping is a protocol" would still hold for
   services; this covers pure computation, which has no protocol to speak.
+
+### P-012: tuple patterns in `match` arms, exhaustive over the product
+
+- **What we wrote:** a keyword `let` destructure and then one nested match per position.
+  The Little MLer's `eq_main` becomes 16 leaf arms
+  (`books/little-mler/lib/ch04-look-to-the-stars.wat`).
+- **Why:** a tuple pattern at the top of an arm is refused, and a match on a tuple can be
+  exhaustive only through `_` or a binder (F-027). Under the no-`_` doctrine that rules out
+  tuple matching entirely. Every function over a pair of datatypes pays for it.
+- **Suggested shape:** `[(p1 p2 …) body]` arms, each position a sub-pattern as they already
+  are inside variant fields (`check.rs:7826`), with exhaustiveness checked over the product
+  of each position's variants. That is what would let F-025's doctrine be enforced.
 
 ## Optional libraries
 
