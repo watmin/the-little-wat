@@ -178,6 +178,23 @@ These are fixes, not additions, but each is something users currently write them
 - **Suggested shape:** Stone 118.3-B's bind-then-unify for the plain-path arm of the
   surface-bound check too, so `NumberAsInt` binds `T` to `i64` there.
 
+### P-014: a WatAST whose children are shared, not copied
+
+- **What we wrote:** workarounds for F-033 in wat-Pie
+  (`books/little-typer/lib/pie.wat`). A definition is bound as its core syntax and
+  evaluated at each use, so closure environments don't nest every earlier definition's
+  environment. We didn't rewrite the values onto native enums, which do share.
+- **Why:** code-as-data is what a Lisp is for. Codemods (wat-fix), interpreters (the Little
+  Schemer's ch 10, the Seasoned Schemer's ch 20), the J-Bob port and wat-Pie all walk and
+  rebuild WatASTs. Each `ast->children` copies every subtree below the node, so a walk
+  that should cost O(n) costs up to O(n²), and data that nests (environments in closures)
+  costs exponentially.
+- **Suggested shape:** children behind an `Arc` (`List(Arc<[WatAST]>)` or an `Arc` per
+  child), so taking a node apart and rebuilding it share structure the way the runtime's
+  `Vec(Arc<Vec<Value>>)` and `Enum(Arc<EnumValue>)` already do. Or an `ast-nth` accessor
+  that clones one child, not all of them.
+- **Evidence:** F-033; `probes/typer/ast-children-cost.wat`, `probes/typer/value-copy-cost.wat`.
+
 ## Optional libraries
 
 ### P-010: a relational (miniKanren) library

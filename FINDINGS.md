@@ -77,7 +77,11 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 - **F-030:** printing a newtype value panics the Rust runtime
   (`wat-edn/src/value.rs:328`, `Keyword::new("0")`): its field is named `0`.
 - **F-031:** the checker accepts `:wat::core::length` on a String, even in the keyword
-  spelling; only the runtime refuses it, naming the six types it accepts.
+  spelling; only the runtime refuses it, naming the six types it accepts. (Hit a second
+  time, by accident, writing `probes/typer/value-copy-cost.wat`.)
+- **F-033:** taking a WatAST apart copies it. `ast->children` deep-copies every child
+  subtree (a WatAST owns `Vec<WatAST>`; only the root is behind an `Arc`), so code-as-data
+  programs pay a tree's whole size per destructure. Native enums share their fields.
 - **F-032:** the lexer rejects `λ`, `Π`, `Σ`, `→` in symbols but accepts `é`, and its
   error is located in `crates/wat-reader/src/parser.rs` with a byte offset, not in the
   user's file and line.
@@ -1517,6 +1521,44 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   runs, and the error calls a well-formed call on an empty sequence a "malformed form".
 - **Class:** GAP (a doc that has fallen behind the code, and a misleading error label).
 - **Repro:** `probes/typer/first-of-empty-vector.wat`.
+
+### F-033: taking a WatAST apart copies every subtree below it
+
+- **Where:** The Little Typer. Ch 14 took 43 s, where the chapters before it took 1–14 s.
+  Bisecting the chapter put the cost on its last few definitions.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/typer/ast-children-cost.wat`: 2000 `ast->children` calls on a two-child node
+    take 14 ms. On a two-child node whose second child is a tree of about 8,200 nodes,
+    they take 4,220 ms, about 2 ms per call. The cost follows the size of the subtree,
+    not the number of children.
+  - `probes/typer/value-copy-cost.wat`: passing that big WatAST through a function and
+    asking its `ast-kind` costs the same as for a small one (16 ms against 15 for 2000).
+    So does matching the root of a native Pure-enum tree whose children are shared
+    (18 ms against 16). A depth-16 enum tree with shared children builds in under 1 ms, so
+    it is 16 nodes, not 65,536.
+  - The source agrees. A runtime value holds a WatAST as `wat__WatAST(Arc<WatAST>)`, but
+    inside it every node owns its children as `List(Vec<WatAST>, Span)` with a derived
+    `Clone` (`crates/wat-reader/src/ast.rs:132`). Handing out children, or building a
+    node from them with `with-children`, copies whole subtrees. `Vec`, `Enum` and the
+    other runtime values sit behind an `Arc` and share.
+- **Cost:** a code-as-data program pays a tree's whole size for every destructure. wat-Pie
+  made it exponential. Each definition's value was a closure whose environment held every
+  earlier definition's value, each with its own environment, and each `bind` and each
+  `arg` copied all of it.
+- **Route:** bind each definition as its core syntax, `(GLOBAL core)`, and evaluate it at each
+  use (`:pie::globals-only`). Measured after the change:
+
+  | Chapter | Before | After |
+  |---|---|---|
+  | ch 14 | 43 s | 2.0 s |
+  | ch 11 | 14 s | 2.6 s |
+  | ch 9 | 10.4 s | 2.0 s |
+  | ch 7 | 5.4 s | 1.4 s |
+
+  Every chapter still matches Racket's Pie. The stronger route is values as native enums,
+  which share.
+- **Class:** GAP (performance; P-014).
+- **Repro:** the two probes.
 
 ## Predicted, unverified
 

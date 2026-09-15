@@ -157,8 +157,24 @@
     ((:wat::core::= name "Absurd") (:pie::t0 "VAbsurd"))
     (:else
       (:wat::core::match (:pie::lookup (:pie::kids env) name)
-        [:wat::core::Option.Some {:value v} v]
+        [:wat::core::Option.Some {:value v}
+          (:wat::core::if (:pie::tag? v "GLOBAL") (:pie::eval (:pie::globals-only env) (:pie::arg v 0)) v)]
         [:wat::core::Option.None {} (:pie::fail (:wat::string::concat "unbound variable " name))]))))
+
+;; A definition is bound as (GLOBAL core), its checked core, and evaluated where it is used,
+;; among the definitions only (so no local can capture its names). Binding its value instead
+;; nests every earlier definition's closure environment inside every later one, and taking a
+;; WatAST apart copies all of it (F-033): ch 14 took 43 s that way.
+(:wat::core::defn :pie::globals-only [env <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:pie::keep-globals (:pie::kids env))))
+
+(:wat::core::defn :pie::keep-globals [bs <- :pie::Es] -> :pie::Es
+  (:wat::core::if (:wat::core::empty? bs)
+    (:wat::core::Vector :- [:wat::WatAST])
+    (:wat::core::let [more (:pie::keep-globals (:wat::core::rest bs))]
+      (:wat::core::if (:pie::tag? (:pie::nth (:pie::kids (:wat::core::first bs)) 1) "GLOBAL")
+        (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:wat::core::first bs)) more)
+        more))))
 
 (:wat::core::defn :pie::eval-form [env <- :wat::WatAST e <- :wat::WatAST h <- :wat::core::String] -> :wat::WatAST
   (:wat::core::cond
@@ -1154,9 +1170,9 @@
       ((:wat::core::= h "define")
         (:wat::core::let [x (:pie::name-of (:pie::arg form 0))
                           tv (:pie::claimed-type ctx x)
-                          v (:pie::eval env (:pie::check ctx env (:pie::arg form 1) tv))]
-          (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "def") tv v))
-                    :env (:pie::bind env x v) :out (:pie::St/out st))))
+                          core (:pie::check ctx env (:pie::arg form 1) tv)]
+          (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "def") tv))
+                    :env (:pie::bind env x (:pie::t1 "GLOBAL" core)) :out (:pie::St/out st))))
       ((:wat::core::= h "check-same")
         (:wat::core::let [tv (:pie::eval env (:pie::check-type ctx env (:pie::arg form 0)))
                           a (:pie::eval env (:pie::check ctx env (:pie::arg form 1) tv))
