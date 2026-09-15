@@ -1,0 +1,6 @@
+refused: The expressions 1 and 2 are not the same Nat
+refused: Expected a Vec, got (List Atom)
+refused: Expected (-> (Vec Atom es) U) but given U
+refused: Expected Nat but given Atom
+refused: Expected Nat but given Atom
+refused: Expected (Vec E (iter-Nat j (the Nat l) (lambda (k) (add1 k)))) but given (Vec E (iter-Nat l (the Nat j) (lambda (k) (add1 k))))

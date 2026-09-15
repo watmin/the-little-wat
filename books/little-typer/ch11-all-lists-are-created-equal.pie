@@ -1,0 +1,46 @@
+#lang pie
+;; The Little Typer, chapter 11 (All Lists Are Created Equal): ind-Vec, whose motive depends
+;; on the length and the Vec; vec-append and vec->list; and list->vec->list=, proved by
+;; ind-List. Our own examples on the chapter's topics. Racket's Pie prints each
+;; expression's (the TYPE NORMAL-FORM); wat-Pie reads this same file and must print the same.
+
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+
+;; a constant motive: ind-Vec counts
+(ind-Vec 2 (the (Vec Atom 2) (vec:: 'a (vec:: 'b vecnil))) (lambda (k es) Nat) 0 (lambda (k h t n) (add1 n)))
+(ind-Vec 0 (the (Vec Atom 0) vecnil) (lambda (k es) Atom) 'none (lambda (k h t a) h))
+
+(claim mot-vec-append (Pi ((E U) (j Nat) (k Nat)) (-> (Vec E k) U)))
+(define mot-vec-append (lambda (E j k es) (Vec E (+ k j))))
+(claim step-vec-append (Pi ((E U) (j Nat) (k Nat) (e E) (es (Vec E k))) (-> (mot-vec-append E j k es) (mot-vec-append E j (add1 k) (vec:: e es)))))
+(define step-vec-append (lambda (E j k e es vec-append-es) (vec:: e vec-append-es)))
+(claim vec-append (Pi ((E U) (l Nat) (j Nat)) (-> (Vec E l) (Vec E j) (Vec E (+ l j)))))
+(define vec-append (lambda (E l j es end) (ind-Vec l es (mot-vec-append E j) end (step-vec-append E j))))
+(vec-append Atom 1 2 (vec:: 'a vecnil) (vec:: 'b (vec:: 'c vecnil)))
+(vec-append Atom 0 1 vecnil (vec:: 'z vecnil))
+vec-append
+
+(claim mot-vec->list (Pi ((E U) (l Nat)) (-> (Vec E l) U)))
+(define mot-vec->list (lambda (E l es) (List E)))
+(claim step-vec->list (Pi ((E U) (l-1 Nat) (e E) (es (Vec E l-1))) (-> (mot-vec->list E l-1 es) (mot-vec->list E (add1 l-1) (vec:: e es)))))
+(define step-vec->list (lambda (E l-1 e es es->list) (:: e es->list)))
+(claim vec->list (Pi ((E U) (l Nat)) (-> (Vec E l) (List E))))
+(define vec->list (lambda (E l es) (ind-Vec l es (mot-vec->list E) nil (step-vec->list E))))
+(vec->list Atom 3 (vec:: 'beans (vec:: 'maple-syrup (vec:: 'crumpets vecnil))))
+vec->list
+(the (Pi ((n Nat) (es (Vec Atom n))) (List Atom)) (lambda (n es) (vec->list Atom (add1 n) (vec:: 'first es))))
+
+(claim length (Pi ((E U)) (-> (List E) Nat)))
+(define length (lambda (E es) (rec-List es 0 (lambda (e es length-es) (add1 length-es)))))
+(claim list->vec (Pi ((E U) (es (List E))) (Vec E (length E es))))
+(define list->vec (lambda (E es) (ind-List es (lambda (xs) (Vec E (length E xs))) vecnil (lambda (e es v) (vec:: e v)))))
+(claim list->vec->list= (Pi ((E U) (es (List E))) (= (List E) es (vec->list E (length E es) (list->vec E es)))))
+(define list->vec->list=
+  (lambda (E es)
+    (ind-List es
+      (lambda (xs) (= (List E) xs (vec->list E (length E xs) (list->vec E xs))))
+      (same nil)
+      (lambda (e es ih) (cong ih (the (-> (List E) (List E)) (lambda (xs) (:: e xs))))))))
+(list->vec->list= Atom (:: 'a (:: 'b nil)))
+list->vec->list=

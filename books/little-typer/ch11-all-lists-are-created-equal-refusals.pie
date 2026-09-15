@@ -1,0 +1,24 @@
+#lang pie
+;; The Little Typer, chapter 11: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; ind-Vec's length must be the target's length
+(ind-Vec 1 (the (Vec Atom 2) (vec:: 'a (vec:: 'b vecnil))) (lambda (k es) Nat) 0 (lambda (k h t n) n))
+
+;; ind-Vec's target must be a Vec
+(ind-Vec 0 (the (List Atom) nil) (lambda (k es) Nat) 0 (lambda (k h t n) n))
+
+;; the motive takes the length and the Vec
+(ind-Vec 1 (the (Vec Atom 1) (vec:: 'a vecnil)) (lambda (es) Nat) 0 (lambda (k h t n) n))
+
+;; the base must have the motive's type at zero and vecnil
+(ind-Vec 0 (the (Vec Atom 0) vecnil) (lambda (k es) Nat) 'zero (lambda (k h t n) n))
+
+;; the step must give the motive's type
+(ind-Vec 1 (the (Vec Atom 1) (vec:: 'a vecnil)) (lambda (k es) Nat) 0 (lambda (k h t n) h))
+
+;; (+ l j) and (+ j l) are not the same normal form while l and j are variables
+(claim + (-> Nat Nat Nat))
+(define + (lambda (n j) (iter-Nat n j (lambda (k) (add1 k)))))
+(the (Pi ((E U) (l Nat) (j Nat)) (-> (Vec E l) (Vec E j) (Vec E (+ j l)))) (lambda (E l j es end) (ind-Vec l es (lambda (k xs) (Vec E (+ k j))) end (lambda (k e xs v) (vec:: e v)))))
