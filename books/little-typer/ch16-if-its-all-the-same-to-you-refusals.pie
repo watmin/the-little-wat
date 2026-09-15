@@ -1,0 +1,19 @@
+#lang pie
+;; The Little Typer, chapter 16: forms Pie refuses, and wat-Pie must refuse too.
+;; Cases are separated by blank lines; each case's last line is the refused form, and the
+;; lines before it are setup (tools/pie-oracle-refusals.sh).
+
+;; 1 = 2 has no proof, so it cannot be decided as left
+(claim Dec (-> U U))
+(define Dec (lambda (X) (Either X (-> X Absurd))))
+(the (Dec (= Nat 1 2)) (left (same 1)))
+
+;; the identity is not a proof that 0 = 0 is absurd
+(claim Dec (-> U U))
+(define Dec (lambda (X) (Either X (-> X Absurd))))
+(the (Dec (= Nat 0 0)) (right (lambda (z) z)))
+
+;; not every n is zero
+(claim Dec (-> U U))
+(define Dec (lambda (X) (Either X (-> X Absurd))))
+(the (Pi ((n Nat)) (Dec (= Nat n zero))) (lambda (n) (left (same zero))))

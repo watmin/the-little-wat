@@ -1,0 +1,65 @@
+#lang pie
+;; The Little Typer, chapter 16 (If It's All the Same to You): Dec, a statement or its
+;; negation, and nat=?, which decides whether two Nats are equal and hands back the proof.
+;; The book's negation is spelled Not here (F-032). Our own examples on the chapter's
+;; topics. Racket's Pie prints each expression's (the TYPE NORMAL-FORM); wat-Pie reads this
+;; same file and must print the same.
+
+(claim Not (-> U U))
+(define Not (lambda (X) (-> X Absurd)))
+(claim Dec (-> U U))
+(define Dec (lambda (X) (Either X (Not X))))
+(Dec (= Nat 1 1))
+
+(claim =consequence (-> Nat Nat U))
+(define =consequence
+  (lambda (n j)
+    (which-Nat n
+      (which-Nat j Trivial (lambda (j-1) Absurd))
+      (lambda (n-1) (which-Nat j Absurd (lambda (j-1) (= Nat n-1 j-1)))))))
+(claim =consequence-same (Pi ((n Nat)) (=consequence n n)))
+(define =consequence-same
+  (lambda (n) (ind-Nat n (lambda (k) (=consequence k k)) sole (lambda (n-1 =consequence-n-1) (same n-1)))))
+(claim use-Nat= (Pi ((n Nat) (j Nat)) (-> (= Nat n j) (=consequence n j))))
+(define use-Nat= (lambda (n j n=j) (replace n=j (lambda (k) (=consequence n k)) (=consequence-same n))))
+(claim zero-not-add1 (Pi ((n Nat)) (Not (= Nat zero (add1 n)))))
+(define zero-not-add1 (lambda (n) (use-Nat= zero (add1 n))))
+(claim sub1= (Pi ((n Nat) (j Nat)) (-> (= Nat (add1 n) (add1 j)) (= Nat n j))))
+(define sub1= (lambda (n j) (use-Nat= (add1 n) (add1 j))))
+
+(claim zero? (Pi ((j Nat)) (Dec (= Nat zero j))))
+(define zero?
+  (lambda (j)
+    (ind-Nat j (lambda (k) (Dec (= Nat zero k))) (left (same zero)) (lambda (j-1 zero?-j-1) (right (zero-not-add1 j-1))))))
+(zero? 0)
+(zero? 3)
+zero?
+
+(claim add1-not-zero (Pi ((n Nat)) (Not (= Nat (add1 n) zero))))
+(define add1-not-zero (lambda (n) (use-Nat= (add1 n) zero)))
+(claim dec-add1= (Pi ((n-1 Nat) (j-1 Nat)) (-> (Dec (= Nat n-1 j-1)) (Dec (= Nat (add1 n-1) (add1 j-1))))))
+(define dec-add1=
+  (lambda (n-1 j-1 eq-or-not)
+    (ind-Either eq-or-not
+      (lambda (target) (Dec (= Nat (add1 n-1) (add1 j-1))))
+      (lambda (yes) (left (cong yes (the (-> Nat Nat) (lambda (k) (add1 k))))))
+      (lambda (no) (right (lambda (n=j) (no (sub1= n-1 j-1 n=j))))))))
+dec-add1=
+
+(claim nat=? (Pi ((n Nat) (j Nat)) (Dec (= Nat n j))))
+(define nat=?
+  (lambda (n j)
+    ((ind-Nat n
+       (lambda (k) (Pi ((j Nat)) (Dec (= Nat k j))))
+       zero?
+       (lambda (n-1 nat=?-n-1 j)
+         (ind-Nat j
+           (lambda (k) (Dec (= Nat (add1 n-1) k)))
+           (right (add1-not-zero n-1))
+           (lambda (j-1 nat=?-add1-n-1-j-1) (dec-add1= n-1 j-1 (nat=?-n-1 j-1))))))
+     j)))
+(nat=? 0 0)
+(nat=? 3 3)
+(nat=? 4 0)
+(nat=? 2 5)
+(the (Pi ((n Nat)) (Dec (= Nat (add1 n) 0))) (lambda (n) (nat=? (add1 n) 0)))

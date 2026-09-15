@@ -1,0 +1,3 @@
+refused: The expressions 2 and 1 are not the same Nat
+refused: Expected Absurd but given (= Nat 0 0)
+refused: The expressions n and zero are not the same Nat
