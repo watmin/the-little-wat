@@ -68,6 +68,11 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
   binder.
 - **F-028:** nested arms never count as covering a variant, even when together they cover
   it completely, so the checker demands a binder fallback: a catch-all one level down.
+- **F-029:** a generic fn over `(Surface :- [T])` refuses a non-generic type that extends
+  the surface at a concrete argument. Stone 118.3-B's bind-then-unify covers only
+  parametric actual types, so an ML functor over a signature cannot be written once.
+- **F-030:** printing a newtype value panics the Rust runtime
+  (`wat-edn/src/value.rs:328`, `Keyword::new("0")`): its field is named `0`.
 
 ## Classes
 
@@ -1195,6 +1200,75 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   is a nullary function, `[:-> :u::T.Nil]`, not the value, which is exactly the type F-020
   reported.
 - **Class:** CLEAN.
+
+### F-029: a generic fn over a parametric surface refuses a non-generic type that extends it, so a signature-typed functor cannot be written once
+
+- **Where:** The Little MLer ch 10. `functor PON (structure a_N : N) = struct fun plus …`
+  is one `plus` for any structure matching signature `N`.
+- **Encoding:** a signature is a surface over its abstract type,
+  `(:wat::core::defsurface :ml::N :- [T] … :features [(conceal …) (succ …) …])`. A structure
+  is a struct that implements it with `extend-type` at its representation:
+  `(:wat::core::extend-type :ml::NumberAsInt (:ml::N :- [:wat::core::i64]) …)`. That much is
+  accepted, and so are feature calls through a surface-typed parameter.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - A generic `(:wat::core::defn :ml::plus :- [T] [m <- (:ml::N :- [T]) a <- T b <- T] -> T …)`,
+    given either structure, is refused (`probes/ml/signature-functor.wat`):
+    > `:ml::plus: parameter #1 expects (:ml::N :- [:?6254]); got :ml::NumberAsInt`
+  - The same fn written at a concrete argument, `[m <- (:ml::N :- [:wat::core::i64]) …]`,
+    accepts `NumberAsInt` and answers 3 (`probes/ml/surface-concrete-param.wat`).
+  - The documented case works: a generic fn over `(:wat::core::Seqable :- [T])` given a
+    Vector (`probes/ml/surface-seqable-control.wat`).
+- **Mechanism** (read in the source): when the actual type is a plain path, the
+  surface-bound check matches the extend-type edge against the expected type's **full
+  parametric string**. `types.rs:2151` stores the edge verbatim (see the comment around
+  `check.rs:17226–17240`). A bound holding a fresh variable, `(:ml::N :- [:?6254])`, never
+  equals `(:ml::N :- [:wat::core::i64])`. Stone 118.3-B's fix, bind the surface's parameters
+  and unify, sits only in the arm where both types are parametric (`check.rs:17269–17300`).
+- **So:** a functor written against a signature has to be written once per structure. The
+  working route is a dictionary: a generic struct of functions (C-023).
+- **Class:** GAP. The fix is Stone 118.3-B's unify for the plain-path arm too.
+- **Repro:** the probes above.
+
+### C-023: ML's functors port as dictionaries: generic structs of functions, built from surface structures
+
+- **How:**
+  - Signature `N` is also a generic struct of functions, `(:ml::NOps :- [T])`.
+  - Each structure yields one, `NumberAsInt` at `i64` and `NumberAsNum` at `num`.
+  - Functor `PON` is a generic fn from an `N` dictionary to a `P` dictionary, whose `plus`
+    is a closure over its argument.
+- **What happened** (2026-09-14, wat-rs `a3218644d`): one generic `plus` answers 1 + 2 = 3
+  through both representations (`probes/ml/functor-dictionary.wat`). Generic structs
+  holding functions unify as C-010's `Knot` already showed.
+- **Cost:** a dictionary is passed by hand, where ML's functor application is checked once
+  at the module level. And the representation type stays visible to the dictionary's user;
+  ML's opaque `:>` has no counterpart here. (A `newtype` is opaque to arithmetic, but see
+  F-030.)
+- **Class:** CLEAN, with the cost noted.
+- **Repro:** `probes/ml/functor-dictionary.wat`; `books/little-mler/ch10-building-on-blocks.wat`.
+
+### F-030: printing a newtype value panics the Rust runtime
+
+- **Where:** The Little MLer ch 10, sealing a structure's representation (ML's `:>`) with
+  `(:wat::core::newtype :u::N :wat::core::i64)`.
+- **What happened** (2026-09-14, wat-rs `a3218644d`):
+  - `(:u::N 5)` builds a value, `=` compares two, and `(:u::N/0 n)` unwraps it
+    (`probes/ml/newtype-construct.wat`, `newtype-equal.wat`, `newtype-unwrap-0.wat`).
+    `/inner` and `/value` are unresolved. wat-rs itself has no `.wat` use of `newtype`.
+  - Arithmetic on it is refused at startup, so it is opaque:
+    `no clause of :wat::core::+ matches arity 2 with types [:u::N, :wat::core::i64]`
+    (`probes/ml/newtype-plus.wat`).
+  - `(:wat::kernel::println (:u::N 5))` passes the checker and then panics, exit 2
+    (`probes/ml/newtype-value.wat`):
+    > `thread 'main' panicked at crates/wat-edn/src/value.rs:328:33: invalid keyword name "0": first character must be non-numeric`
+- **Mechanism, in part:** the value's one field is named `0` (hence `/0`). Rendering it as
+  EDN makes a keyword of the field name, and `Keyword::new` panics on a leading digit
+  (`value.rs:324–329`). I have not found the rendering code that calls it.
+- **So:** a newtype can be built, compared and unwrapped, but never printed. Any path that
+  renders one as EDN (printing, a failed assertion's report, maybe crossing a service
+  boundary, untested) takes the process down with a Rust panic instead of a wat error.
+- **Class:** GAP (a defect: a Rust panic reachable from well-typed wat). The `/0` accessor
+  is an odd spelling too; a name like `/value` would read better.
+- **Repro:** `probes/ml/newtype-value.wat`.
 
 ### F-026: the retired nested pattern `(Variant binders…)` passes the checker and fails at runtime
 
