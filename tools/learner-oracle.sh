@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tools/learner-oracle.sh: run a Little Learner chapter's oracle, oracle/learner/NAME.rkt,
 # under Racket with malt (the book's own library, MIT; `raco pkg install --auto malt`),
-# and keep its shown values, one per line, in oracle/learner/NAME.expected.
+# and keep its shown values, one per line, in oracle/learner/NAME.expected (and any
+# recorded random draws in oracle/learner/NAME.draws).
 #
 # Usage: tools/learner-oracle.sh ch01-the-lines-sleep-tonight
 set -u
@@ -17,3 +18,10 @@ if [ $rc -ne 0 ]; then
 fi
 printf '%s\n' "$raw" | sed -n 's/^=> //p' > "$out"
 echo "learner-oracle: $(wc -l < "$out") values -> $out"
+# Random draws malt will make, recorded ahead of time (see oracle/learner/show.rkt's
+# record-draws), one batch of numbers per line, replayed by the wat side.
+draws="oracle/learner/$name.draws"
+if printf '%s\n' "$raw" | grep -q '^draws=> '; then
+  printf '%s\n' "$raw" | sed -n 's/^draws=> //p' > "$draws"
+  echo "learner-oracle: $(wc -l < "$draws") draw lines -> $draws"
+fi
