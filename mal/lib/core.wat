@@ -6,7 +6,50 @@
 
 (:wat::core::defn :mal::core-names [] -> :mal::Strs
   ["+" "-" "*" "/" "<" "<=" ">" ">=" "=" "list" "list?" "empty?" "count" "not" "pr-str" "str" "prn" "println"
-   "cons" "concat" "vec" "nth" "first" "rest" "macro?"])
+   "cons" "concat" "vec" "nth" "first" "rest" "macro?"
+   "nil?" "true?" "false?" "symbol?" "symbol" "keyword" "keyword?" "vector" "vector?" "sequential?"
+   "hash-map" "map?" "assoc" "dissoc" "get" "contains?" "keys" "vals"])
+
+;; ---- hash-maps: keys and values alternate in a Vector, in the order they were added
+
+;; the index of key k, or -1
+(:wat::core::defn :mal::kv-index [kvs <- :mal::Vals k <- :mal::Val i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= (:wat::core::+ i 1) (:wat::core::length kvs))
+    -1
+    (:wat::core::if (:mal::equal? (:wat::core::nth kvs i) k) i (:mal::kv-index kvs k (:wat::core::+ i 2)))))
+
+(:wat::core::defn :mal::kv-assoc [kvs <- :mal::Vals k <- :mal::Val v <- :mal::Val] -> :mal::Vals
+  (:wat::core::let [i (:mal::kv-index kvs k 0)]
+    (:wat::core::if (:wat::core::< i 0)
+      (:wat::core::conj (:wat::core::conj kvs k) v)
+      (:wat::core::concat (:wat::core::conj (:wat::core::into (:wat::core::Vector :- [:mal::Val]) (:wat::core::take kvs (:wat::core::+ i 1))) v)
+                          (:wat::core::into (:wat::core::Vector :- [:mal::Val]) (:wat::core::drop kvs (:wat::core::+ i 2)))))))
+
+(:wat::core::defn :mal::kv-assoc-all [kvs <- :mal::Vals args <- :mal::Vals] -> :mal::Vals
+  (:wat::core::if (:wat::core::< (:wat::core::length args) 2)
+    kvs
+    (:mal::kv-assoc-all (:mal::kv-assoc kvs (:wat::core::first args) (:wat::core::second args)) (:wat::core::rest (:wat::core::rest args)))))
+
+(:wat::core::defn :mal::kv-dissoc-all [kvs <- :mal::Vals ks <- :mal::Vals] -> :mal::Vals
+  (:wat::core::if (:wat::core::empty? ks)
+    kvs
+    (:wat::core::let [i (:mal::kv-index kvs (:wat::core::first ks) 0)]
+      (:mal::kv-dissoc-all
+        (:wat::core::if (:wat::core::< i 0)
+          kvs
+          (:wat::core::concat (:wat::core::into (:wat::core::Vector :- [:mal::Val]) (:wat::core::take kvs i))
+                              (:wat::core::into (:wat::core::Vector :- [:mal::Val]) (:wat::core::drop kvs (:wat::core::+ i 2)))))
+        (:wat::core::rest ks)))))
+
+(:wat::core::defn :mal::kv-get [kvs <- :mal::Vals k <- :mal::Val] -> :mal::Val
+  (:wat::core::let [i (:mal::kv-index kvs k 0)]
+    (:wat::core::if (:wat::core::< i 0) (:mal::nil) (:wat::core::nth kvs (:wat::core::+ i 1)))))
+
+(:wat::core::defn :mal::every-other [xs <- :mal::Vals] -> :mal::Vals
+  (:wat::core::into (:wat::core::Vector :- [:mal::Val]) (:wat::core::take-nth 2 xs)))
+
+(:wat::core::defn :mal::kind-is? [v <- :mal::Val k <- :wat::core::keyword] -> :mal::Res
+  (:mal::ok (:mal::bool (:wat::core::= (:mal::kind-of v) k))))
 
 ;; a list's or a vector's elements, and nil's none
 (:wat::core::defn :mal::items-or-none [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
@@ -126,4 +169,52 @@
           (:mal::ok (:mal::list (:wat::core::if (:wat::core::empty? xs) xs (:wat::core::rest xs))))]
         [:wat::core::Option.None {} (:mal::fail "rest: expected a list")]))
     ((:wat::core::= name "macro?") (:mal::ok (:mal::bool (:wat::core::= (:mal::kind-of (:mal::first-arg args)) :macro))))
+    ((:wat::core::= name "nil?") (:mal::kind-is? (:mal::first-arg args) :nil))
+    ((:wat::core::= name "true?") (:mal::kind-is? (:mal::first-arg args) :true))
+    ((:wat::core::= name "false?") (:mal::kind-is? (:mal::first-arg args) :false))
+    ((:wat::core::= name "symbol?") (:mal::kind-is? (:mal::first-arg args) :sym))
+    ((:wat::core::= name "keyword?") (:mal::kind-is? (:mal::first-arg args) :kw))
+    ((:wat::core::= name "vector?") (:mal::kind-is? (:mal::first-arg args) :vec))
+    ((:wat::core::= name "map?") (:mal::kind-is? (:mal::first-arg args) :map))
+    ((:wat::core::= name "sequential?")
+      (:wat::core::let [k (:mal::kind-of (:mal::first-arg args))]
+        (:mal::ok (:mal::bool (:wat::core::or (:wat::core::= k :list) (:wat::core::= k :vec))))))
+    ((:wat::core::= name "symbol")
+      (:wat::core::match (:mal::str-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value s} (:mal::ok (:mal::sym s))]
+        [:wat::core::Option.None {} (:mal::fail "symbol: expected a string")]))
+    ((:wat::core::= name "keyword")
+      (:wat::core::if (:wat::core::= (:mal::kind-of (:mal::first-arg args)) :kw)
+        (:mal::ok (:mal::first-arg args))
+        (:wat::core::match (:mal::str-of (:mal::first-arg args))
+          [:wat::core::Option.Some {:value s} (:mal::ok (:mal::kw s))]
+          [:wat::core::Option.None {} (:mal::fail "keyword: expected a string")])))
+    ((:wat::core::= name "vector") (:mal::ok (:mal::vec args)))
+    ((:wat::core::= name "hash-map") (:mal::ok (:mal::map (:mal::kv-assoc-all (:wat::core::Vector :- [:mal::Val]) args))))
+    ((:wat::core::= name "assoc")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs} (:mal::ok (:mal::map (:mal::kv-assoc-all kvs (:wat::core::rest args))))]
+        [:wat::core::Option.None {} (:mal::fail "assoc: expected a hash-map")]))
+    ((:wat::core::= name "dissoc")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs} (:mal::ok (:mal::map (:mal::kv-dissoc-all kvs (:wat::core::rest args))))]
+        [:wat::core::Option.None {} (:mal::fail "dissoc: expected a hash-map")]))
+    ;; get and contains? of anything but a hash-map (nil, above all) find nothing
+    ((:wat::core::= name "get")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs} (:mal::ok (:mal::kv-get kvs (:mal::first-arg (:wat::core::rest args))))]
+        [:wat::core::Option.None {} (:mal::ok (:mal::nil))]))
+    ((:wat::core::= name "contains?")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs} (:mal::ok (:mal::bool (:wat::core::>= (:mal::kv-index kvs (:mal::first-arg (:wat::core::rest args)) 0) 0)))]
+        [:wat::core::Option.None {} (:mal::ok (:mal::false))]))
+    ((:wat::core::= name "keys")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs} (:mal::ok (:mal::list (:mal::every-other kvs)))]
+        [:wat::core::Option.None {} (:mal::fail "keys: expected a hash-map")]))
+    ((:wat::core::= name "vals")
+      (:wat::core::match (:mal::kvs-of (:mal::first-arg args))
+        [:wat::core::Option.Some {:value kvs}
+          (:mal::ok (:mal::list (:wat::core::if (:wat::core::empty? kvs) kvs (:mal::every-other (:wat::core::rest kvs)))))]
+        [:wat::core::Option.None {} (:mal::fail "vals: expected a hash-map")]))
     (:else (:mal::fail (:wat::string::concat "unknown builtin " name)))))

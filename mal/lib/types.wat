@@ -230,6 +230,24 @@
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
     [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
+;; a hash-map's keys and values, alternating
+(:wat::core::defn :mal::kvs-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
+  (:wat::core::match v
+    [:mal::Val.Map {:kvs xs} (:wat::core::Option.Some {:value xs})]
+    [:mal::Val.Nil {} (:wat::core::Option.None {})]
+    [:mal::Val.True {} (:wat::core::Option.None {})]
+    [:mal::Val.False {} (:wat::core::Option.None {})]
+    [:mal::Val.Int {:n n} (:wat::core::Option.None {})]
+    [:mal::Val.Str {:s s} (:wat::core::Option.None {})]
+    [:mal::Val.Sym {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Kw {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.List {:items x} (:wat::core::Option.None {})]
+    [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
+    [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
+
 ;; a value's variant, as a keyword: written once with every variant, so a test of a value's kind
 ;; elsewhere is a comparison, not another match of every variant
 (:wat::core::defn :mal::kind-of [v <- :mal::Val] -> :wat::core::keyword
