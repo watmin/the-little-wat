@@ -1,0 +1,619 @@
+;; books/little-typer/lib/pie.wat: wat-Pie, our own checker and evaluator for Pie, the
+;; language of The Little Typer. It uses normalization by evaluation with bidirectional type
+;; checking, the published technique Pie itself is built on. Racket's Pie is AGPL-3.0; it is
+;; run as the oracle (tools/pie-oracle.sh) and never read into this.
+;;
+;; v0 covers the language of chapters 1 and 2: U, Atom, 'atoms, Nat, zero, add1, numerals,
+;; Pair and Sigma, cons, car, cdr, -> and Pi, lambda, application, the, claim, define,
+;; check-same.
+;;
+;; Everything is an S-expression (:wat::WatAST), as in the J-Bob port:
+;; - values:   (VU) (VAtom) (VNat) (VZero) (VAdd1 v) (VQuote x)
+;;             (VPi x dom clos) (VSigma x car-type clos) (VLam x clos) (VCons a d)
+;;             (VNeu type neutral)
+;; - closures: (CLOS env x body): an environment, a variable, a body still in source form
+;; - neutrals: (NVar x) (NApp neutral arg-type arg) (NCar neutral) (NCdr neutral)
+;; - an environment is a list of (name value); a context a list of (name kind type [value]),
+;;   kind being claim, def or var.
+;; Reading back gives raw terms (one binder per Pi, Sigma and lambda), compared by
+;; alpha-equivalence. A separate pass resugars them for printing, the way Pie prints.
+;;
+;; Needs ../little-schemer/lib/ch01-toys.wat and ch04-numbers-games.wat (:ls::ast->i64).
+
+;; ---- S-expressions
+
+(:wat::core::typealias :pie::Es (:wat::core::Vector :- [:wat::WatAST]))
+(:wat::core::typealias :pie::Names (:wat::core::Vector :- [:wat::core::String]))
+
+(:wat::core::defn :pie::fail :- [T] [msg <- :wat::core::String] -> :T
+  (:wat::kernel::assertion-failed! :message (:wat::string::concat "wat-Pie: " msg)))
+
+(:wat::core::defn :pie::mk [kids <- :pie::Es] -> :wat::WatAST
+  (:wat::core::with-children (:wat::core::quote (t)) kids))
+
+(:wat::core::defn :pie::sym [name <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::symbol-node name))
+
+(:wat::core::defn :pie::kids [e <- :wat::WatAST] -> :pie::Es
+  (:wat::core::ast->children e))
+
+(:wat::core::defn :pie::list? [e <- :wat::WatAST] -> :wat::core::bool
+  (:wat::core::= (:wat::core::ast-kind e) "list"))
+
+;; A symbol's name. wat's reader turns a nested 'x into a keyword-headed quote, reads Pie's
+;; :: as a keyword and nil as its own nil literal; each gets its Pie name here.
+(:wat::core::defn :pie::name-of [e <- :wat::WatAST] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= (:wat::core::ast-kind e) "symbol") (:wat::core::ast-name e))
+    ((:wat::core::= (:wat::core::ast-kind e) "keyword")
+      (:wat::core::if (:wat::core::= (:wat::core::ast->source e) ":wat::core::quote") "quote" (:wat::core::ast->source e)))
+    ((:wat::core::= (:wat::core::ast-kind e) "nil") "nil")
+    (:else "")))
+
+(:wat::core::defn :pie::head [e <- :wat::WatAST] -> :wat::core::String
+  (:wat::core::if (:pie::list? e)
+    (:wat::core::let [ks (:pie::kids e)]
+      (:wat::core::if (:wat::core::empty? ks) "" (:pie::name-of (:wat::core::first ks))))
+    ""))
+
+(:wat::core::defn :pie::nth [xs <- :pie::Es i <- :wat::core::i64] -> :wat::WatAST
+  (:wat::core::if (:wat::core::= i 0) (:wat::core::first xs) (:pie::nth (:wat::core::rest xs) (:wat::core::- i 1))))
+
+;; The i-th argument of a form, after its head.
+(:wat::core::defn :pie::arg [e <- :wat::WatAST i <- :wat::core::i64] -> :wat::WatAST
+  (:pie::nth (:pie::kids e) (:wat::core::+ i 1)))
+
+(:wat::core::defn :pie::args [e <- :wat::WatAST] -> :pie::Es
+  (:wat::core::rest (:pie::kids e)))
+
+(:wat::core::defn :pie::tag? [v <- :wat::WatAST tag <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::= (:pie::head v) tag))
+
+(:wat::core::defn :pie::t0 [tag <- :wat::core::String] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag))))
+(:wat::core::defn :pie::t1 [tag <- :wat::core::String a <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a)))
+(:wat::core::defn :pie::t2 [tag <- :wat::core::String a <- :wat::WatAST b <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a b)))
+(:wat::core::defn :pie::t3 [tag <- :wat::core::String a <- :wat::WatAST b <- :wat::WatAST c <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym tag) a b c)))
+
+(:wat::core::defn :pie::int-node [n <- :wat::core::i64] -> :wat::WatAST
+  (:wat::core::quasiquote ~n))
+
+(:wat::core::defn :pie::member? [xs <- :pie::Names x <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::if (:wat::core::empty? xs)
+    false
+    (:wat::core::if (:wat::core::= (:wat::core::first xs) x) true (:pie::member? (:wat::core::rest xs) x))))
+
+;; ---- environments and closures
+
+(:wat::core::defn :pie::bind [env <- :wat::WatAST x <- :wat::core::String v <- :wat::WatAST] -> :wat::WatAST
+  (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) v)))
+                                (:pie::kids env))))
+
+(:wat::core::defn :pie::lookup [bs <- :pie::Es x <- :wat::core::String] -> (:wat::core::Option :- [:wat::WatAST])
+  (:wat::core::if (:wat::core::empty? bs)
+    :wat::core::Option.None
+    (:wat::core::let [b (:pie::kids (:wat::core::first bs))]
+      (:wat::core::if (:wat::core::= (:pie::name-of (:wat::core::first b)) x)
+        (:wat::core::Option.Some {:value (:pie::nth b 1)})
+        (:pie::lookup (:wat::core::rest bs) x)))))
+
+(:wat::core::defn :pie::clos [env <- :wat::WatAST x <- :wat::core::String body <- :wat::WatAST] -> :wat::WatAST
+  (:pie::t3 "CLOS" env (:pie::sym x) body))
+
+;; Run a closure's body with its variable bound to v.
+(:wat::core::defn :pie::inst [c <- :wat::WatAST v <- :wat::WatAST] -> :wat::WatAST
+  (:pie::eval (:pie::bind (:pie::arg c 0) (:pie::name-of (:pie::arg c 1)) v) (:pie::arg c 2)))
+
+;; ---- evaluation
+
+(:wat::core::defn :pie::numeral [n <- :wat::core::i64] -> :wat::WatAST
+  (:wat::core::if (:wat::core::= n 0) (:pie::t0 "VZero") (:pie::t1 "VAdd1" (:pie::numeral (:wat::core::- n 1)))))
+
+(:wat::core::defn :pie::eval [env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [k (:wat::core::ast-kind e)]
+    (:wat::core::cond
+      ((:wat::core::= k "int") (:pie::numeral (:ls::ast->i64 e)))
+      ((:wat::core::= k "symbol") (:pie::eval-var env (:wat::core::ast-name e)))
+      ((:pie::list? e) (:pie::eval-form env e (:pie::head e)))
+      (:else (:pie::fail (:wat::string::concat "cannot evaluate " (:wat::core::ast->source e)))))))
+
+(:wat::core::defn :pie::eval-var [env <- :wat::WatAST name <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::= name "U") (:pie::t0 "VU"))
+    ((:wat::core::= name "Atom") (:pie::t0 "VAtom"))
+    ((:wat::core::= name "Nat") (:pie::t0 "VNat"))
+    ((:wat::core::= name "zero") (:pie::t0 "VZero"))
+    (:else
+      (:wat::core::match (:pie::lookup (:pie::kids env) name)
+        [:wat::core::Option.Some {:value v} v]
+        [:wat::core::Option.None {} (:pie::fail (:wat::string::concat "unbound variable " name))]))))
+
+(:wat::core::defn :pie::eval-form [env <- :wat::WatAST e <- :wat::WatAST h <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::= h "quote") (:pie::t1 "VQuote" (:pie::arg e 0)))
+    ((:wat::core::= h "add1") (:pie::t1 "VAdd1" (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "the") (:pie::eval env (:pie::arg e 1)))
+    ((:wat::core::= h "Pair") (:pie::t3 "VSigma" (:pie::sym "_") (:pie::eval env (:pie::arg e 0)) (:pie::clos env "_" (:pie::arg e 1))))
+    ((:wat::core::= h "->") (:pie::eval-arrow env (:pie::args e)))
+    ((:wat::core::= h "Pi") (:pie::eval-binder env "VPi" "Pi" (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+    ((:wat::core::= h "Sigma") (:pie::eval-binder env "VSigma" "Sigma" (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+    ((:wat::core::= h "lambda") (:pie::eval-lambda env (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+    ((:wat::core::= h "cons") (:pie::t2 "VCons" (:pie::eval env (:pie::arg e 0)) (:pie::eval env (:pie::arg e 1))))
+    ((:wat::core::= h "car") (:pie::do-car (:pie::eval env (:pie::arg e 0))))
+    ((:wat::core::= h "cdr") (:pie::do-cdr (:pie::eval env (:pie::arg e 0))))
+    (:else (:pie::eval-app env (:pie::eval env (:wat::core::first (:pie::kids e))) (:pie::args e)))))
+
+;; (-> A B C) is (Pi ((_ A)) (-> B C)).
+(:wat::core::defn :pie::eval-arrow [env <- :wat::WatAST as <- :pie::Es] -> :wat::WatAST
+  (:wat::core::let [rest (:wat::core::rest as)
+                    body (:wat::core::if (:wat::core::= (:wat::core::length rest) 1)
+                           (:wat::core::first rest)
+                           (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "->")) rest)))]
+    (:pie::t3 "VPi" (:pie::sym "_") (:pie::eval env (:wat::core::first as)) (:pie::clos env "_" body))))
+
+;; (Pi ((x A) (y B)) C) is (Pi ((x A)) (Pi ((y B)) C)); the same for Sigma.
+(:wat::core::defn :pie::eval-binder [env <- :wat::WatAST vtag <- :wat::core::String stag <- :wat::core::String binders <- :pie::Es body <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [b (:pie::kids (:wat::core::first binders))
+                    x (:pie::name-of (:wat::core::first b))
+                    more (:wat::core::rest binders)
+                    inner (:wat::core::if (:wat::core::empty? more)
+                            body
+                            (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym stag) (:pie::mk more) body)))]
+    (:pie::t3 vtag (:pie::sym x) (:pie::eval env (:pie::nth b 1)) (:pie::clos env x inner))))
+
+(:wat::core::defn :pie::eval-lambda [env <- :wat::WatAST names <- :pie::Es body <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [x (:pie::name-of (:wat::core::first names))
+                    more (:wat::core::rest names)
+                    inner (:wat::core::if (:wat::core::empty? more)
+                            body
+                            (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "lambda") (:pie::mk more) body)))]
+    (:pie::t2 "VLam" (:pie::sym x) (:pie::clos env x inner))))
+
+(:wat::core::defn :pie::eval-app [env <- :wat::WatAST f <- :wat::WatAST as <- :pie::Es] -> :wat::WatAST
+  (:wat::core::if (:wat::core::empty? as)
+    f
+    (:pie::eval-app env (:pie::do-ap f (:pie::eval env (:wat::core::first as))) (:wat::core::rest as))))
+
+(:wat::core::defn :pie::do-ap [f <- :wat::WatAST a <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? f "VLam") (:pie::inst (:pie::arg f 1) a))
+    ((:pie::tag? f "VNeu")
+      (:wat::core::let [t (:pie::arg f 0)]
+        (:pie::t2 "VNeu" (:pie::inst (:pie::arg t 2) a) (:pie::t3 "NApp" (:pie::arg f 1) (:pie::arg t 1) a))))
+    (:else (:pie::fail (:wat::string::concat "applying a non-function: " (:wat::core::ast->source f))))))
+
+(:wat::core::defn :pie::do-car [p <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? p "VCons") (:pie::arg p 0))
+    ((:pie::tag? p "VNeu") (:pie::t2 "VNeu" (:pie::arg (:pie::arg p 0) 1) (:pie::t1 "NCar" (:pie::arg p 1))))
+    (:else (:pie::fail "car of a non-pair"))))
+
+(:wat::core::defn :pie::do-cdr [p <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? p "VCons") (:pie::arg p 1))
+    ((:pie::tag? p "VNeu")
+      (:pie::t2 "VNeu" (:pie::inst (:pie::arg (:pie::arg p 0) 2) (:pie::do-car p)) (:pie::t1 "NCdr" (:pie::arg p 1))))
+    (:else (:pie::fail "cdr of a non-pair"))))
+
+;; ---- reading back
+
+(:wat::core::defn :pie::subscript [i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= i 1) "₁") ((:wat::core::= i 2) "₂") ((:wat::core::= i 3) "₃")
+    ((:wat::core::= i 4) "₄") ((:wat::core::= i 5) "₅") ((:wat::core::= i 6) "₆")
+    ((:wat::core::= i 7) "₇") ((:wat::core::= i 8) "₈") ((:wat::core::= i 9) "₉")
+    (:else (:wat::i64::to-string i))))
+
+(:wat::core::defn :pie::fresh-n [used <- :pie::Names base <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [c (:wat::string::concat base (:pie::subscript i))]
+    (:wat::core::if (:pie::member? used c) (:pie::fresh-n used base (:wat::core::+ i 1)) c)))
+
+;; A name not in use: x itself, or x with a subscript, as Pie picks them.
+(:wat::core::defn :pie::fresh [used <- :pie::Names x <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [base (:wat::core::if (:wat::core::= x "_") "x" x)]
+    (:wat::core::if (:pie::member? used base) (:pie::fresh-n used base 1) base)))
+
+(:wat::core::defn :pie::var-value [type <- :wat::WatAST x <- :wat::core::String] -> :wat::WatAST
+  (:pie::t2 "VNeu" type (:pie::t1 "NVar" (:pie::sym x))))
+
+(:wat::core::defn :pie::rb-type [used <- :pie::Names v <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? v "VU") (:pie::sym "U"))
+    ((:pie::tag? v "VAtom") (:pie::sym "Atom"))
+    ((:pie::tag? v "VNat") (:pie::sym "Nat"))
+    ((:pie::tag? v "VPi") (:pie::rb-binder used v "Pi"))
+    ((:pie::tag? v "VSigma") (:pie::rb-binder used v "Sigma"))
+    ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
+    (:else (:pie::fail (:wat::string::concat "not a type: " (:wat::core::ast->source v))))))
+
+(:wat::core::defn :pie::rb-binder [used <- :pie::Names v <- :wat::WatAST stag <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::let [x (:pie::fresh used (:pie::name-of (:pie::arg v 0)))
+                    dom (:pie::arg v 1)
+                    body-t (:pie::inst (:pie::arg v 2) (:pie::var-value dom x))]
+    (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                (:pie::sym stag)
+                (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::rb-type used dom)))))
+                (:pie::rb-type (:wat::core::conj used x) body-t)))))
+
+;; The normal form of value v at type t: functions and pairs are eta-expanded.
+(:wat::core::defn :pie::rb [used <- :pie::Names t <- :wat::WatAST v <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? t "VU") (:pie::rb-type used v))
+    ((:pie::tag? t "VPi")
+      (:wat::core::let [y (:pie::fresh used (:wat::core::if (:pie::tag? v "VLam") (:pie::name-of (:pie::arg v 0)) (:pie::name-of (:pie::arg t 0))))
+                        a (:pie::var-value (:pie::arg t 1) y)]
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym "lambda")
+                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym y)))
+                    (:pie::rb (:wat::core::conj used y) (:pie::inst (:pie::arg t 2) a) (:pie::do-ap v a))))))
+    ((:pie::tag? t "VSigma")
+      (:wat::core::let [a (:pie::do-car v)]
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym "cons")
+                    (:pie::rb used (:pie::arg t 1) a)
+                    (:pie::rb used (:pie::inst (:pie::arg t 2) a) (:pie::do-cdr v))))))
+    ((:pie::tag? v "VNeu") (:pie::rb-neu used (:pie::arg v 1)))
+    ((:pie::tag? v "VQuote") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "quote") (:pie::arg v 0))))
+    ((:pie::tag? v "VZero") (:pie::sym "zero"))
+    ((:pie::tag? v "VAdd1") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "add1") (:pie::rb used t (:pie::arg v 0)))))
+    (:else (:pie::fail (:wat::string::concat "cannot read back " (:wat::core::ast->source v))))))
+
+(:wat::core::defn :pie::rb-neu [used <- :pie::Names ne <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:pie::tag? ne "NVar") (:pie::arg ne 0))
+    ((:pie::tag? ne "NApp")
+      (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::rb-neu used (:pie::arg ne 0)) (:pie::rb used (:pie::arg ne 1) (:pie::arg ne 2)))))
+    ((:pie::tag? ne "NCar") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "car") (:pie::rb-neu used (:pie::arg ne 0)))))
+    ((:pie::tag? ne "NCdr") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "cdr") (:pie::rb-neu used (:pie::arg ne 0)))))
+    (:else (:pie::fail (:wat::string::concat "cannot read back neutral " (:wat::core::ast->source ne))))))
+
+;; ---- alpha-equivalence of raw read-backs (one binder per lambda, Pi, Sigma)
+
+(:wat::core::defn :pie::index-of [xs <- :pie::Names x <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::empty? xs)
+    -1
+    (:wat::core::if (:wat::core::= (:wat::core::first xs) x) i (:pie::index-of (:wat::core::rest xs) x (:wat::core::+ i 1)))))
+
+(:wat::core::defn :pie::push [xs <- :pie::Names x <- :wat::core::String] -> :pie::Names
+  (:wat::core::concat (:wat::core::Vector :- [:wat::core::String] x) xs))
+
+(:wat::core::defn :pie::alpha? [a <- :wat::WatAST b <- :wat::WatAST la <- :pie::Names lb <- :pie::Names] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::if (:wat::core::= (:wat::core::ast-kind a) "symbol") (:wat::core::= (:wat::core::ast-kind b) "symbol") false)
+      (:wat::core::let [ia (:pie::index-of la (:wat::core::ast-name a) 0)
+                        ib (:pie::index-of lb (:wat::core::ast-name b) 0)]
+        (:wat::core::if (:wat::core::= ia ib)
+          (:wat::core::if (:wat::core::= ia -1) (:wat::core::= (:wat::core::ast-name a) (:wat::core::ast-name b)) true)
+          false)))
+    ((:wat::core::if (:pie::list? a) (:pie::list? b) false)
+      (:wat::core::let [ha (:pie::head a)]
+        (:wat::core::cond
+          ((:wat::core::not (:wat::core::= ha (:pie::head b))) false)
+          ((:wat::core::= ha "lambda")
+            (:pie::alpha? (:pie::arg a 1) (:pie::arg b 1)
+                          (:pie::push la (:pie::name-of (:wat::core::first (:pie::kids (:pie::arg a 0)))))
+                          (:pie::push lb (:pie::name-of (:wat::core::first (:pie::kids (:pie::arg b 0)))))))
+          ((:wat::core::if (:wat::core::= ha "Pi") true (:wat::core::= ha "Sigma"))
+            (:wat::core::let [ba (:pie::kids (:wat::core::first (:pie::kids (:pie::arg a 0))))
+                              bb (:pie::kids (:wat::core::first (:pie::kids (:pie::arg b 0))))]
+              (:wat::core::if (:pie::alpha? (:pie::nth ba 1) (:pie::nth bb 1) la lb)
+                (:pie::alpha? (:pie::arg a 1) (:pie::arg b 1)
+                              (:pie::push la (:pie::name-of (:wat::core::first ba)))
+                              (:pie::push lb (:pie::name-of (:wat::core::first bb))))
+                false)))
+          (:else (:pie::alpha-all? (:pie::kids a) (:pie::kids b) la lb)))))
+    (:else (:wat::core::= a b))))
+
+(:wat::core::defn :pie::alpha-all? [as <- :pie::Es bs <- :pie::Es la <- :pie::Names lb <- :pie::Names] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::empty? as) (:wat::core::empty? bs))
+    ((:wat::core::empty? bs) false)
+    ((:pie::alpha? (:wat::core::first as) (:wat::core::first bs) la lb) (:pie::alpha-all? (:wat::core::rest as) (:wat::core::rest bs) la lb))
+    (:else false)))
+
+;; ---- resugaring for printing, as Pie prints
+
+(:wat::core::defn :pie::free? [x <- :wat::core::String e <- :wat::WatAST] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= (:wat::core::ast-kind e) "symbol") (:wat::core::= (:wat::core::ast-name e) x))
+    ((:pie::list? e) (:pie::any-free? x (:pie::kids e)))
+    (:else false)))
+
+(:wat::core::defn :pie::any-free? [x <- :wat::core::String es <- :pie::Es] -> :wat::core::bool
+  (:wat::core::if (:wat::core::empty? es)
+    false
+    (:wat::core::if (:pie::free? x (:wat::core::first es)) true (:pie::any-free? x (:wat::core::rest es)))))
+
+(:wat::core::defn :pie::special? [h <- :wat::core::String] -> :wat::core::bool
+  (:pie::member? (:wat::core::Vector :- [:wat::core::String] "lambda" "Pi" "Sigma" "->" "Pair" "cons" "car" "cdr" "add1" "quote" "the") h))
+
+(:wat::core::defn :pie::sugar-all [es <- :pie::Es] -> :pie::Es
+  (:wat::core::if (:wat::core::empty? es)
+    (:wat::core::Vector :- [:wat::WatAST])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sugar (:wat::core::first es))) (:pie::sugar-all (:wat::core::rest es)))))
+
+(:wat::core::defn :pie::sugar [e <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::= (:wat::core::ast-kind e) "symbol")
+      (:wat::core::if (:wat::core::= (:wat::core::ast-name e) "zero") (:pie::int-node 0) e))
+    ((:wat::core::not (:pie::list? e)) e)
+    (:else
+      (:wat::core::let [h (:pie::head e)]
+        (:wat::core::cond
+          ((:wat::core::= h "quote") e)
+          ((:wat::core::= h "add1")
+            (:wat::core::let [n (:pie::sugar (:pie::arg e 0))]
+              (:wat::core::if (:wat::core::= (:wat::core::ast-kind n) "int")
+                (:pie::int-node (:wat::core::+ 1 (:ls::ast->i64 n)))
+                (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "add1") n)))))
+          ((:wat::core::= h "Pi") (:pie::sugar-binder e "Pi" "->" true))
+          ((:wat::core::= h "Sigma") (:pie::sugar-binder e "Sigma" "Pair" false))
+          ((:wat::core::= h "lambda") (:pie::sugar-lambda e))
+          (:else (:pie::flatten-app (:pie::sugar-all (:pie::kids e)))))))))
+
+;; (Pi ((x A)) B): -> when x is not free in B (spliced into a following ->), otherwise Pi,
+;; merged with a following Pi. Sigma likewise, as Pair (not spliced: Pair takes two).
+(:wat::core::defn :pie::sugar-binder [e <- :wat::WatAST stag <- :wat::core::String arrow <- :wat::core::String splice? <- :wat::core::bool] -> :wat::WatAST
+  (:wat::core::let [b (:pie::kids (:wat::core::first (:pie::kids (:pie::arg e 0))))
+                    x (:pie::name-of (:wat::core::first b))
+                    a (:pie::sugar (:pie::nth b 1))
+                    body (:pie::sugar (:pie::arg e 1))]
+    (:wat::core::if (:pie::free? x body)
+      (:wat::core::if (:wat::core::= (:pie::head body) stag)
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym stag)
+                    (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) a)))
+                                                  (:pie::kids (:pie::arg body 0))))
+                    (:pie::arg body 1)))
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                    (:pie::sym stag)
+                    (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) a))))
+                    body)))
+      (:wat::core::if (:wat::core::if splice? (:wat::core::= (:pie::head body) arrow) false)
+        (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::sym arrow) a) (:pie::args body)))
+        (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym arrow) a body))))))
+
+(:wat::core::defn :pie::sugar-lambda [e <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [x (:wat::core::first (:pie::kids (:pie::arg e 0)))
+                    body (:pie::sugar (:pie::arg e 1))]
+    (:wat::core::if (:wat::core::= (:pie::head body) "lambda")
+      (:pie::mk (:wat::core::Vector :- [:wat::WatAST]
+                  (:pie::sym "lambda")
+                  (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] x) (:pie::kids (:pie::arg body 0))))
+                  (:pie::arg body 1)))
+      (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "lambda") (:pie::mk (:wat::core::Vector :- [:wat::WatAST] x)) body)))))
+
+;; ((f a) b) prints as (f a b).
+(:wat::core::defn :pie::flatten-app [ks <- :pie::Es] -> :wat::WatAST
+  (:wat::core::let [r (:wat::core::first ks)]
+    (:wat::core::if (:wat::core::if (:pie::list? r) (:wat::core::not (:pie::special? (:pie::head r))) false)
+      (:pie::mk (:wat::core::concat (:pie::kids r) (:wat::core::rest ks)))
+      (:pie::mk ks))))
+
+;; ---- contexts
+
+(:wat::core::defn :pie::ctx-used [es <- :pie::Es] -> :pie::Names
+  (:wat::core::if (:wat::core::empty? es)
+    (:wat::core::Vector :- [:wat::core::String])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::core::String] (:pie::name-of (:wat::core::first (:pie::kids (:wat::core::first es)))))
+                        (:pie::ctx-used (:wat::core::rest es)))))
+
+(:wat::core::defn :pie::used [ctx <- :wat::WatAST] -> :pie::Names
+  (:pie::ctx-used (:pie::kids ctx)))
+
+(:wat::core::defn :pie::ctx-lookup [es <- :pie::Es x <- :wat::core::String] -> (:wat::core::Option :- [:wat::WatAST])
+  (:wat::core::if (:wat::core::empty? es)
+    :wat::core::Option.None
+    (:wat::core::if (:wat::core::= (:pie::name-of (:wat::core::first (:pie::kids (:wat::core::first es)))) x)
+      (:wat::core::Option.Some {:value (:wat::core::first es)})
+      (:pie::ctx-lookup (:wat::core::rest es) x))))
+
+(:wat::core::defn :pie::extend [ctx <- :wat::WatAST entry <- :pie::Es] -> :wat::WatAST
+  (:pie::mk (:wat::core::concat (:wat::core::Vector :- [:wat::WatAST] (:pie::mk entry)) (:pie::kids ctx))))
+
+(:wat::core::defn :pie::extend-var [ctx <- :wat::WatAST x <- :wat::core::String t <- :wat::WatAST] -> :wat::WatAST
+  (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "var") t)))
+
+(:wat::core::defn :pie::show-type [ctx <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::String
+  (:wat::core::ast->source (:pie::sugar (:pie::rb-type (:pie::used ctx) t))))
+
+;; ---- type checking
+
+(:wat::core::defn :pie::synth [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::let [k (:wat::core::ast-kind e)]
+    (:wat::core::cond
+      ((:wat::core::= k "int") (:pie::t0 "VNat"))
+      ((:wat::core::= k "symbol") (:pie::synth-var ctx (:wat::core::ast-name e)))
+      ((:pie::list? e) (:pie::synth-form ctx env e (:pie::head e)))
+      (:else (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e)))))))
+
+(:wat::core::defn :pie::synth-var [ctx <- :wat::WatAST name <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::if (:wat::core::= name "Atom") true (:wat::core::= name "Nat")) (:pie::t0 "VU"))
+    ((:wat::core::= name "zero") (:pie::t0 "VNat"))
+    ((:wat::core::= name "U") (:pie::fail "U is a type, but it does not have a type"))
+    (:else
+      (:wat::core::match (:pie::ctx-lookup (:pie::kids ctx) name)
+        [:wat::core::Option.Some {:value ent}
+          (:wat::core::if (:wat::core::= (:pie::name-of (:pie::nth (:pie::kids ent) 1)) "claim")
+            (:pie::fail (:wat::string::concat name " is claimed but not yet defined"))
+            (:pie::nth (:pie::kids ent) 2))]
+        [:wat::core::Option.None {} (:pie::fail (:wat::string::concat "unknown name " name))]))))
+
+(:wat::core::defn :pie::synth-form [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST h <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::cond
+    ((:wat::core::= h "quote") (:pie::t0 "VAtom"))
+    ((:wat::core::= h "add1") (:wat::core::do (:pie::check ctx env (:pie::arg e 0) (:pie::t0 "VNat")) (:pie::t0 "VNat")))
+    ((:wat::core::= h "the")
+      (:wat::core::let [tv (:pie::check-type-eval ctx env (:pie::arg e 0))]
+        (:wat::core::do (:pie::check ctx env (:pie::arg e 1) tv) tv)))
+    ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "Pair" "->" "Pi" "Sigma") h)
+      (:wat::core::do (:pie::check-type ctx env e) (:pie::t0 "VU")))
+    ((:wat::core::= h "car")
+      (:wat::core::let [pt (:pie::synth ctx env (:pie::arg e 0))]
+        (:wat::core::if (:pie::tag? pt "VSigma") (:pie::arg pt 1) (:pie::fail "car of a non-pair"))))
+    ((:wat::core::= h "cdr")
+      (:wat::core::let [pt (:pie::synth ctx env (:pie::arg e 0))]
+        (:wat::core::if (:pie::tag? pt "VSigma")
+          (:pie::inst (:pie::arg pt 2) (:pie::do-car (:pie::eval env (:pie::arg e 0))))
+          (:pie::fail "cdr of a non-pair"))))
+    ((:wat::core::if (:wat::core::= h "cons") true (:wat::core::= h "lambda"))
+      (:pie::fail (:wat::string::concat "cannot determine a type for " (:wat::core::ast->source e) "; use the")))
+    (:else (:pie::synth-app ctx env (:pie::synth ctx env (:wat::core::first (:pie::kids e))) (:pie::args e)))))
+
+(:wat::core::defn :pie::synth-app [ctx <- :wat::WatAST env <- :wat::WatAST ft <- :wat::WatAST as <- :pie::Es] -> :wat::WatAST
+  (:wat::core::if (:wat::core::empty? as)
+    ft
+    (:wat::core::if (:pie::tag? ft "VPi")
+      (:wat::core::let [a (:wat::core::first as)]
+        (:wat::core::do
+          (:pie::check ctx env a (:pie::arg ft 1))
+          (:pie::synth-app ctx env (:pie::inst (:pie::arg ft 2) (:pie::eval env a)) (:wat::core::rest as))))
+      (:pie::fail (:wat::string::concat "not a function type: " (:pie::show-type ctx ft))))))
+
+(:wat::core::defn :pie::check-type-eval [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::WatAST
+  (:wat::core::do (:pie::check-type ctx env e) (:pie::eval env e)))
+
+(:wat::core::defn :pie::check-type [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST] -> :wat::core::nil
+  (:wat::core::let [h (:pie::head e)
+                    n (:pie::name-of e)]
+    (:wat::core::cond
+      ((:pie::member? (:wat::core::Vector :- [:wat::core::String] "U" "Atom" "Nat") n) nil)
+      ((:wat::core::if (:wat::core::= h "Pair") true (:wat::core::= h "->")) (:pie::check-types ctx env (:pie::args e)))
+      ((:wat::core::if (:wat::core::= h "Pi") true (:wat::core::= h "Sigma")) (:pie::check-binders ctx env (:pie::kids (:pie::arg e 0)) (:pie::arg e 1)))
+      (:else (:pie::check ctx env e (:pie::t0 "VU"))))))
+
+(:wat::core::defn :pie::check-types [ctx <- :wat::WatAST env <- :wat::WatAST es <- :pie::Es] -> :wat::core::nil
+  (:wat::core::if (:wat::core::empty? es)
+    nil
+    (:wat::core::do (:pie::check-type ctx env (:wat::core::first es)) (:pie::check-types ctx env (:wat::core::rest es)))))
+
+(:wat::core::defn :pie::check-binders [ctx <- :wat::WatAST env <- :wat::WatAST binders <- :pie::Es body <- :wat::WatAST] -> :wat::core::nil
+  (:wat::core::if (:wat::core::empty? binders)
+    (:pie::check-type ctx env body)
+    (:wat::core::let [b (:pie::kids (:wat::core::first binders))
+                      x (:pie::name-of (:wat::core::first b))
+                      av (:pie::check-type-eval ctx env (:pie::nth b 1))]
+      (:pie::check-binders (:pie::extend-var ctx x av) (:pie::bind env x (:pie::var-value av x)) (:wat::core::rest binders) body))))
+
+(:wat::core::defn :pie::check [ctx <- :wat::WatAST env <- :wat::WatAST e <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::nil
+  (:wat::core::let [h (:pie::head e)]
+    (:wat::core::cond
+      ((:wat::core::if (:wat::core::= h "cons") (:pie::tag? t "VSigma") false)
+        (:wat::core::do
+          (:pie::check ctx env (:pie::arg e 0) (:pie::arg t 1))
+          (:pie::check ctx env (:pie::arg e 1) (:pie::inst (:pie::arg t 2) (:pie::eval env (:pie::arg e 0))))))
+      ((:wat::core::if (:wat::core::= h "lambda") (:pie::tag? t "VPi") false)
+        (:pie::check-lambda ctx env (:pie::kids (:pie::arg e 0)) (:pie::arg e 1) t))
+      (:else
+        (:wat::core::let [st (:pie::synth ctx env e)]
+          (:wat::core::if (:pie::alpha? (:pie::rb-type (:pie::used ctx) st) (:pie::rb-type (:pie::used ctx) t)
+                                        (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String]))
+            nil
+            (:pie::fail (:wat::string::concat (:wat::core::ast->source e) " has type " (:pie::show-type ctx st)
+                                              " but should have type " (:pie::show-type ctx t)))))))))
+
+(:wat::core::defn :pie::check-lambda [ctx <- :wat::WatAST env <- :wat::WatAST names <- :pie::Es body <- :wat::WatAST t <- :wat::WatAST] -> :wat::core::nil
+  (:wat::core::if (:pie::tag? t "VPi")
+    (:wat::core::let [x (:pie::name-of (:wat::core::first names))
+                      dom (:pie::arg t 1)
+                      xv (:pie::var-value dom x)
+                      ctx2 (:pie::extend-var ctx x dom)
+                      env2 (:pie::bind env x xv)
+                      bt (:pie::inst (:pie::arg t 2) xv)]
+      (:wat::core::if (:wat::core::empty? (:wat::core::rest names))
+        (:pie::check ctx2 env2 body bt)
+        (:pie::check-lambda ctx2 env2 (:wat::core::rest names) body bt)))
+    (:pie::fail (:wat::string::concat "a lambda should have a Pi type, not " (:pie::show-type ctx t)))))
+
+;; ---- programs: claim, define, check-same, and expressions, whose (the TYPE VALUE) is printed
+
+(:wat::core::defstruct :pie::St
+  [ctx <- :wat::WatAST
+   env <- :wat::WatAST
+   out <- :pie::Names])
+
+(:wat::core::defn :pie::claimed-type [ctx <- :wat::WatAST x <- :wat::core::String] -> :wat::WatAST
+  (:wat::core::match (:pie::ctx-lookup (:pie::kids ctx) x)
+    [:wat::core::Option.Some {:value ent}
+      (:wat::core::if (:wat::core::= (:pie::name-of (:pie::nth (:pie::kids ent) 1)) "claim")
+        (:pie::nth (:pie::kids ent) 2)
+        (:pie::fail (:wat::string::concat x " is already defined")))]
+    [:wat::core::Option.None {} (:pie::fail (:wat::string::concat x " must be claimed before it is defined"))]))
+
+(:wat::core::defn :pie::run-form [st <- :pie::St form <- :wat::WatAST] -> :pie::St
+  (:wat::core::let [ctx (:pie::St/ctx st)
+                    env (:pie::St/env st)
+                    h (:pie::head form)]
+    (:wat::core::cond
+      ((:wat::core::= h "claim")
+        (:wat::core::let [x (:pie::name-of (:pie::arg form 0))
+                          tv (:pie::check-type-eval ctx env (:pie::arg form 1))]
+          (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "claim") tv))
+                    :env env :out (:pie::St/out st))))
+      ((:wat::core::= h "define")
+        (:wat::core::let [x (:pie::name-of (:pie::arg form 0))
+                          tv (:pie::claimed-type ctx x)
+                          e (:pie::arg form 1)]
+          (:wat::core::do
+            (:pie::check ctx env e tv)
+            (:wat::core::let [v (:pie::eval env e)]
+              (:pie::St :ctx (:pie::extend ctx (:wat::core::Vector :- [:wat::WatAST] (:pie::sym x) (:pie::sym "def") tv v))
+                        :env (:pie::bind env x v) :out (:pie::St/out st))))))
+      ((:wat::core::= h "check-same")
+        (:wat::core::let [tv (:pie::check-type-eval ctx env (:pie::arg form 0))
+                          a (:pie::arg form 1)
+                          b (:pie::arg form 2)]
+          (:wat::core::do
+            (:pie::check ctx env a tv)
+            (:pie::check ctx env b tv)
+            (:wat::core::if (:pie::alpha? (:pie::rb (:pie::used ctx) tv (:pie::eval env a)) (:pie::rb (:pie::used ctx) tv (:pie::eval env b))
+                                          (:wat::core::Vector :- [:wat::core::String]) (:wat::core::Vector :- [:wat::core::String]))
+              st
+              (:pie::fail (:wat::string::concat "check-same failed: " (:wat::core::ast->source a) " and " (:wat::core::ast->source b)))))))
+      (:else
+        (:wat::core::let [t (:pie::synth ctx env form)
+                          v (:pie::eval env form)
+                          used (:pie::used ctx)
+                          shown (:pie::mk (:wat::core::Vector :- [:wat::WatAST] (:pie::sym "the") (:pie::sugar (:pie::rb-type used t)) (:pie::sugar (:pie::rb used t v))))]
+          (:pie::St :ctx ctx :env env :out (:wat::core::conj (:pie::St/out st) (:wat::core::ast->source shown))))))))
+
+(:wat::core::defn :pie::run-forms [st <- :pie::St forms <- :pie::Es] -> :pie::St
+  (:wat::core::if (:wat::core::empty? forms)
+    st
+    (:pie::run-forms (:pie::run-form st (:wat::core::first forms)) (:wat::core::rest forms))))
+
+;; Run a .pie file (its first line, #lang pie, is dropped) and give each expression's output.
+(:wat::core::defn :pie::run-file [path <- :wat::core::String] -> :pie::Names
+  (:wat::core::let [lines (:wat::string::split (:wat::io::read-file path) "\n")
+                    body (:wat::string::join "\n" (:wat::core::rest lines))]
+    (:wat::core::match (:wat::core::read-string body)
+      [:wat::core::ReadOutcome.Forms {:forms fs}
+        (:pie::St/out (:pie::run-forms (:pie::St :ctx (:wat::core::quote ()) :env (:wat::core::quote ()) :out (:wat::core::Vector :- [:wat::core::String]))
+                                       (:pie::kids fs)))]
+      [:wat::core::ReadOutcome.Malformed {:cause c} (:pie::fail (:wat::core::Error/message c))])))
+
+(:wat::core::defn :pie::non-empty [xs <- :pie::Names] -> :pie::Names
+  (:wat::core::if (:wat::core::empty? xs)
+    (:wat::core::Vector :- [:wat::core::String])
+    (:wat::core::let [rest (:pie::non-empty (:wat::core::rest xs))]
+      (:wat::core::if (:wat::core::= (:wat::core::first xs) "") rest (:wat::core::concat (:wat::core::Vector :- [:wat::core::String] (:wat::core::first xs)) rest)))))
+
+(:wat::core::defn :pie::compare [got <- :pie::Names want <- :pie::Names] -> :wat::core::nil
+  (:wat::core::if (:wat::core::empty? want)
+    nil
+    (:wat::core::do
+      (:wat::test::assert-eq (:wat::core::first got) (:wat::core::first want))
+      (:pie::compare (:wat::core::rest got) (:wat::core::rest want)))))
+
+;; Run a chapter's .pie file and compare every output with Racket's Pie (the expected file).
+(:wat::core::defn :pie::check-chapter [pie <- :wat::core::String expected <- :wat::core::String label <- :wat::core::String] -> :wat::core::nil
+  (:wat::core::let [got (:pie::run-file pie)
+                    want (:pie::non-empty (:wat::string::split (:wat::io::read-file expected) "\n"))]
+    (:wat::core::do
+      (:wat::test::assert-eq (:wat::core::length got) (:wat::core::length want))
+      (:pie::compare got want)
+      (:wat::kernel::println (:wat::string::concat label ": ok")))))

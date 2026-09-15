@@ -1,0 +1,42 @@
+#lang pie
+;; The Little Typer, chapter 2 (Doin' What Comes Naturally): lambda and ->, application,
+;; functions as claimed and defined names, types as values, and which-Nat.
+;; Our own examples on the chapter's topics. Racket's Pie prints each expression's
+;; (the TYPE NORMAL-FORM); wat-Pie reads this same file and must print the same.
+
+(the (-> Atom (Pair Atom Atom)) (lambda (flavor) (cons flavor 'lettuce)))
+((the (-> Atom (Pair Atom Atom)) (lambda (flavor) (cons flavor 'lettuce))) 'tomato)
+(the (-> Nat Atom Nat) (lambda (n a) n))
+((the (-> Nat Atom Nat) (lambda (n a) n)) 7 'seven)
+
+(claim vegetables-of (-> Atom (Pair Atom Atom)))
+(define vegetables-of (lambda (a) (cons a 'lettuce)))
+vegetables-of
+(vegetables-of 'celery)
+(car (vegetables-of 'celery))
+
+;; types are values too
+(claim Pear U)
+(define Pear (Pair Nat Nat))
+Pear
+(claim pear Pear)
+(define pear (cons 3 5))
+pear
+(claim Pear-maker U)
+(define Pear-maker (-> Nat Nat Pear))
+Pear-maker
+(claim elim-Pear (-> Pear Pear-maker Pear))
+(define elim-Pear (lambda (pr maker) (maker (car pr) (cdr pr))))
+(elim-Pear (cons 3 17) (lambda (a d) (cons d a)))
+(elim-Pear pear (lambda (a d) (cons (add1 a) d)))
+
+;; which-Nat: zero gives the base; (add1 n) gives the step applied to n
+(which-Nat zero 'naught (lambda (n) 'more))
+(which-Nat 4 'naught (lambda (n) 'more))
+(which-Nat 5 0 (lambda (smaller) smaller))
+(claim sub1-or-zero (-> Nat Nat))
+(define sub1-or-zero (lambda (n) (which-Nat n 0 (lambda (smaller) smaller))))
+sub1-or-zero
+(sub1-or-zero 10)
+(sub1-or-zero 0)
+(check-same Nat (sub1-or-zero 3) 2)
