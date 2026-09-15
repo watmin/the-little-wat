@@ -6,7 +6,7 @@
 
 (:wat::core::defn :mal::core-names [] -> :mal::Strs
   ["+" "-" "*" "/" "<" "<=" ">" ">=" "=" "list" "list?" "empty?" "count" "not" "pr-str" "str" "prn" "println"
-   "cons" "concat" "vec"])
+   "cons" "concat" "vec" "nth" "first" "rest" "macro?"])
 
 ;; a list's or a vector's elements, and nil's none
 (:wat::core::defn :mal::items-or-none [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
@@ -105,4 +105,25 @@
       (:wat::core::match (:mal::items-or-none (:mal::first-arg args))
         [:wat::core::Option.Some {:value xs} (:mal::ok (:mal::vec xs))]
         [:wat::core::Option.None {} (:mal::fail "vec: expected a list")]))
+    ((:wat::core::= name "nth")
+      (:wat::core::match (:mal::items-or-none (:mal::first-arg args))
+        [:wat::core::Option.Some {:value xs}
+          (:wat::core::match (:mal::int-of (:mal::first-arg (:wat::core::rest args)))
+            [:wat::core::Option.Some {:value i}
+              (:wat::core::if (:wat::core::and (:wat::core::>= i 0) (:wat::core::< i (:wat::core::length xs)))
+                (:mal::ok (:wat::core::nth xs i))
+                (:mal::fail "nth: index out of range"))]
+            [:wat::core::Option.None {} (:mal::fail "nth: expected an index")])]
+        [:wat::core::Option.None {} (:mal::fail "nth: expected a list")]))
+    ;; first and rest are total: nil for an empty list's first, and () for its rest
+    ((:wat::core::= name "first")
+      (:wat::core::match (:mal::items-or-none (:mal::first-arg args))
+        [:wat::core::Option.Some {:value xs} (:mal::ok (:mal::first-arg xs))]
+        [:wat::core::Option.None {} (:mal::fail "first: expected a list")]))
+    ((:wat::core::= name "rest")
+      (:wat::core::match (:mal::items-or-none (:mal::first-arg args))
+        [:wat::core::Option.Some {:value xs}
+          (:mal::ok (:mal::list (:wat::core::if (:wat::core::empty? xs) xs (:wat::core::rest xs))))]
+        [:wat::core::Option.None {} (:mal::fail "rest: expected a list")]))
+    ((:wat::core::= name "macro?") (:mal::ok (:mal::bool (:wat::core::= (:mal::kind-of (:mal::first-arg args)) :macro))))
     (:else (:mal::fail (:wat::string::concat "unknown builtin " name)))))

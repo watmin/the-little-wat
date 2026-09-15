@@ -35,7 +35,8 @@
     [:mal::Val.Builtin {:name name} (:wat::string::concat "#<builtin " name ">")]
     [:mal::Val.Closure {:params p :body b :env e} "#<function>"]
     ;; an atom's value is on the store; a step with atoms shows them first (lib/env.wat)
-    [:mal::Val.Atom {:id i} (:wat::string::concat "(atom #" (:wat::i64::to-string i) ")")]))
+    [:mal::Val.Atom {:id i} (:wat::string::concat "(atom #" (:wat::i64::to-string i) ")")]
+    [:mal::Val.Macro {:params p :body b :env e} "#<macro>"]))
 
 ;; the arguments' printed forms, joined
 (:wat::core::defn :mal::pr-args [args <- :mal::Vals readably <- :wat::core::bool sep <- :wat::core::String] -> :wat::core::String

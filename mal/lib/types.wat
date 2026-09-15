@@ -25,7 +25,9 @@
      :Map     [kvs <- (:wat::core::Vector :- [:mal::Val])]
      :Builtin [name <- :wat::core::String]
      :Closure [params <- (:wat::core::Vector :- [:mal::Val])  body <- :mal::Val  env <- :wat::core::i64]
-     :Atom    [id <- :wat::core::i64])
+     :Atom    [id <- :wat::core::i64]
+     ;; a closure that defmacro! made a macro: applied to its arguments unevaluated
+     :Macro   [params <- (:wat::core::Vector :- [:mal::Val])  body <- :mal::Val  env <- :wat::core::i64])
    (:wat::core::defrecord :mal::Store::NewEnvRequest [outer <- :wat::core::i64])
    (:wat::core::defenum :mal::Store::NewEnvResponse :wat::enum::Pure
      :Ok               [id <- :wat::core::i64]
@@ -92,6 +94,8 @@
 (:wat::core::defn :mal::closure [params <- :mal::Vals body <- :mal::Val env <- :wat::core::i64] -> :mal::Val
   (:mal::Val.Closure {:params params :body body :env env}))
 (:wat::core::defn :mal::atom-ref [id <- :wat::core::i64] -> :mal::Val (:mal::Val.Atom {:id id}))
+(:wat::core::defn :mal::macro [params <- :mal::Vals body <- :mal::Val env <- :wat::core::i64] -> :mal::Val
+  (:mal::Val.Macro {:params params :body body :env env}))
 
 (:wat::core::defn :mal::bool [b <- :wat::core::bool] -> :mal::Val
   (:wat::core::if b (:mal::true) (:mal::false)))
@@ -119,7 +123,8 @@
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::str-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
   (:wat::core::match v
@@ -135,7 +140,8 @@
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::sym-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
   (:wat::core::match v
@@ -151,7 +157,8 @@
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 ;; a list's or a vector's elements
 (:wat::core::defn :mal::seq-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
@@ -168,7 +175,8 @@
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 ;; a list's elements (not a vector's)
 (:wat::core::defn :mal::list-of [v <- :mal::Val] -> (:wat::core::Option :- [:mal::Vals])
@@ -185,7 +193,8 @@
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::builtin-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::String])
   (:wat::core::match v
@@ -201,7 +210,8 @@
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
-    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]))
+    [:mal::Val.Atom {:id i} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 (:wat::core::defn :mal::atom-of [v <- :mal::Val] -> (:wat::core::Option :- [:wat::core::i64])
   (:wat::core::match v
@@ -217,7 +227,8 @@
     [:mal::Val.Vec {:items x} (:wat::core::Option.None {})]
     [:mal::Val.Map {:kvs x} (:wat::core::Option.None {})]
     [:mal::Val.Builtin {:name x} (:wat::core::Option.None {})]
-    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]))
+    [:mal::Val.Closure {:params p :body b :env e} (:wat::core::Option.None {})]
+    [:mal::Val.Macro {:params p :body b :env e} (:wat::core::Option.None {})]))
 
 ;; a value's variant, as a keyword: written once with every variant, so a test of a value's kind
 ;; elsewhere is a comparison, not another match of every variant
@@ -235,7 +246,8 @@
     [:mal::Val.Map {:kvs x} :map]
     [:mal::Val.Builtin {:name x} :builtin]
     [:mal::Val.Closure {:params p :body b :env e} :closure]
-    [:mal::Val.Atom {:id i} :atom]))
+    [:mal::Val.Atom {:id i} :atom]
+    [:mal::Val.Macro {:params p :body b :env e} :macro]))
 
 ;; is v the symbol name?
 (:wat::core::defn :mal::sym-is? [v <- :mal::Val name <- :wat::core::String] -> :wat::core::bool
@@ -258,7 +270,8 @@
     [:mal::Val.Map {:kvs x} false]
     [:mal::Val.Builtin {:name x} false]
     [:mal::Val.Closure {:params p :body b :env e} false]
-    [:mal::Val.Atom {:id i} false]))
+    [:mal::Val.Atom {:id i} false]
+    [:mal::Val.Macro {:params p :body b :env e} false]))
 
 ;; one character of a String, as a String (wat has no character access)
 (:wat::core::defn :mal::char-at [s <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String

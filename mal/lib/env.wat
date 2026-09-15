@@ -192,7 +192,8 @@
     [:mal::Val.Sym {:name x} v]
     [:mal::Val.Kw {:name x} v]
     [:mal::Val.Builtin {:name x} v]
-    [:mal::Val.Closure {:params p :body b :env e} v]))
+    [:mal::Val.Closure {:params p :body b :env e} v]
+    [:mal::Val.Macro {:params p :body b :env e} v]))
 
 (:wat::core::defn :mal::show-res [r <- :mal::Res st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::match r

@@ -47,7 +47,8 @@
     [:mal::Val.List {:items xs} (:mal::fail "a list is not a function")]
     [:mal::Val.Vec {:items xs} (:mal::fail "a vector is not a function")]
     [:mal::Val.Map {:kvs kvs} (:mal::fail "a map is not a function")]
-    [:mal::Val.Atom {:id i} (:mal::fail "an atom is not a function")]))
+    [:mal::Val.Atom {:id i} (:mal::fail "an atom is not a function")]
+    [:mal::Val.Macro {:params p :body b :env e} (:mal::fail "a macro is not a function")]))
 
 (:wat::core::defn :mal::eval-all [xs <- :mal::Vals acc <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Many
   (:wat::core::if (:wat::core::empty? xs)
@@ -165,7 +166,8 @@
     [:mal::Val.Kw {:name name} (:mal::ok ast)]
     [:mal::Val.Builtin {:name name} (:mal::ok ast)]
     [:mal::Val.Closure {:params p :body b :env e} (:mal::ok ast)]
-    [:mal::Val.Atom {:id i} (:mal::ok ast)]))
+    [:mal::Val.Atom {:id i} (:mal::ok ast)]
+    [:mal::Val.Macro {:params p :body b :env e} (:mal::ok ast)]))
 
 (:wat::core::defn :mal::rep [line <- :wat::core::String env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Strs
   (:wat::core::match (:mal::read-str line)

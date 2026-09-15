@@ -1,12 +1,11 @@
-;; mal/step6_file.wat: Make-a-Lisp step 6: files, eval, and atoms.
+;; mal/step8_macros.wat: Make-a-Lisp step 8: macros, and nth, first and rest.
 ;;
-;; Atoms live on the store beside the environments (lib/env.wat); a mal atom is its id. The
-;; builtins that touch the store or call back into mal (atom, deref, reset!, swap!, eval,
-;; read-string, slurp) are dispatched here; the rest are lib/core.wat's. load-file and *ARGV*
-;; are defined in mal at startup, as the process guide defines them. Driven by mal's own runner
-;; through tools/mal-shim.py (tools/mal-test.sh step6_file): each input line arrives as one EDN
-;; string, and each output line goes back as one, then :mal/done (FINDINGS F-049, F-050).
-;; Keyword spelling throughout.
+;; Step 7, plus defmacro! and macroexpand. A macro is a closure marked as one (lib/types.wat's
+;; Macro); a call whose head evaluates to a macro applies it to the call's arguments unevaluated
+;; and evaluates what it returns. cond is a mal macro, defined at startup as the process guide
+;; defines it. Driven by mal's own runner through tools/mal-shim.py (tools/mal-test.sh
+;; step8_macros): each input line arrives as one EDN string, and each output line goes back as
+;; one, then :mal/done (FINDINGS F-049, F-050). Keyword spelling throughout.
 
 (:wat::load-file! "lib/types.wat")
 (:wat::load-file! "lib/reader.wat")
@@ -65,6 +64,112 @@
       (:mal::with-string name args
         (:wat::core::fn [path <- :wat::core::String] -> :mal::Res (:mal::ok (:mal::str (:wat::io::read-file path))))))
     (:else (:mal::call-builtin name args))))
+
+;; ---- quasiquote, expanded into cons, concat and vec calls
+
+(:wat::core::defn :mal::qq-fold [xs <- :mal::Vals] -> :mal::Val
+  (:wat::core::foldl
+    (:wat::core::fn [acc <- :mal::Val elt <- :mal::Val] -> :mal::Val
+      (:wat::core::match (:mal::list-of elt)
+        [:wat::core::Option.Some {:value ys}
+          (:wat::core::if (:wat::core::and (:wat::core::not (:wat::core::empty? ys)) (:mal::sym-is? (:wat::core::first ys) "splice-unquote"))
+            (:mal::list (:wat::core::Vector :- [:mal::Val] (:mal::sym "concat") (:mal::first-arg (:wat::core::rest ys)) acc))
+            (:mal::list (:wat::core::Vector :- [:mal::Val] (:mal::sym "cons") (:mal::qq elt) acc)))]
+        [:wat::core::Option.None {} (:mal::list (:wat::core::Vector :- [:mal::Val] (:mal::sym "cons") (:mal::qq elt) acc))]))
+    (:mal::list (:wat::core::Vector :- [:mal::Val]))
+    (:wat::core::reverse xs)))
+
+(:wat::core::defn :mal::qq [ast <- :mal::Val] -> :mal::Val
+  (:wat::core::let [k (:mal::kind-of ast)]
+    (:wat::core::cond
+      ((:wat::core::= k :list)
+        (:wat::core::match (:mal::list-of ast)
+          [:wat::core::Option.Some {:value xs}
+            (:wat::core::if (:wat::core::and (:wat::core::not (:wat::core::empty? xs)) (:mal::sym-is? (:wat::core::first xs) "unquote"))
+              (:mal::first-arg (:wat::core::rest xs))
+              (:mal::qq-fold xs))]
+          [:wat::core::Option.None {} ast]))
+      ((:wat::core::= k :vec)
+        (:wat::core::match (:mal::seq-of ast)
+          [:wat::core::Option.Some {:value xs} (:mal::list (:wat::core::Vector :- [:mal::Val] (:mal::sym "vec") (:mal::qq-fold xs)))]
+          [:wat::core::Option.None {} ast]))
+      ((:wat::core::or (:wat::core::= k :map) (:wat::core::= k :sym))
+        (:mal::list (:wat::core::Vector :- [:mal::Val] (:mal::sym "quote") ast)))
+      (:else ast))))
+
+;; ---- macros
+
+;; defmacro!'s value: the closure, marked as a macro
+(:wat::core::defn :mal::as-macro [v <- :mal::Val] -> :mal::Res
+  (:wat::core::match v
+    [:mal::Val.Closure {:params p :body b :env e} (:mal::ok (:mal::macro p b e))]
+    [:mal::Val.Macro {:params p :body b :env e} (:mal::ok v)]
+    [:mal::Val.Nil {} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.True {} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.False {} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Int {:n n} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Str {:s s} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Sym {:name x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Kw {:name x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.List {:items x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Vec {:items x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Map {:kvs x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Builtin {:name x} (:mal::fail "defmacro!: expected a function")]
+    [:mal::Val.Atom {:id i} (:mal::fail "defmacro!: expected a function")]))
+
+;; a macro applied to its arguments, unevaluated: the form it expands to
+(:wat::core::defn :mal::apply-macro [m <- :mal::Val args <- :mal::Vals st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::match m
+    [:mal::Val.Macro {:params params :body body :env menv}
+      (:wat::core::let [inner (:mal::new-env! st menv)]
+        (:wat::core::match (:mal::bind-params params args inner st)
+          [:mal::Res.Ok {:v x} (:mal::eval body inner st)]
+          [:mal::Res.Err {:e e} (:mal::err e)]))]
+    [:mal::Val.Closure {:params p :body b :env e} (:mal::fail "not a macro")]
+    [:mal::Val.Nil {} (:mal::fail "not a macro")]
+    [:mal::Val.True {} (:mal::fail "not a macro")]
+    [:mal::Val.False {} (:mal::fail "not a macro")]
+    [:mal::Val.Int {:n n} (:mal::fail "not a macro")]
+    [:mal::Val.Str {:s s} (:mal::fail "not a macro")]
+    [:mal::Val.Sym {:name x} (:mal::fail "not a macro")]
+    [:mal::Val.Kw {:name x} (:mal::fail "not a macro")]
+    [:mal::Val.List {:items x} (:mal::fail "not a macro")]
+    [:mal::Val.Vec {:items x} (:mal::fail "not a macro")]
+    [:mal::Val.Map {:kvs x} (:mal::fail "not a macro")]
+    [:mal::Val.Builtin {:name x} (:mal::fail "not a macro")]
+    [:mal::Val.Atom {:id i} (:mal::fail "not a macro")]))
+
+;; expand ast while it is a call of a macro
+(:wat::core::defn :mal::macroexpand [ast <- :mal::Val env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::match (:mal::list-of ast)
+    [:wat::core::Option.Some {:value xs}
+      (:wat::core::if (:wat::core::empty? xs)
+        (:mal::ok ast)
+        (:wat::core::match (:mal::sym-of (:wat::core::first xs))
+          [:wat::core::Option.Some {:value name}
+            (:wat::core::match (:mal::env-get st env name)
+              [:wat::core::Option.Some {:value f}
+                (:wat::core::if (:wat::core::= (:mal::kind-of f) :macro)
+                  (:wat::core::match (:mal::apply-macro f (:wat::core::rest xs) st)
+                    [:mal::Res.Ok {:v form} (:mal::macroexpand form env st)]
+                    [:mal::Res.Err {:e e} (:mal::err e)])
+                  (:mal::ok ast))]
+              [:wat::core::Option.None {} (:mal::ok ast)])]
+          [:wat::core::Option.None {} (:mal::ok ast)]))]
+    [:wat::core::Option.None {} (:mal::ok ast)]))
+
+(:wat::core::defn :mal::eval-defmacro [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
+  (:wat::core::if (:wat::core::< (:wat::core::length xs) 3)
+    (:mal::fail "defmacro!: expected a name and a function")
+    (:wat::core::match (:mal::sym-of (:wat::core::second xs))
+      [:wat::core::Option.Some {:value name}
+        (:wat::core::match (:mal::eval (:wat::core::third xs) env st)
+          [:mal::Res.Ok {:v f}
+            (:wat::core::match (:mal::as-macro f)
+              [:mal::Res.Ok {:v m} (:mal::ok (:mal::env-set! st env name m))]
+              [:mal::Res.Err {:e e} (:mal::err e)])]
+          [:mal::Res.Err {:e e} (:mal::err e)])]
+      [:wat::core::Option.None {} (:mal::fail "defmacro!: expected a symbol")])))
 
 ;; bind a closure's parameters to its arguments; after &, one name takes the rest as a list
 (:wat::core::defn :mal::bind-params [params <- :mal::Vals args <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
@@ -178,10 +283,18 @@
       [:wat::core::Option.Some {:value params} (:mal::ok (:mal::closure params (:wat::core::third xs) env))]
       [:wat::core::Option.None {} (:mal::fail "fn*: expected a list of parameters")])))
 
+;; the head first: a macro gets the arguments unevaluated, and its expansion is evaluated
 (:wat::core::defn :mal::eval-apply [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
-  (:wat::core::match (:mal::eval-all xs (:wat::core::Vector :- [:mal::Val]) env st)
-    [:mal::Many.Ok {:vs vs} (:mal::apply (:wat::core::first vs) (:wat::core::rest vs) st)]
-    [:mal::Many.Err {:e e} (:mal::err e)]))
+  (:wat::core::match (:mal::eval (:wat::core::first xs) env st)
+    [:mal::Res.Ok {:v f}
+      (:wat::core::if (:wat::core::= (:mal::kind-of f) :macro)
+        (:wat::core::match (:mal::apply-macro f (:wat::core::rest xs) st)
+          [:mal::Res.Ok {:v form} (:mal::eval form env st)]
+          [:mal::Res.Err {:e e} (:mal::err e)])
+        (:wat::core::match (:mal::eval-all (:wat::core::rest xs) (:wat::core::Vector :- [:mal::Val]) env st)
+          [:mal::Many.Ok {:vs vs} (:mal::apply f vs st)]
+          [:mal::Many.Err {:e e} (:mal::err e)]))]
+    [:mal::Res.Err {:e e} (:mal::err e)]))
 
 (:wat::core::defn :mal::eval-list [xs <- :mal::Vals env <- :wat::core::i64 st <- :mal::StoreRef] -> :mal::Res
   (:wat::core::match (:mal::sym-of (:wat::core::first xs))
@@ -192,6 +305,11 @@
         ((:wat::core::= name "do") (:mal::eval-do (:wat::core::rest xs) env st))
         ((:wat::core::= name "if") (:mal::eval-if xs env st))
         ((:wat::core::= name "fn*") (:mal::eval-fn xs env))
+        ((:wat::core::= name "quote") (:mal::ok (:mal::first-arg (:wat::core::rest xs))))
+        ((:wat::core::= name "quasiquoteexpand") (:mal::ok (:mal::qq (:mal::first-arg (:wat::core::rest xs)))))
+        ((:wat::core::= name "quasiquote") (:mal::eval (:mal::qq (:mal::first-arg (:wat::core::rest xs))) env st))
+        ((:wat::core::= name "defmacro!") (:mal::eval-defmacro xs env st))
+        ((:wat::core::= name "macroexpand") (:mal::macroexpand (:mal::first-arg (:wat::core::rest xs)) env st))
         (:else (:mal::eval-apply xs env st)))]
     [:wat::core::Option.None {} (:mal::eval-apply xs env st)]))
 
@@ -260,4 +378,5 @@
       (:mal::define-builtins (:mal::store-names) env st)
       (:mal::rep "(def! load-file (fn* (f) (eval (read-string (str \"(do \" (slurp f) \"\\nnil)\")))))" env st)
       (:mal::rep "(def! *ARGV* (list))" env st)
+      (:mal::rep "(defmacro! cond (fn* (& xs) (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw \"odd number of forms to cond\")) (cons 'cond (rest (rest xs)))))))" env st)
       (:mal::repl env st))))

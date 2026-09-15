@@ -2310,6 +2310,27 @@ name. Rows blocked are counted once per row.
 - **Class:** GAP (performance). Improve: a cheaper path to a service on a thread locus.
 - **Repro:** the two probes.
 
+### Friction: one more variant of an interpreter's value type is twenty edits in ten files
+
+- **Where:** Make-a-Lisp steps 4, 6 and 8. mal's value type (`:mal::Val`, `mal/lib/types.wat`)
+  grew a closure, then an atom, then a macro, to 14 variants.
+- **What happened** (2026-09-15): no match may have a catch-all arm, by this repository's
+  rule and the builder's doctrine that an arm can't be forgotten (F-025). So every function
+  that takes a value apart names all 14 variants. Adding `Macro` meant an arm in each of these:
+  - nine helpers (`int-of`, `str-of`, `sym-of`, `seq-of`, `list-of`, `builtin-of`, `atom-of`,
+    `kind-of`, `falsy?`);
+  - the printer, and `show-atoms`;
+  - six steps' `eval`, and four steps' `apply`.
+
+  That is about twenty edits across ten files, for arms that all say "not this". The checker
+  caught every one I missed, which is the doctrine working. What it costs is the typing.
+- **So:** a `kind-of` helper that names the variant once turns each later test of a value's
+  kind into a keyword comparison (`mal/lib/types.wat`). A catch-all that the checker knows to
+  mean "every other variant, each listed in the error when one is added" would keep the
+  doctrine and drop the repetition.
+- **Class:** friction. Improve: an explicit "every other variant" arm that still reports which
+  variants it covers.
+
 ### C-031: Make-a-Lisp step 0 passes mal's own tests
 
 - `mal/step0_repl.wat`, driven by mal's unmodified runner through the shim
