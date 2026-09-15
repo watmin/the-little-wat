@@ -1,0 +1,13 @@
+true
+false
+true
+false
+false
+true
+2
+3
+3
+2
+0
+(Split (Flat (Pear) (Flat (Apple) (Bud))) (Split (Flat (Pear) (Bud)) (Bud)))
+2

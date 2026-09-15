@@ -1,8 +1,10 @@
 ;; A Little Java, A Few Patterns, chapter 4 (Come to Our Carousel).
-;; The chapter moves each method out of the variants into a visitor: an object with a method
-;; per variant, which every variant's method just asks. In wat a visitor is a generic struct
-;; holding a function per variant (ShishV, PizzaV), and accept is the one match that picks the
-;; visitor's function for the variant at hand; each method is accept with its visitor.
+;; The chapter moves each method out of the variants into a visitor class (OnlyOnionsV,
+;; RemAV, ...) with a method per variant; every variant's method just asks its visitor. There
+;; is no interface yet, only concrete classes whose instances hold nothing, so here each
+;; visitor's methods are plain functions in the visitor's own namespace
+;; (:lj::only-onions-v::for-onion), and each variant's method asks them, as in Java. (Visitors
+;; that implement an interface come in chapter 6, as a surface.)
 ;; Results are printed as the Java oracle's are (oracle/java/ch04-come-to-our-carousel.java,
 ;; run by tools/java-oracle.sh), and every one must match, in order.
 ;;
@@ -19,35 +21,32 @@
   :Lamb [s <- :lj::ShishD]
   :Tomato [s <- :lj::ShishD])
 
-(:wat::core::defstruct :lj::ShishV :- [R]
-  [for-skewer <- [:-> R]
-   for-onion <- [:lj::ShishD :-> R]
-   for-lamb <- [:lj::ShishD :-> R]
-   for-tomato <- [:lj::ShishD :-> R]])
+;; OnlyOnionsV
+(:wat::core::defn :lj::only-onions-v::for-skewer [] -> :wat::core::bool true)
+(:wat::core::defn :lj::only-onions-v::for-onion [s <- :lj::ShishD] -> :wat::core::bool (:lj::only-onions? s))
+(:wat::core::defn :lj::only-onions-v::for-lamb [s <- :lj::ShishD] -> :wat::core::bool false)
+(:wat::core::defn :lj::only-onions-v::for-tomato [s <- :lj::ShishD] -> :wat::core::bool false)
 
-(:wat::core::defn :lj::shish-accept :- [R] [s <- :lj::ShishD v <- (:lj::ShishV :- [R])] -> R
-  (:wat::core::match s
-    [:lj::ShishD.Skewer {} ((:lj::ShishV/for-skewer v))]
-    [:lj::ShishD.Onion {:s rest} ((:lj::ShishV/for-onion v) rest)]
-    [:lj::ShishD.Lamb {:s rest} ((:lj::ShishV/for-lamb v) rest)]
-    [:lj::ShishD.Tomato {:s rest} ((:lj::ShishV/for-tomato v) rest)]))
+;; IsVegetarianV
+(:wat::core::defn :lj::is-vegetarian-v::for-skewer [] -> :wat::core::bool true)
+(:wat::core::defn :lj::is-vegetarian-v::for-onion [s <- :lj::ShishD] -> :wat::core::bool (:lj::vegetarian? s))
+(:wat::core::defn :lj::is-vegetarian-v::for-lamb [s <- :lj::ShishD] -> :wat::core::bool false)
+(:wat::core::defn :lj::is-vegetarian-v::for-tomato [s <- :lj::ShishD] -> :wat::core::bool (:lj::vegetarian? s))
 
-(:wat::core::defn :lj::only-onions-v [] -> (:lj::ShishV :- [:wat::core::bool])
-  (:lj::ShishV :for-skewer (:wat::core::fn [] -> :wat::core::bool true)
-               :for-onion (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool (:lj::only-onions? s))
-               :for-lamb (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool false)
-               :for-tomato (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool false)))
-
-(:wat::core::defn :lj::is-vegetarian-v [] -> (:lj::ShishV :- [:wat::core::bool])
-  (:lj::ShishV :for-skewer (:wat::core::fn [] -> :wat::core::bool true)
-               :for-onion (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool (:lj::vegetarian? s))
-               :for-lamb (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool false)
-               :for-tomato (:wat::core::fn [s <- :lj::ShishD] -> :wat::core::bool (:lj::vegetarian? s))))
-
+;; each variant's method asks its visitor
 (:wat::core::defn :lj::only-onions? [s <- :lj::ShishD] -> :wat::core::bool
-  (:lj::shish-accept s (:lj::only-onions-v)))
+  (:wat::core::match s
+    [:lj::ShishD.Skewer {} (:lj::only-onions-v::for-skewer)]
+    [:lj::ShishD.Onion {:s rest} (:lj::only-onions-v::for-onion rest)]
+    [:lj::ShishD.Lamb {:s rest} (:lj::only-onions-v::for-lamb rest)]
+    [:lj::ShishD.Tomato {:s rest} (:lj::only-onions-v::for-tomato rest)]))
+
 (:wat::core::defn :lj::vegetarian? [s <- :lj::ShishD] -> :wat::core::bool
-  (:lj::shish-accept s (:lj::is-vegetarian-v)))
+  (:wat::core::match s
+    [:lj::ShishD.Skewer {} (:lj::is-vegetarian-v::for-skewer)]
+    [:lj::ShishD.Onion {:s rest} (:lj::is-vegetarian-v::for-onion rest)]
+    [:lj::ShishD.Lamb {:s rest} (:lj::is-vegetarian-v::for-lamb rest)]
+    [:lj::ShishD.Tomato {:s rest} (:lj::is-vegetarian-v::for-tomato rest)]))
 
 ;; ---- pizzas and their visitors
 
@@ -58,51 +57,57 @@
   :Anchovy [p <- :lj::PizzaD]
   :Sausage [p <- :lj::PizzaD])
 
-(:wat::core::defstruct :lj::PizzaV :- [R]
-  [for-crust <- [:-> R]
-   for-cheese <- [:lj::PizzaD :-> R]
-   for-olive <- [:lj::PizzaD :-> R]
-   for-anchovy <- [:lj::PizzaD :-> R]
-   for-sausage <- [:lj::PizzaD :-> R]])
-
-(:wat::core::defn :lj::pizza-accept :- [R] [z <- :lj::PizzaD v <- (:lj::PizzaV :- [R])] -> R
-  (:wat::core::match z
-    [:lj::PizzaD.Crust {} ((:lj::PizzaV/for-crust v))]
-    [:lj::PizzaD.Cheese {:p p} ((:lj::PizzaV/for-cheese v) p)]
-    [:lj::PizzaD.Olive {:p p} ((:lj::PizzaV/for-olive v) p)]
-    [:lj::PizzaD.Anchovy {:p p} ((:lj::PizzaV/for-anchovy v) p)]
-    [:lj::PizzaD.Sausage {:p p} ((:lj::PizzaV/for-sausage v) p)]))
-
 (:wat::core::defn :lj::crust [] -> :lj::PizzaD (:lj::PizzaD.Crust {}))
 (:wat::core::defn :lj::cheese [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::PizzaD.Cheese {:p p}))
 (:wat::core::defn :lj::olive [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::PizzaD.Olive {:p p}))
 (:wat::core::defn :lj::anchovy [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::PizzaD.Anchovy {:p p}))
 (:wat::core::defn :lj::sausage [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::PizzaD.Sausage {:p p}))
 
-(:wat::core::defn :lj::rem-a-v [] -> (:lj::PizzaV :- [:lj::PizzaD])
-  (:lj::PizzaV :for-crust :lj::crust
-               :for-cheese (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::rem-a p)))
-               :for-olive (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::rem-a p)))
-               :for-anchovy (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::rem-a p))
-               :for-sausage (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::rem-a p)))))
+;; RemAV
+(:wat::core::defn :lj::rem-a-v::for-crust [] -> :lj::PizzaD (:lj::crust))
+(:wat::core::defn :lj::rem-a-v::for-cheese [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::rem-a p)))
+(:wat::core::defn :lj::rem-a-v::for-olive [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::rem-a p)))
+(:wat::core::defn :lj::rem-a-v::for-anchovy [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::rem-a p))
+(:wat::core::defn :lj::rem-a-v::for-sausage [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::rem-a p)))
 
-(:wat::core::defn :lj::top-a-w-c-v [] -> (:lj::PizzaV :- [:lj::PizzaD])
-  (:lj::PizzaV :for-crust :lj::crust
-               :for-cheese (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::top-a-w-c p)))
-               :for-olive (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::top-a-w-c p)))
-               :for-anchovy (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::anchovy (:lj::top-a-w-c p))))
-               :for-sausage (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::top-a-w-c p)))))
+;; TopAwCV
+(:wat::core::defn :lj::top-a-w-c-v::for-crust [] -> :lj::PizzaD (:lj::crust))
+(:wat::core::defn :lj::top-a-w-c-v::for-cheese [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::top-a-w-c p)))
+(:wat::core::defn :lj::top-a-w-c-v::for-olive [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::top-a-w-c p)))
+(:wat::core::defn :lj::top-a-w-c-v::for-anchovy [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::anchovy (:lj::top-a-w-c p))))
+(:wat::core::defn :lj::top-a-w-c-v::for-sausage [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::top-a-w-c p)))
 
-(:wat::core::defn :lj::sub-a-b-c-v [] -> (:lj::PizzaV :- [:lj::PizzaD])
-  (:lj::PizzaV :for-crust :lj::crust
-               :for-cheese (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::sub-a-b-c p)))
-               :for-olive (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::sub-a-b-c p)))
-               :for-anchovy (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::sub-a-b-c p)))
-               :for-sausage (:wat::core::fn [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::sub-a-b-c p)))))
+;; SubAbCV
+(:wat::core::defn :lj::sub-a-b-c-v::for-crust [] -> :lj::PizzaD (:lj::crust))
+(:wat::core::defn :lj::sub-a-b-c-v::for-cheese [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::sub-a-b-c p)))
+(:wat::core::defn :lj::sub-a-b-c-v::for-olive [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::olive (:lj::sub-a-b-c p)))
+(:wat::core::defn :lj::sub-a-b-c-v::for-anchovy [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::cheese (:lj::sub-a-b-c p)))
+(:wat::core::defn :lj::sub-a-b-c-v::for-sausage [p <- :lj::PizzaD] -> :lj::PizzaD (:lj::sausage (:lj::sub-a-b-c p)))
 
-(:wat::core::defn :lj::rem-a [z <- :lj::PizzaD] -> :lj::PizzaD (:lj::pizza-accept z (:lj::rem-a-v)))
-(:wat::core::defn :lj::top-a-w-c [z <- :lj::PizzaD] -> :lj::PizzaD (:lj::pizza-accept z (:lj::top-a-w-c-v)))
-(:wat::core::defn :lj::sub-a-b-c [z <- :lj::PizzaD] -> :lj::PizzaD (:lj::pizza-accept z (:lj::sub-a-b-c-v)))
+;; each variant's method asks its visitor
+(:wat::core::defn :lj::rem-a [z <- :lj::PizzaD] -> :lj::PizzaD
+  (:wat::core::match z
+    [:lj::PizzaD.Crust {} (:lj::rem-a-v::for-crust)]
+    [:lj::PizzaD.Cheese {:p p} (:lj::rem-a-v::for-cheese p)]
+    [:lj::PizzaD.Olive {:p p} (:lj::rem-a-v::for-olive p)]
+    [:lj::PizzaD.Anchovy {:p p} (:lj::rem-a-v::for-anchovy p)]
+    [:lj::PizzaD.Sausage {:p p} (:lj::rem-a-v::for-sausage p)]))
+
+(:wat::core::defn :lj::top-a-w-c [z <- :lj::PizzaD] -> :lj::PizzaD
+  (:wat::core::match z
+    [:lj::PizzaD.Crust {} (:lj::top-a-w-c-v::for-crust)]
+    [:lj::PizzaD.Cheese {:p p} (:lj::top-a-w-c-v::for-cheese p)]
+    [:lj::PizzaD.Olive {:p p} (:lj::top-a-w-c-v::for-olive p)]
+    [:lj::PizzaD.Anchovy {:p p} (:lj::top-a-w-c-v::for-anchovy p)]
+    [:lj::PizzaD.Sausage {:p p} (:lj::top-a-w-c-v::for-sausage p)]))
+
+(:wat::core::defn :lj::sub-a-b-c [z <- :lj::PizzaD] -> :lj::PizzaD
+  (:wat::core::match z
+    [:lj::PizzaD.Crust {} (:lj::sub-a-b-c-v::for-crust)]
+    [:lj::PizzaD.Cheese {:p p} (:lj::sub-a-b-c-v::for-cheese p)]
+    [:lj::PizzaD.Olive {:p p} (:lj::sub-a-b-c-v::for-olive p)]
+    [:lj::PizzaD.Anchovy {:p p} (:lj::sub-a-b-c-v::for-anchovy p)]
+    [:lj::PizzaD.Sausage {:p p} (:lj::sub-a-b-c-v::for-sausage p)]))
 
 (:wat::core::defn :lj::show-pizza [z <- :lj::PizzaD] -> :wat::core::String
   (:wat::core::match z

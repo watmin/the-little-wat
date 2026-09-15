@@ -23,11 +23,11 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · the "malformed form" label on `first` of an empty Vector |
 | **Clean** (docs behind the code) | the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option |
 | **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-029 generic fns over a surface for non-generic types · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -88,7 +88,8 @@ give each one's detail.
   binder.
 - **F-028:** nested arms never count as covering a variant, even when together they cover
   it completely, so the checker demands a binder fallback: a catch-all one level down.
-- **F-029:** a generic fn over `(Surface :- [T])` refuses a non-generic type that extends
+- **F-029** (hit again in A Little Java ch 6–7, in the visitor pattern's own shape): a
+  generic fn over `(Surface :- [T])` refuses a non-generic type that extends
   the surface at a concrete argument. Stone 118.3-B's bind-then-unify covers only
   parametric actual types, so an ML functor over a signature cannot be written once.
 - **F-030:** printing a newtype value panics the Rust runtime
@@ -1280,6 +1281,21 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **So:** a functor written against a signature has to be written once per structure. The
   working route is a dictionary: a generic struct of functions (C-023).
 - **Class:** GAP. The fix is Stone 118.3-B's unify for the plain-path arm too.
+- **Again, in A Little Java** (2026-09-15, `probes/java/visitor-surface-generic.wat`, and
+  `visitor-surface-concrete.wat` as the control). The book's visitor interface is a surface,
+  `(:lj::TreeVisitorI :- [R])`, and each visitor is a struct that extends it at its answer type.
+  - One generic `accept :- [R]` over the surface, given `HeightV` (extended at `i64`), is refused:
+    > `:probe::accept: parameter #2 expects (:probe::TreeVisitorI :- [:?5043]); got :probe::HeightV`
+  - Written at a concrete answer type it works, fields read through `self` included.
+  - So ch 7 (Oh My!) has three identical accepts: `accept-bool`, `accept-int`, `accept-tree`.
+    That is the shape of the book's Java *before* that chapter, one visitor interface per
+    result type, which the chapter exists to remove. Java escapes through `Object` and casts;
+    wat, which needs neither, is stopped by this.
+  - Ch 6's pies are accepted at `i64` only, for the same reason.
+- **A correction to my own route:** ch 4–7 were first written with visitors as generic structs of
+  closures, a dictionary. That sidesteps the surface, so it tested nothing of wat's protocols.
+  The builder asked why, and they were right. The chapters now use a surface wherever Java has an
+  interface, and plain namespaced functions where Java has only concrete classes.
 - **Repro:** the probes above.
 
 ### C-023: ML's functors port as dictionaries: generic structs of functions, built from surface structures

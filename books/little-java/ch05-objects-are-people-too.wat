@@ -1,7 +1,9 @@
 ;; A Little Java, A Few Patterns, chapter 5 (Objects Are People, Too).
 ;; Java's pies hold any Object in each layer (fish in one pie, integers in another); in wat a
-;; pie is generic, (PieD :- [T]), and one pie holds one type. The visitors' methods take extra
-;; arguments (what to remove, what to put in its place), and compare with equals; here = does.
+;; pie is generic, (PieD :- [T]), and one pie holds one type. The visitors (RemV, SubstV) are
+;; still concrete classes with no interface, so their methods are plain generic functions in the
+;; visitor's namespace (:lj::rem-v::for-top), taking the method's extra arguments (what to
+;; remove, what to put in its place); they compare with equals, and here = does.
 ;; Printing a pie needs its layers' printer passed in: Java's toString dispatches on Object,
 ;; and wat has no ambient protocol for that.
 ;; Results are printed as the Java oracle's are (oracle/java/ch05-objects-are-people-too.java,
@@ -28,35 +30,28 @@
 (:wat::core::defn :lj::bot :- [T] [] -> (:lj::PieD :- [T]) (:lj::PieD.Bot {}))
 (:wat::core::defn :lj::top :- [T] [t <- T r <- (:lj::PieD :- [T])] -> (:lj::PieD :- [T]) (:lj::PieD.Top {:t t :r r}))
 
-;; ---- the visitors: a function per variant, taking the method's extra arguments
+;; ---- the visitors' methods, taking the method's extra arguments
 
-(:wat::core::defstruct :lj::RemV :- [T]
-  [for-bot <- [T :-> (:lj::PieD :- [T])]
-   for-top <- [T (:lj::PieD :- [T]) T :-> (:lj::PieD :- [T])]])
+;; RemV
+(:wat::core::defn :lj::rem-v::for-bot :- [T] [o <- T] -> (:lj::PieD :- [T]) (:lj::bot))
+(:wat::core::defn :lj::rem-v::for-top :- [T] [t <- T r <- (:lj::PieD :- [T]) o <- T] -> (:lj::PieD :- [T])
+  (:wat::core::if (:wat::core::= o t) (:lj::rem r o) (:lj::top t (:lj::rem r o))))
 
-(:wat::core::defstruct :lj::SubstV :- [T]
-  [for-bot <- [T T :-> (:lj::PieD :- [T])]
-   for-top <- [T (:lj::PieD :- [T]) T T :-> (:lj::PieD :- [T])]])
+;; SubstV
+(:wat::core::defn :lj::subst-v::for-bot :- [T] [n <- T o <- T] -> (:lj::PieD :- [T]) (:lj::bot))
+(:wat::core::defn :lj::subst-v::for-top :- [T] [t <- T r <- (:lj::PieD :- [T]) n <- T o <- T] -> (:lj::PieD :- [T])
+  (:wat::core::if (:wat::core::= o t) (:lj::top n (:lj::subst r n o)) (:lj::top t (:lj::subst r n o))))
 
-(:wat::core::defn :lj::rem-v :- [T] [] -> (:lj::RemV :- [T])
-  (:lj::RemV :for-bot (:wat::core::fn [o <- T] -> (:lj::PieD :- [T]) (:lj::bot))
-             :for-top (:wat::core::fn [t <- T r <- (:lj::PieD :- [T]) o <- T] -> (:lj::PieD :- [T])
-                        (:wat::core::if (:wat::core::= o t) (:lj::rem r o) (:lj::top t (:lj::rem r o))))))
-
-(:wat::core::defn :lj::subst-v :- [T] [] -> (:lj::SubstV :- [T])
-  (:lj::SubstV :for-bot (:wat::core::fn [n <- T o <- T] -> (:lj::PieD :- [T]) (:lj::bot))
-               :for-top (:wat::core::fn [t <- T r <- (:lj::PieD :- [T]) n <- T o <- T] -> (:lj::PieD :- [T])
-                          (:wat::core::if (:wat::core::= o t) (:lj::top n (:lj::subst r n o)) (:lj::top t (:lj::subst r n o))))))
-
+;; each variant's method asks its visitor
 (:wat::core::defn :lj::rem :- [T] [p <- (:lj::PieD :- [T]) o <- T] -> (:lj::PieD :- [T])
   (:wat::core::match p
-    [:lj::PieD.Bot {} ((:lj::RemV/for-bot (:lj::rem-v)) o)]
-    [:lj::PieD.Top {:t t :r r} ((:lj::RemV/for-top (:lj::rem-v)) t r o)]))
+    [:lj::PieD.Bot {} (:lj::rem-v::for-bot o)]
+    [:lj::PieD.Top {:t t :r r} (:lj::rem-v::for-top t r o)]))
 
 (:wat::core::defn :lj::subst :- [T] [p <- (:lj::PieD :- [T]) n <- T o <- T] -> (:lj::PieD :- [T])
   (:wat::core::match p
-    [:lj::PieD.Bot {} ((:lj::SubstV/for-bot (:lj::subst-v)) n o)]
-    [:lj::PieD.Top {:t t :r r} ((:lj::SubstV/for-top (:lj::subst-v)) t r n o)]))
+    [:lj::PieD.Bot {} (:lj::subst-v::for-bot n o)]
+    [:lj::PieD.Top {:t t :r r} (:lj::subst-v::for-top t r n o)]))
 
 ;; ---- printing
 
