@@ -102,6 +102,58 @@
 (:wat::core::defn :ll::rank [t <- :ll::V] -> :wat::core::i64
   (:wat::core::length (:ll::shape t)))
 
+;; ---- building and reshaping tensors (learner/tensors/B- and C-)
+
+(:wat::core::typealias :ll::Ints (:wat::core::Vector :- [:wat::core::i64]))
+
+(:wat::core::defn :ll::ints-from [s <- :ll::Ints k <- :wat::core::i64] -> :ll::Ints
+  (:wat::core::mapv (:wat::core::fn [j <- :wat::core::i64] -> :wat::core::i64 (:wat::core::nth s j))
+                    (:wat::core::range k (:wat::core::length s))))
+
+;; (build-tensor s f): the tensor of shape s whose entry at index idx is (f idx).
+(:wat::core::defn :ll::build-tensor [s <- :ll::Ints f <- [:ll::Ints :-> :ll::V]] -> :ll::V
+  (:ll::built s f (:wat::core::Vector :- [:wat::core::i64])))
+
+(:wat::core::defn :ll::built [s <- :ll::Ints f <- [:ll::Ints :-> :ll::V] idx <- :ll::Ints] -> :ll::V
+  (:ll::tensor (:wat::core::mapv (:wat::core::fn [i <- :wat::core::i64] -> :ll::V
+                                   (:wat::core::let [idx2 (:wat::core::conj idx i)]
+                                     (:wat::core::if (:wat::core::= (:wat::core::length s) 1)
+                                       (f idx2)
+                                       (:ll::built (:ll::ints-from s 1) f idx2))))
+                                 (:wat::core::range 0 (:wat::core::nth s 0)))))
+
+(:wat::core::defn :ll::size-of [s <- :ll::Ints] -> :wat::core::i64
+  (:wat::core::foldl (:wat::core::fn [a <- :wat::core::i64 x <- :wat::core::i64] -> :wat::core::i64 (:wat::core::* a x)) 1 s))
+
+;; Each position's stride: the size of the dimensions after it.
+(:wat::core::defn :ll::strides [s <- :ll::Ints] -> :ll::Ints
+  (:wat::core::mapv (:wat::core::fn [i <- :wat::core::i64] -> :wat::core::i64 (:ll::size-of (:ll::ints-from s (:wat::core::+ i 1))))
+                    (:wat::core::range 0 (:wat::core::length s))))
+
+;; An index's offset among the entries in order, and back.
+(:wat::core::defn :ll::flat-ref [strides <- :ll::Ints idx <- :ll::Ints] -> :wat::core::i64
+  (:wat::core::foldl (:wat::core::fn [a <- :wat::core::i64 i <- :wat::core::i64] -> :wat::core::i64
+                       (:wat::core::+ a (:wat::core::* (:wat::core::nth strides i) (:wat::core::nth idx i))))
+                     0 (:wat::core::range 0 (:wat::core::length strides))))
+
+(:wat::core::defn :ll::invert-reference [strides <- :ll::Ints k <- :wat::core::i64 idx <- :wat::core::i64] -> :ll::Ints
+  (:wat::core::if (:wat::core::= k (:wat::core::length strides))
+    (:wat::core::Vector :- [:wat::core::i64])
+    (:wat::core::concat (:wat::core::Vector :- [:wat::core::i64] (:wat::i64::quot idx (:wat::core::nth strides k)))
+                        (:ll::invert-reference strides (:wat::core::+ k 1) (:wat::i64::rem idx (:wat::core::nth strides k))))))
+
+(:wat::core::defn :ll::deep-tref [t <- :ll::V idx <- :ll::Ints] -> :ll::V
+  (:wat::core::foldl (:wat::core::fn [acc <- :ll::V i <- :wat::core::i64] -> :ll::V (:ll::tref acc i)) t idx))
+
+;; (reshape s t): t's entries, in order, in a tensor of shape s.
+(:wat::core::defn :ll::reshape [s <- :ll::Ints t <- :ll::V] -> :ll::V
+  (:wat::core::if (:wat::core::= (:ll::size-of s) (:ll::size-of (:ll::shape t)))
+    (:wat::core::let [t-strides (:ll::strides (:ll::shape t))
+                      s-strides (:ll::strides s)]
+      (:ll::build-tensor s (:wat::core::fn [idx <- :ll::Ints] -> :ll::V
+                             (:ll::deep-tref t (:ll::invert-reference t-strides 0 (:ll::flat-ref s-strides idx))))))
+    (:ll::fail "cannot reshape: the sizes differ")))
+
 ;; A shape as a value, a list of numbers, the way malt's shape prints.
 (:wat::core::defn :ll::shape-value [t <- :ll::V] -> :ll::V
   (:ll::lst (:wat::core::mapv (:wat::core::fn [n <- :wat::core::i64] -> :ll::V (:ll::num (:wat::i64::to-f64 n))) (:ll::shape t))))
