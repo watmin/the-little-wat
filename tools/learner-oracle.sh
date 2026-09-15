@@ -25,3 +25,10 @@ if printf '%s\n' "$raw" | grep -q '^draws=> '; then
   printf '%s\n' "$raw" | sed -n 's/^draws=> //p' > "$draws"
   echo "learner-oracle: $(wc -l < "$draws") draw lines -> $draws"
 fi
+# Data malt holds that the wat side needs as input (a data set, a fixed theta), printed in
+# the same canonical form as the values (show-data), one per line.
+data="oracle/learner/$name.data"
+if printf '%s\n' "$raw" | grep -q '^data=> '; then
+  printf '%s\n' "$raw" | sed -n 's/^data=> //p' > "$data"
+  echo "learner-oracle: $(wc -l < "$data") data lines -> $data"
+fi

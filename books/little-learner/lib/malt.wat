@@ -410,6 +410,38 @@
         t
         (((:ll::k-relu (:wat::core::- k 1)) ((:ll::relu t) theta)) (:ll::refr theta 2))))))
 
+;; ---- argmax, comparators, models and accuracy
+;; (learner/ext-ops/E-argmax.rkt, B-comparators.rkt; malted/L-accuracy.rkt)
+
+;; argmax-1: the index of a rank-1 tensor's largest entry, scanning from the last down and
+;; moving only for a strictly larger one, so a tie keeps the later index, as malt's does.
+(:wat::core::defn :ll::argmaxed [t <- :ll::V i <- :wat::core::i64 a <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [a-hat (:wat::core::if (:wat::core::> (:ll::rho (:ll::tref t i)) (:ll::rho (:ll::tref t a))) i a)]
+    (:wat::core::if (:wat::core::= i 0) a-hat (:ll::argmaxed t (:wat::core::- i 1) a-hat))))
+
+(:wat::core::defn :ll::argmax-1 [t <- :ll::V] -> :ll::V
+  (:wat::core::let [i (:wat::core::- (:ll::tlen t) 1)]
+    (:ll::num (:wat::i64::to-f64 (:ll::argmaxed t i i)))))
+
+(:wat::core::defn :ll::argmax [t <- :ll::V] -> :ll::V ((:ll::ext1 :ll::argmax-1 1) t))
+
+;; =-1: 1.0 where the two agree, 0.0 where they don't, comparing real parts (a plain number,
+;; not a dual, as malt's comparator-ρ gives).
+(:wat::core::defn :ll::=-1 [t <- :ll::V u <- :ll::V] -> :ll::V
+  ((:ll::ext2 (:wat::core::fn [a <- :ll::V b <- :ll::V] -> :ll::V
+                (:ll::num (:wat::core::if (:wat::core::= (:ll::rho a) (:ll::rho b)) 1.0 0.0)))
+              0 0)
+   t u))
+
+;; (model target theta): the target with its theta fixed, a function of t alone.
+(:wat::core::defn :ll::model [target <- [:ll::V :-> [:ll::V :-> :ll::V]] theta <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [t <- :ll::V] -> :ll::V ((target t) theta)))
+
+;; accuracy: the fraction of rows whose predicted class (argmax) is the true one.
+(:wat::core::defn :ll::accuracy [a-model <- [:ll::V :-> :ll::V] xs <- :ll::V ys <- :ll::V] -> :ll::V
+  (:ll::num (:ll::rho (:ll::/ (:ll::sum (:ll::=-1 (:ll::argmax (a-model xs)) (:ll::argmax ys)))
+                             (:ll::num (:wat::i64::to-f64 (:ll::tlen ys)))))))
+
 ;; ---- blocks (malted/N-blocks.rkt)
 
 ;; A block: a target function, (λ (t) (λ (theta) ...)), and the shapes of the theta it takes.

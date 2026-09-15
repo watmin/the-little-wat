@@ -15,21 +15,6 @@
 (:wat::load-file! "lib/sampling.wat")
 (:wat::load-file! "lib/check.wat")
 
-;; A line of the draws file as integers.
-(:wat::core::defn :ll::parse-ints [line <- :wat::core::String] -> :ll::Ints
-  (:wat::core::mapv (:wat::core::fn [w <- :wat::core::String] -> :wat::core::i64
-                      (:wat::core::match (:wat::string::to-f64 w)
-                        [:wat::core::Option.Some {:value x}
-                          (:wat::core::match (:wat::f64::to-i64 x)
-                            [:wat::core::Option.Some {:value k} k]
-                            [:wat::core::Option.None {} (:ll::fail (:wat::string::concat "not an integer draw: " w))])]
-                        [:wat::core::Option.None {} (:ll::fail (:wat::string::concat "not a draw: " w))]))
-                    (:wat::string::split line " ")))
-
-;; The k-th recorded run's draws, with a fresh counter of how many are used.
-(:wat::core::defn :ll::draws [lines <- :ll::Lines k <- :wat::core::i64] -> :ll::Draws
-  (:ll::Draws :seq (:ll::parse-ints (:wat::core::nth lines k)) :used (:ss::new-counter 0)))
-
 (:wat::core::defn :user::main [] -> :wat::core::nil
   (:wat::core::let [lines (:ll::non-empty (:wat::string::split (:wat::io::read-file "oracle/learner/ch06-an-apple-a-day.draws") "\n"))
                     n :ll::num

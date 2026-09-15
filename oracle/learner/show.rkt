@@ -6,7 +6,7 @@
 ;; own line after "=> ", so tools/learner-oracle.sh can ignore anything else malt prints.
 
 (require malt)
-(provide show record-draws)
+(provide show show-data record-draws)
 
 (define canon
   (λ (y)
@@ -20,6 +20,11 @@
 (define show
   (λ (y)
     (printf "=> ~a~%" (canon y))))
+
+;; show-data: a value the wat side needs as input, not a result to check (NAME.data).
+(define show-data
+  (λ (y)
+    (printf "data=> ~a~%" (canon y))))
 
 ;; record-draws: print the next count draws of (random n) that malt is about to make, without
 ;; making them. Racket's generator is copied, and the copy draws them; the real one then

@@ -49,6 +49,21 @@
     [:wat::core::ReadOutcome.Forms {:forms fs} (:wat::core::first (:wat::core::ast->children fs))]
     [:wat::core::ReadOutcome.Malformed {:cause c} (:ll::fail (:wat::string::concat "cannot read the oracle's line " line))]))
 
+;; A value the oracle printed (NAME.data: a data set, a fixed theta) read back into a value:
+;; (tensor ...) a tensor, (list ...) a list, and a number an f64.
+(:wat::core::defn :ll::ast->value [e <- :wat::WatAST] -> :ll::V
+  (:wat::core::if (:wat::core::= (:wat::core::ast-kind e) "list")
+    (:wat::core::let [ks (:wat::core::ast->children e)
+                      h (:wat::core::ast->source (:wat::core::first ks))
+                      vs (:wat::core::mapv :ll::ast->value (:wat::core::rest ks))]
+      (:wat::core::if (:wat::core::= h "tensor") (:ll::tensor vs) (:ll::lst vs)))
+    (:wat::core::match (:wat::string::to-f64 (:wat::core::ast->source e))
+      [:wat::core::Option.Some {:value x} (:ll::num x)]
+      [:wat::core::Option.None {} (:ll::fail (:wat::string::concat "not a number: " (:wat::core::ast->source e)))])))
+
+(:wat::core::defn :ll::read-value [line <- :wat::core::String] -> :ll::V
+  (:ll::ast->value (:ll::read-one line)))
+
 (:wat::core::defn :ll::non-empty [xs <- :ll::Lines] -> :ll::Lines
   (:wat::core::filterv (:wat::core::fn [s <- :wat::core::String] -> :wat::core::bool (:wat::core::not (:wat::core::= s ""))) xs))
 
