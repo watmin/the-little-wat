@@ -1,0 +1,14 @@
+true
+false
+(Top (Anchovy) (Top (Tuna) (Top (Anchovy) (Bot))))
+(Top (Tuna) (Bot))
+(Top (Anchovy) (Top (Anchovy) (Bot)))
+(Top (Anchovy) (Top (Tuna) (Top (Anchovy) (Bot))))
+(Top (Salmon) (Top (Tuna) (Top (Salmon) (Bot))))
+(Top (Anchovy) (Top (Tuna) (Top (Anchovy) (Bot))))
+(Top 3 (Top 2 (Top 3 (Bot))))
+(Top 2 (Bot))
+(Top 3 (Top 3 (Bot)))
+(Top 5 (Top 2 (Top 5 (Bot))))
+(Top 2 (Bot))
+(Bot)

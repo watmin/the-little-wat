@@ -23,10 +23,10 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · the "malformed form" label on `first` of an empty Vector |
 | **Clean** (docs behind the code) | the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option |
-| **Improve** (works, but slowly or narrowly) | F-019/F-020 variant constructors don't widen, and a unit variant isn't a value · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
+| **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
 | **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-029 generic fns over a surface for non-generic types · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
@@ -69,7 +69,9 @@ give each one's detail.
   clause syntax.
 - **F-019:** a variant constructor inside a collection or stream literal keeps its narrowed
   type, and type arguments unify invariantly, so `[(Option.Some {…})]` is not a
-  `Vector<Option<i64>>`.
+  `Vector<Option<i64>>`. It reaches further (A Little Java ch 5): `(= (FishD.Anchovy {})
+  (FishD.Tuna {}))` is refused, inline or let-bound, and a generic pie of an anchovy and a
+  tuna won't unify. Two values of one enum can't be compared.
 - **F-020:** a bare user-enum unit variant (`:u::T.Nil`) is typed as a nullary function
   everywhere, contradicting the checker's own comment. Only `(:u::T.Nil {})` works.
 - **F-021:** in a program-body macro, `~@` refuses a vector-form argument that a pure
@@ -909,6 +911,17 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 ## The Reasoned Schemer
 
 ### F-019: a variant constructor inside a collection or stream literal keeps its narrowed type, so `[(Option.Some {…})]` is not a `Vector<Option<i64>>`
+
+- **Update** (2026-09-15, A Little Java ch 5; `probes/java/variant-equality*.wat`): the
+  narrowed type reaches equality and generics, not only collection literals.
+  - `(:wat::core::= (:probe::FishD.Anchovy {}) (:probe::FishD.Tuna {}))`, inline or with
+    both let-bound, is refused:
+    > `:wat::core::=: parameter #2 expects :probe::FishD.Anchovy; got :probe::FishD.Tuna`
+  - A generic `(PieD :- [T])` of an anchovy on a tuna doesn't unify:
+    > `:lj::top: parameter #2 expects (:lj::PieD :- [:lj::FishD.Tuna]); got (:lj::PieD :- [:lj::FishD.Anchovy])`
+  - Helpers whose declared return type is the enum (`(defn :lj::anchovy [] -> :lj::FishD …)`)
+    widen, and then both work. That is P-006's route, which every enum a program builds
+    values of needs.
 
 - **Where:** Reasoned Schemer ch 10's engine, before any chapter. Its streams are
   `(:wat::stream::Stream :- [(:wat::core::Option :- [State])])`, where `None` marks a
