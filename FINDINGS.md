@@ -13,6 +13,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
 | The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
 | The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
+| A Little Java, A Few Patterns | 3 / 10 | in progress. The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. F-038: a builtin verb used as a function value is refused in one place and passes the checker in two |
 | The others | — | not started; see README |
 
 ### Relay to wat-rs, by task
@@ -22,7 +23,7 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · the "malformed form" label on `first` of an empty Vector |
 | **Clean** (docs behind the code) | the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option |
 | **Improve** (works, but slowly or narrowly) | F-019/F-020 variant constructors don't widen, and a unit variant isn't a value · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
@@ -103,6 +104,9 @@ give each one's detail.
   arithmetic, in any namespace. Xorshift, splitmix, PCG, hashes, checksums and bit-field
   parsing can't be written.
 - **F-036:** there are no random numbers, not even a seeded generator.
+- **F-038:** a builtin verb (Rust-implemented, e.g. `:wat::i64::to-string`) used as a
+  function value: the checker refuses it passed to `foldl`, but passes it to `mapv` and as a
+  let-bound local that is then called; both of those fail only at runtime.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -1770,6 +1774,30 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 - **So:** the retirement is handled well at the call. The docs just haven't followed
   (compare the `first` Friction entry in The Little Typer).
 - **Class:** GAP. Clean: sweep the guide for retired names.
+
+## A Little Java, A Few Patterns
+
+### F-038: a builtin verb used as a function value passes the checker in two places of three, and fails at runtime
+
+- **Where:** A Little Java, ch 2. The runner let-bound `int :wat::i64::to-string` to print
+  numbers, as it had bound user functions (`bool :lj::show-bool`, and the Learner's
+  `n :ll::num`) without trouble.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/java/builtin-verb-as-value.wat`:
+  - A let-bound builtin, called through its local name, passes the checker. At runtime:
+    > `#wat.runtime/NotCallable {:message "not callable: expected Function, got wat::core::keyword `:wat::i64::to-string` (bound from probes/java/builtin-verb-as-value.wat:17:27 at probes/java/builtin-verb-as-value.wat:18:35)" :location #wat.core/Span {:file "src/runtime.rs" :line 10734 …}`
+  - `(:wat::core::mapv :wat::i64::to-string [1 2 3])` passes the checker. At runtime:
+    > `#wat.runtime/TypeMismatch {:message ":wat::core::mapv: expected wat::core::fn, got wat::core::keyword `:wat::i64::to-string`" …}`
+  - `(:wat::core::foldl :wat::core::+ 0 [1 2 3])` is refused by the checker, at the call:
+    > `:wat::core::foldl: parameter #1 expects [:wat::core::i64 :wat::core::i64 :-> :wat::core::i64]; got :wat::core::keyword`
+  - A user defn works in all three places (`:ll::num` with `mapv`, `:ll::stack2` with `foldl`).
+- **So:** a builtin's name is a keyword value, not a function. The checker knows that in one
+  place (foldl's parameter) and not in the other two, where the mistake ships. The
+  let-bound case is F-014's family: a call through a local's symbol isn't type-checked. The
+  NotCallable message names the user's lines well; its `:location` is wat-rs's Rust (F-006).
+- **Route:** wrap the builtin in a `fn`.
+- **Class:** GAP. Fix: refuse the other two at check time too. Extend: let a builtin's name
+  be a function value, as a defn's is.
+- **Repro:** the probe.
 
 ## Predicted, unverified
 
