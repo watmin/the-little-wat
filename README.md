@@ -18,8 +18,9 @@ language, and each assumes the one before it works.
 | The Little Prover | rewriting and proof over S-expressions | 9/9 chapters, all 49 transcript entries match the book's own prover |
 | The Little Typer | dependent types (Pie) | 16/16 chapters: all 290 printed results match Racket's Pie, and all 108 forms it refuses are refused |
 | The Little Learner | tensors, automatic differentiation, gradient descent | 22/22 (chapters 1–15, Interludes I–VII): all 194 values match malt, the book's own library, exactly |
+| A Little Java, A Few Patterns | objects, interfaces, the visitor pattern, mutable fields | 10/10: all 130 results match Java's |
 
-87 chapters and 1,269 checks pass (`./run.sh`). The code is our own implementation of what
+97 chapters and 1,399 checks pass (`./run.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
 and translated into wat by a wat program (`tools/jbob2wat.wat`). The book's proofs then run
@@ -28,6 +29,7 @@ Pie, is written anew in wat (`books/little-typer/lib/pie.wat`, a type checker by
 normalization by evaluation), and Racket's Pie is its oracle, run as a black box and never
 read. The Little Learner's library, malt, is MIT like J-Bob, so it is ported to wat by hand
 (`books/little-learner/lib/malt.wat`) and checked against malt itself, number for number.
+A Little Java's oracle is Java: our own Java for each chapter, compiled and run by the JDK.
 
 ## A reflection, from the model that wrote the ports
 
@@ -98,6 +100,22 @@ had no wat equivalent:
 The oracle also caught two mistakes of mine in Racket, not wat: malt's `*` had quietly
 turned a count into a dual.
 
+**A Little Java asked for objects,** and my first port dodged the question. I wrote each
+visitor as a struct of closures, a dictionary passed by hand. The builder asked why, when
+wat has `defsurface` and `extend-type` for exactly this, as Clojure has protocols. On
+surfaces the port was better, and it found more:
+- **Better than Java:** a visitor that isn't "good", which Java finds at runtime as a
+  ClassCastException, wat refuses at startup.
+- **The reverse:** an `extend-type` that forgets a feature runs until the feature is
+  called (F-039). Java won't compile it.
+- **One `accept` per answer type:** F-029 forced it, recreating the shape the book's
+  chapter 7 sets out to remove.
+- **Mutable fields** became a service holding a pie. That service's surface had to own the
+  pie datatype itself (Friction).
+- **An error message I had praised misled me.** The containment rule's way out, "declare
+  the enum Impure", was right in the Little Learner. Here the fix was `defrecord`, which it
+  never names (F-040).
+
 **What remains is speed.** The interpreter runs the miniKanren search at about 0.35 ms per
 answer, roughly 300 to 430 times slower than the JVM on the same algorithm. The two
 quadratic costs we found along the way were ours or the data structures', not the
@@ -109,9 +127,9 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-037 are gaps and defects.
+  - F-001 to F-040 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-028 are clean ports.
+  - C-001 to C-029 are clean ports.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -124,11 +142,12 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             215 small programs, each isolating one question (the repros behind FINDINGS)
-oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt
+probes/                             228 small programs, each isolating one question (the repros behind FINDINGS)
+oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
 tools/learner-oracle.sh             malt on a Little Learner chapter's oracle file: its values, draws and data
+tools/java-oracle.sh                the JDK on a Little Java chapter's Java (oracle/java/chNN-*.java): its printed results
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
@@ -148,6 +167,7 @@ Chapters are plain programs run by wat-rs's release binary. Clone
 clojure -M oracle/ch07.clj                                        # one Reasoned Schemer chapter's expected values
 tools/pie-oracle.sh books/little-typer/ch08-pick-a-number-any-number.pie   # one Typer chapter's expected results
 tools/learner-oracle.sh ch04-slip-slidin-away                     # one Learner chapter's expected values (needs racket + malt)
+tools/java-oracle.sh ch07-oh-my                                   # one Little Java chapter's expected results (needs a JDK)
 ```
 
 A chapter passes when it exits 0 and prints its final `ok` line. Its checks stop at the

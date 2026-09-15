@@ -13,8 +13,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Little Prover | 9 / 9 | all 49 transcript entries match guile's J-Bob (C-024). J-Bob is translated into wat by a wat program (`tools/jbob2wat.wat`) and checked against guile running the vendored original. Chapters take 2 to 58 s. F-031: `length` on a String passes the checker |
 | The Little Typer | 16 / 16 | all pass. wat-Pie (`lib/pie.wat`), a dependent type checker written in wat, matches Racket's Pie on all 290 printed results and refuses all 108 forms Pie refuses (C-025, C-026). F-033: taking a WatAST apart copies it, which cost ch 14 43 s until definitions were bound as syntax (2 s). A handled thread death still prints to stderr (Friction) |
 | The Little Learner | 22 / 22 | all pass: chapters 1–15 and Interludes I–VII. All 194 values match malt, the book's own library, exactly: equal f64s, no tolerance (C-027). That includes 1000-step descents, adam, and the book's own Iris run. Randomness is malt's draws replayed through a counter service, and hyperparameters are a value (C-028). Not ported: ch 0 (Scheme), the appendices; ch 15's 20000-revision training (speed: the Iris run takes 236 s against malt's 2.3 s). F-034–F-037 |
-| A Little Java, A Few Patterns | 8 / 10 | in progress. The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. Surfaces have no defaults or extension, so a Java subclass restates its parent (Friction) |
-| The others | — | not started; see README |
+| A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
+| The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
 
@@ -24,9 +24,9 @@ give each one's detail.
 | Task | Findings |
 |---|---|
 | **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime |
-| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · the "malformed form" label on `first` of an empty Vector |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option |
-| **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` of an empty Vector |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) |
+| **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
 | **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · PROVIDE.md's P-001–P-016 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
@@ -113,6 +113,10 @@ give each one's detail.
 - **F-039:** an `extend-type` that leaves out one of the surface's features passes the
   checker; calling the missing feature fails only at runtime (`UnknownFunction`). Java
   refuses to compile such a class.
+- **F-040:** a `defstruct` of two i64s inside a Pure enum is refused as an impure type that
+  "cannot be reconstructed from EDN bytes". The error's only suggestion is to make the enum
+  `:wat::enum::Impure`; the actual fix, declaring the point with `defrecord`, is never named. It
+  is located at `src/check.rs:15104`.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -1863,6 +1867,87 @@ The things that were annoying while writing Little Schemer, now tested. All agai
   inheritance), but it is unstated. Clojure's protocols share through `extend` with a map of
   functions, which can be merged.
 - **Class:** friction (possibly deliberate).
+
+### F-040: a defstruct in a Pure enum is refused as a "live resource", and the error's only way out makes the enum Impure; `defrecord`, the fix, is never named
+
+- **Where:** A Little Java ch 9. The shapes hold a point, `Trans [q <- CartesianPt  s <-
+  ShapeD]`, and the point was a `defstruct` of two i64s.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/java/struct-in-pure-enum.wat`:
+  > `#wat.type/ImpureVariantFieldInPureEnum {:message "containment rule (arc 293.W.2b): :wat::enum::Pure enum \":probe::ShapeD\" may only hold pure variant fields — variant \"Trans\" field \"q\" has impure type \":probe::Pt\", which cannot be reconstructed from EDN bytes across an address-space boundary. Declare the enum :wat::enum::Impure if it must hold a live resource (it then stays in shared memory and never crosses)." :location #wat.core/Span {:file "src/check.rs" :line 15104 …}`
+- **So:** the whole fix is to declare the point with `defrecord`, and the chapter does that. A
+  `defstruct` has the `Struct` nature, which the rule counts as non-portable, whatever its
+  fields (`validate_aggregate_containment`, `src/check.rs:15076`). The message doesn't say so:
+  it calls two i64s a type that "cannot be reconstructed from EDN bytes". Its one suggestion,
+  `:wat::enum::Impure`, would take the whole enum out of the portable world to keep a point
+  that could have been portable. The same message was the right guide in the Little Learner,
+  where the field really was a function. Its span is `rust_caller_span!()`, so it names no
+  file or line of the user's (F-006).
+- The docs can't help. No top-level doc in wat-rs mentions `defstruct` (`USER-GUIDE.md`,
+  `WAT-CHEATSHEET.md`, `CLOJURE-ROSETTA.md`: zero each). Nothing says what separates it from
+  `defrecord`: a record may cross a boundary, and a struct may not.
+- **Class:** GAP (diagnostic). Correct: when the impure field is a user `defstruct` whose own
+  fields are all pure, suggest declaring it with `defrecord`; locate the error at the enum's
+  declaration. Clean: document `defstruct` against `defrecord`.
+- **Repro:** the probe.
+
+### Friction: a Peer surface must own every datatype its messages carry, so a datatype two services share is restated in each
+
+- **Where:** A Little Java ch 10. The pie man's pie lives on a service, a typed `PieCell` (the
+  Seasoned Schemer's cell), whose messages carry the chapter's own pie datatype, `PieD`.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - With `PieD` declared at top level, beside the functions over pies, the surface is refused
+    (`probes/java/peer-messages-outside-type.wat`):
+    > `surface :probe::PieCell :messages type references :probe::PieD which is not declared in this surface's :messages — a peer surface that owns :messages must declare EVERY non-stdlib type reachable from its protocol records/enums (…), so a :satisfies service ships them ALL across a process fork (arc 278 S4c). Add a (defrecord :probe::PieD …) to :messages, or remove the reference.`
+
+    It is located in the user's file, and gives the reason and a way out.
+  - Declared inside the cell's `:messages` instead, `PieD` is usable everywhere, and the
+    chapter does that. The service's surface now comes first in the file, ahead of the pie
+    functions.
+  - A second Peer surface over the same pies can't just refer to the `PieD` the first declares.
+    It is refused with the same error (`probes/java/peer-messages-shared-type.wat`).
+  - It can restate `PieD` in its own `:messages`. An identical copy is accepted
+    (`peer-messages-shared-type-twice.wat`). A copy with one more variant is refused as
+    `DuplicateType`, located at the second copy (`peer-messages-conflicting-type.wat`).
+- **So:** the rule has a reason. The forked child registers exactly what `:messages` declares
+  (`src/types/surface.rs:694`). But the unit of declaration becomes the service, not the
+  datatype:
+  - a program's own domain type moves inside whichever service first carries it;
+  - every further service restates it word for word;
+  - the copies are kept in step by hand, and are refused only once they drift.
+
+  The hint also names `defrecord` for what is an enum, and says nothing of the top-level
+  declaration that has to go.
+- **Class:** friction. Improve: let `:messages` name an already-declared pure type
+  (`:messages [:lj::PieD (defrecord …) …]`), or ship every reachable pure type automatically,
+  since the check already walks them. Correct: the hint's `defrecord` for an enum.
+
+### C-029: A Little Java ports completely, checked against Java itself
+
+- **Where:** all 10 chapters, 130 results (`books/little-java/`).
+- **How:** each chapter's Java is our own, written from the book's classes, with `toString`s
+  that print S-expressions. `tools/java-oracle.sh` compiles and runs it (JDK 27) and keeps its
+  results in `oracle/java/*.expected`. The wat runner must match every line, in order.
+- **The mapping:**
+  - an abstract class and its variants: a Pure enum;
+  - a method on every variant: a function with an arm per variant;
+  - an interface: a surface (`defsurface`);
+  - a visitor: a struct of its fields that `extend-type`s the surface;
+  - a mutable field: a service holding the value (ch 10).
+- **Better than Java:** a visitor that isn't "good" (ch 9) is the book's runtime
+  ClassCastException. In wat it is refused at check time, where the new protocol is expected
+  (`probes/java/old-visitor-on-new-shape.wat`).
+- **Worse than Java:**
+  - a partial `extend-type` runs, which Java refuses to compile (F-039);
+  - `accept` is written once per answer type, the shape ch 7 sets out to remove (F-029);
+  - two fish can't be compared without widening helpers (F-019);
+  - surfaces have no defaults and can't extend each other (Friction);
+  - there is no identity, so Java's `pie == alias` has no counterpart, and neither has ch 9's
+    ClassCastException result. Both are kept as comments.
+- **A correction on the record:** the visitor chapters were first written with visitors as
+  structs of closures (dictionary passing, as C-023 did for ML functors). The builder pointed
+  out that wat has `defsurface` and `extend-type` for exactly this, as Clojure has protocols,
+  and the chapters were rewritten on surfaces. Every finding above comes from the surface
+  version.
 
 ## Predicted, unverified
 
