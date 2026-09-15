@@ -376,6 +376,40 @@
 (:wat::core::defn :ll::dot-product [w <- :ll::V t <- :ll::V] -> :ll::V
   (:ll::sum (:ll::* w t)))
 
+;; *-2-1: each rank-1 row of the first times the rank-1 second; malt extends the extended *
+;; (learner/ext-ops/C-star-2-1.rkt).
+(:wat::core::defn :ll::*-1-1 [t <- :ll::V u <- :ll::V] -> :ll::V ((:ll::ext2 :ll::* 1 1) t u))
+(:wat::core::defn :ll::*-2-1 [t <- :ll::V u <- :ll::V] -> :ll::V ((:ll::ext2 :ll::*-1-1 2 1) t u))
+
+;; (dot-product-2-1 w t) = (sum (*-2-1 w t)) (malted/A-core.rkt)
+(:wat::core::defn :ll::dot-product-2-1 [w <- :ll::V t <- :ll::V] -> :ll::V
+  (:ll::sum (:ll::*-2-1 w t)))
+
+;; rectify: a scalar below 0.0 becomes the constant 0.0; any other stays itself, dual and all
+;; (learner/ext-ops/H-rectify.rkt, comparing real parts as malt's <-0-0 does).
+(:wat::core::defn :ll::rectify-0 [x <- :ll::V] -> :ll::V
+  (:wat::core::if (:wat::core::< (:ll::rho x) 0.0) (:ll::num 0.0) x))
+(:wat::core::defn :ll::rectify [t <- :ll::V] -> :ll::V ((:ll::ext1 :ll::rectify-0 0) t))
+
+;; ((linear t) theta) = (dot-product-2-1 w t) + b, theta = (w b) (malted/B-layer-fns.rkt)
+(:wat::core::defn :ll::linear [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:ll::+ (:ll::dot-product-2-1 (:ll::ref theta 0) t) (:ll::ref theta 1))))
+
+;; ((relu t) theta) = (rectify ((linear t) theta)) (malted/K-dense.rkt)
+(:wat::core::defn :ll::relu [t <- :ll::V] -> [:ll::V :-> :ll::V]
+  (:wat::core::fn [theta <- :ll::V] -> :ll::V
+    (:ll::rectify ((:ll::linear t) theta))))
+
+;; (((k-relu k) t) theta): k relu layers in a row, each taking the next two members of theta;
+;; at 0 the input itself (malted/K-dense.rkt).
+(:wat::core::defn :ll::k-relu [k <- :wat::core::i64] -> [:ll::V :-> [:ll::V :-> :ll::V]]
+  (:wat::core::fn [t <- :ll::V] -> [:ll::V :-> :ll::V]
+    (:wat::core::fn [theta <- :ll::V] -> :ll::V
+      (:wat::core::if (:wat::core::= k 0)
+        t
+        (((:ll::k-relu (:wat::core::- k 1)) ((:ll::relu t) theta)) (:ll::refr theta 2))))))
+
 ;; ((quad x) theta) = a*x^2 + (b*x + c), theta = (a b c) (malted/B-layer-fns.rkt)
 (:wat::core::defn :ll::quad [x <- :ll::V] -> [:ll::V :-> :ll::V]
   (:wat::core::fn [theta <- :ll::V] -> :ll::V
