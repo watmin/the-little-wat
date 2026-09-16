@@ -3087,13 +3087,35 @@ name. Rows blocked are counted once per row.
   |---|---|
   | `fire-rules` (native) | `2` |
   | `fire-rules$oracle` (the SPEC) | `0\|2` |
-  | `fire-once` | `0` |
+  | `fire-once` (native) | `0` |
+  | `fire-once$oracle` | *no rows at all* |
   | `fire-fixpoint` | `0\|2` |
+  | `fire-stratified` | `0\|2` |
 
   The accumulator runs on the **first** pass, before anything has been derived, and asserts
   `n = 0`; the next pass asserts `n = 2`; and because a closure is a set of facts (F-066) the two
   distinct values both survive. `fire-once`'s lone `0` shows the first pass genuinely sees an
-  empty set. Native suppresses the stale row; the SPEC and `fire-fixpoint` keep it.
+  empty set. Native suppresses the stale row; the SPEC keeps it — and so do **`fire-fixpoint`
+  and `fire-stratified`, both public, user-callable verbs**
+  (`probes/rete/fire-verbs-compared.wat`). That `fire-stratified` leaks locates the mechanism:
+  `fire-rules$oracle` delegates to it, and "within each stratum fire-stratified still uses
+  fire-fixpoint" (`fire.wat:357`), so the stale row comes from the fixpoint inside a stratum.
+- **A second divergence in the same family, found by chasing an empty output line**
+  (`probes/rete/fire-once-oracle-empty.wat`). Counting rows rather than joining values:
+  ```
+  fire-once        (native)  shippable rows: 2  tally rows: 1  derived facts: 3
+  fire-once$oracle           shippable rows: 0  tally rows: 0  derived facts: 3
+  fire-rules       (native)  shippable rows: 2  tally rows: 1  derived facts: 3
+  fire-rules$oracle          shippable rows: 2  tally rows: 2  derived facts: 3
+  ```
+  All four derive the same **3** facts into production memory. But `fire-once$oracle` answers
+  **no query rows at all**, where `fire-once` native answers 2 and 1 from the same 3 derived
+  facts. So that mouth populates production memory without populating query memory: the
+  conclusions are there and nothing can read them.
+- **Insertion is clean, which bounds this.** `insert-all` and `insert-all$oracle` both leave 7
+  facts, and all four insert×fire crossings give the same conclusions
+  (`probes/rete/insert-native-vs-oracle.wat`). The divergence is confined to the fire path; facts
+  do not enter the network differently depending on which mouth inserted them.
 - **Only the bare folds leak** (`probes/rete/accumulator-empty-pass.wat`):
 
   | fold | native | SPEC |
@@ -3112,17 +3134,19 @@ name. Rows blocked are counted once per row.
   undocumented like the rest of the rete (F-065). A user who reaches for `fire-fixpoint` by name,
   reasonably enough for a forward-chaining engine, silently gets a superset of the truth. Nothing
   in wat-rs's source acknowledges any native/oracle divergence.
-- **Class:** GAP (a defect in the reference implementation, or in `fire-fixpoint`, depending
-  which is meant to be right). Fix: don't assert a bare fold's result over an empty element set
-  during the fixpoint, or re-derive the accumulator's fact after the closure settles as native
-  does. Correct: if the leak is intended in the SPEC, say so — a differential oracle that
-  disagrees with production is worse than no oracle.
+- **Class:** GAP (a defect in the reference implementation, or in `fire-fixpoint` and
+  `fire-stratified`, depending which is meant to be right). Fix: don't assert a bare fold's
+  result over an empty element set during the fixpoint, or re-derive the accumulator's fact
+  after the closure settles as native does; and populate query memory in `fire-once$oracle`, or
+  say that one pass through that mouth is not meant to be queried. Correct: if either
+  divergence is intended in the SPEC, say so — a differential oracle that disagrees with
+  production is worse than no oracle.
 - **A note on how this was nearly mis-filed.** My first version of the fold probe wrote
   `(:wat::rete::acc::sum :qty)` and died with `acc: var unbound` at `wat/rete/acc.wat:83` — deep
   in wat's own source, which reads exactly like a defect. It was mine: an accumulator's operand
   is a `?`-variable bound in the `:from` condition, `(acc::sum ?q) :from (:R (?q <- :qty))`, and
   nothing documents that either (F-065).
-- **Repro:** the four probes.
+- **Repro:** the seven probes under `probes/rete/`.
 
 ## Predicted, unverified
 

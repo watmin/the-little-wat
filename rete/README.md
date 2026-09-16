@@ -123,17 +123,35 @@ They disagree (F-067). On a rule that counts a derived fact:
 |---|---|
 | `fire-rules` (native) | `2` |
 | `fire-rules$oracle` (the SPEC) | `0\|2` |
-| `fire-once` | `0` |
+| `fire-once` (native) | `0` |
+| `fire-once$oracle` | *no rows at all* |
 | `fire-fixpoint` | `0\|2` |
+| `fire-stratified` | `0\|2` |
 
 The accumulator runs on the first pass, before anything is derived, and asserts `n = 0`; the
 next pass asserts `n = 2`; and because a closure is a set of facts (F-066), both survive. Only
 the **bare** folds do this — `count` and `sum` leak a `0`, while `min` and `max` don't, because
 an empty `Option` fold is dropped rather than asserted (`accum-pass.wat:16`).
 
-What makes it matter beyond an internal discrepancy: `fire-fixpoint` is public and user-callable,
-and it is the verb a reader would reach for by name in a forward-chaining engine. It silently
-returns a superset of the truth, and nothing documents any of this (F-065).
+What makes it matter beyond an internal discrepancy: `fire-fixpoint` and `fire-stratified` are
+both public and user-callable, and they are the verbs a reader would reach for by name in a
+forward-chaining engine. They silently return a superset of the truth, and nothing documents any
+of this (F-065). That `fire-stratified` leaks locates the mechanism too — `fire-rules$oracle`
+delegates to it, and each stratum still runs a fixpoint inside.
+
+There is a second divergence in the same family, found by chasing an output line that looked
+wrong. Counting rows instead of joining values:
+
+```
+fire-once        (native)  shippable rows: 2  tally rows: 1  derived facts: 3
+fire-once$oracle           shippable rows: 0  tally rows: 0  derived facts: 3
+```
+
+Both derive the same three facts into production memory, but the oracle mouth answers **no query
+rows at all** — the conclusions are there and nothing can read them.
+
+Insertion, by contrast, is clean: `insert-all` and `insert-all$oracle` both leave 7 facts, and
+all four insert×fire crossings agree. The divergence is confined to the fire path.
 
 `fire-rules-explain` works and carries real provenance — a `DerivationNode` tree where `rule` is
 `Some(name)` for a derived fact and `None` for an asserted leaf. Two support entries for a
