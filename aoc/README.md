@@ -17,8 +17,10 @@ print, in order (`lib/check.wat`).
 | day01 sonar | 2000 depth readings | increases, and increases of three-reading window sums | 1.08 s | 2.58 s |
 | day02 smoke | a 100×100 grid of heights | risk of the low points, and steps downhill to the left | 1.80 s | 2.40 s |
 | day03 words | 5000 words | how many are distinct, and how often the commonest occurs | 0.90 s | 2.50 s |
+| day04 binary | 1000 binary numbers | the product of the common-bit numbers, and of the two narrowed rows | 1.05 s | 2.50 s |
+| day05 paths | a 60×60 grid of risks, then the same grown to 300×300 | the cheapest path across each | 125.4 s | 2.78 s |
 
-All six answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and
+All ten answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and
 the JVM's about 1.49 s of Clojure's.
 
 ## What the puzzles showed
@@ -33,6 +35,21 @@ the JVM's about 1.49 s of Clojure's.
   building a Vector element by element is quadratic as well. Both puzzles here index.
 - **Hash maps are comfortable.** 5000 words counted into a `HashMap`, then its keys read back,
   take 0.9 s in all, startup included — the one puzzle here faster than its Clojure reference.
+- **A puzzle about bits has to be written without them.** wat has no and, or, xor, not or
+  shift (F-035), so day04 builds each number by doubling and takes a complement as
+  `(2^width - 1) - n`, where the Clojure reference says `bit-xor` and a shift. The answers
+  match; the operations the puzzle is about are missing.
+- **There is no ordered collection.** Dijkstra's frontier is a priority queue, and the Clojure
+  reference keeps it in a sorted set. wat has no sorted set, sorted map, priority queue or heap
+  (F-056), only `sort` over a whole collection, so day05 keeps a bucket per cost — which works
+  only because every step costs between 1 and 9.
+- **Building a map is where the time goes, because every insert copies the map.** day05 is 45
+  times slower than its reference, and nearly all of its work is `hashmap::assoc` and
+  `hashset::conj` over 90000 squares. `probes/aoc/map-insert-scaling.wat` shows why: 2000
+  entries into a hash map take 84 ms and 4000 take 341 ms — four times the time for twice the
+  entries — and a hash set behaves the same (45 ms and 163 ms). Reading is cheap and linear:
+  4000 lookups take 41 ms. So every container in wat copies on write (F-057, with F-023 and
+  F-055), and anything that accumulates is quadratic in what it accumulates.
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 
