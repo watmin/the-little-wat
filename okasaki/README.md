@@ -13,6 +13,8 @@ a wrong structure and a right one is worth nothing.
 | chapter | structure | result |
 |---|---|---|
 | 2 | `UnbalancedSet` — a persistent set as a BST | correct (C-051); **40× slower than the workaround it would replace** (F-097) |
+| 3 | `LeftistHeap` — the priority queue F-056 says is missing | correct, invariants checked at every node; **O(log n) confirmed** — 1.19× across three doublings (C-052) |
+| 5 | `BatchedQueue` — two lists, amortized O(1) | correct; bound **exact** when enum-carried (8755 ns/op flat), **destroyed** when record-carried (158808 at n=4000) — **F-098** |
 
 ## What chapter 2 settled, for the rest of the port
 
@@ -24,6 +26,18 @@ So **every structure in this book pays ~2 µs per node**, and each will be measu
 native `PersistentMap`/`HashMap` competitor it cannot beat on constant factors. The port's value
 is therefore in **correctness, expressiveness, and the asymptotic curves** — not in wall-clock
 wins. Knowing that at chapter 2 rather than chapter 9 is itself a result.
+
+## What chapter 5 found
+
+The queue is a pair of lists, and the obvious way to hold a pair in wat is a `defrecord`. That
+makes every operation O(n): **a record field holding a user enum value is deep-copied on
+construction**, so each `snoc` copies both lists. The identical pair in an **enum variant** is
+shared, and the amortized bound holds exactly.
+
+Four other explanations were measured and eliminated first — `cons` is O(1), `rev` is O(n),
+record *allocation* does not degrade with count, and removing the harness's own record traffic
+made the curve worse. Native containers are unaffected: a `PersistentVector` field is O(1) either
+way, which is why nothing in wat's own stdlib has tripped over this.
 
 ## Running
 

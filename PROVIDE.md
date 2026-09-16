@@ -419,3 +419,20 @@ These are fixes, not additions, but each is something users currently write them
   and then dies at runtime (F-031). A user who takes wat's own advice about persistent
   containers (F-057) reaches this corner by the shortest path available.
 - **Evidence:** F-088, F-080, F-031.
+
+### P-026: a priority queue
+
+- **What we wrote:** `okasaki/lib/heap.wat` — Okasaki's leftist heap, 60 lines: `merge` is
+  O(log n), and `insert` and `delete-min` are both `merge` in disguise.
+- **Why it belongs in the stdlib:** F-056 records that wat has no priority queue and **no ordered
+  collection of any kind**. Dijkstra, A*, event simulation, Huffman coding and k-way merge all
+  need one; `aoc/day05-paths.wat` had to hand-roll bucket queues to avoid it.
+- **Verified, not assumed:** the leftist property and heap order are checked at every node after
+  2000 inserts, the drain is sorted and loses nothing, and insert cost rises 1.19× across three
+  doublings where O(n) would predict 8× (C-052).
+- **But ship it native, not in wat.** F-097 measured a hand-written persistent set at 34–43× the
+  native `PersistentMap` it would replace, because an interpreted node visit costs ~2 µs whatever
+  the algorithm. The same applies here: this heap is the right *specification*, and a wat-level
+  implementation is not the right *delivery*.
+- **And mind F-098 if it is written in wat:** carry the payload in an enum variant, not a record.
+- **Evidence:** C-052, F-056, F-097, F-098.
