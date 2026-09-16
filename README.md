@@ -21,8 +21,11 @@ language, and each assumes the one before it works.
 | A Little Java, A Few Patterns | objects, interfaces, the visitor pattern, mutable fields | 10/10: all 130 results match Java's |
 | The Clojure Koans (our own koans on its 27 topics) | Clojure itself, form by form | of 229 koans, 29 port literally and 163 more run the wat way; 17 have no route today, and 20 are refused by design |
 | Make-a-Lisp (kanaka/mal) | building a language: reader, eval, environments, tail calls, macros, try | 11/11 steps: 909 of mal's own tests pass, every hard one; 38 optional ones don't (metadata, debug tracing) |
+| SICP chapter 3 (our own Scheme on its topics) | state, mutable data, concurrency, streams | 4 chapters, 65 results, all matching guile |
+| Advent of Code (our own puzzles, in its shape) | reading a file, parsing, grids, counting, speed | 2 puzzles, 4 answers, all matching the Clojure reference |
 
-97 chapters (1,399 checks) and 27 koan programs (163 checks) pass (`./run.sh`), and the 11
+97 chapters (1,399 checks), 27 koan programs (163 checks), 4 SICP chapters (65 results against
+guile) and 2 Advent of Code puzzles (4 answers against Clojure) pass (`./run.sh`), and the 11
 Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
@@ -157,7 +160,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-051 are gaps and defects.
+  - F-001 to F-055 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
   - C-001 to C-032 are clean ports and acceptance results.
 
@@ -167,6 +170,8 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.
 - [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.
+- [sicp/README.md](sicp/README.md): SICP chapter 3 in wat, against guile.
+- [aoc/README.md](aoc/README.md): Advent of Code's shape in wat, against a Clojure reference.
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -175,7 +180,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             249 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             258 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
@@ -190,6 +195,10 @@ mal/stepN_<name>.wat                Make-a-Lisp in wat, one program per step
 tools/mal-test.sh, tools/mal-shim.py  a step against mal's own tests; the shim is the terminal a wat program can't be
 tools/mal-all.sh                    every mal step, one summary line each
 vendor/mal/                         Make-a-Lisp's test runner and step tests, MPL 2.0, unmodified
+sicp/chNN-<topic>.wat               SICP chapter 3 in wat, one program per section
+tools/sicp-oracle.sh                guile on a section's Scheme (oracle/sicp/NAME.scm): its printed results
+aoc/dayNN-<name>.wat, aoc/input/    our own puzzles in Advent of Code's shape, and their inputs
+tools/aoc-oracle.sh                 Clojure on a puzzle's reference implementation (oracle/aoc/NAME.clj)
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers

@@ -16,7 +16,8 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
-| SICP (NEXT.md §3) | 2 chapters | in progress. Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state: 20 results, an account as a service, two access points as two peers on one address. §3.3 mutable data: 25 results, a queue and a table as services (wat has no mutable pairs, so the book's two-pointer queue would need the Arena, C-016). F-052 |
+| SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
+| Advent of Code (NEXT.md §4) | 3 puzzles, 6 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar: 2000 readings. day02 smoke: a 100×100 grid, read one character at a time. day03 words: 5000 words counted into a hash map. Times: wat 1.1 s, 1.8 s, 0.9 s against Clojure's 2.6 s, 2.4 s, 2.5 s (wat's startup is 0.29 s, Clojure's 1.49 s). F-055: `rest` on a Vector clones it, so every loop here indexes with `nth` |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -27,10 +28,10 @@ give each one's detail.
 | Task | Findings |
 |---|---|
 | **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type |
-| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) |
 | **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
-| **Improve** (works, but slowly or narrowly) | F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · a String's `reverse`, `index-of` and characters · PROVIDE.md's P-001–P-017 |
+| **Improve** (works, but slowly or narrowly) | F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · PROVIDE.md's P-001–P-017 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -149,6 +150,14 @@ give each one's detail.
 - **F-051:** a message to a service costs about 224 µs, against under 2 µs for a function
   call. So a mal call whose environment lives on a service, as the doctrine keeps state,
   costs 3 ms.
+- **F-052:** a function can't declare a connected peer as its return type, so every service
+  client writes its connect inline.
+- **F-053:** a forced lazy stream doesn't remember: one stream value walked twice computes
+  every element twice, where Scheme's `delay` and Clojure's lazy seqs compute it once.
+- **F-054:** a definition that names itself reads its own name as a keyword literal, and the
+  error is a type mismatch about a keyword.
+- **F-055:** `rest` on a Vector clones what is left of it, so walking one is quadratic: 20000
+  elements take 4.9 s by `rest` and 0.25 s by `nth`. `conj` clones too (F-023).
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -2370,24 +2379,105 @@ name. Rows blocked are counted once per row.
 
 ## SICP
 
-### F-052: a function can't answer a connected peer: a peer's type is not its surface's name
+### F-052: a function can't answer a connected peer, and an address that has been through a parameter connects to nothing usable
 
-- **Where:** SICP §3.1 in wat (`sicp/ch31-local-state.wat`). An account is a service, and a
-  second access point to one account is a second connect to its address, so the connect wanted
-  to be a function of the address.
-- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/sicp/connect-return-type.wat`:
-  > `:probe::connect-to: body produces (:wat::kernel::Peer :- [:?1461 :?1462]); signature declares :probe::Cell`
+- **Where:** SICP §3.1 and §3.4 in wat. An account is a service; a second access point to one
+  account is a second connect to its address, and a worker on another thread dials the account
+  for itself.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - **A function that answers a peer is refused** (`probes/sicp/connect-return-type.wat`):
+    > `:probe::connect-to: body produces (:wat::kernel::Peer :- [:?1461 :?1462]); signature declares :probe::Cell`
+  - **A peer passed as an argument is fine** (`probes/sicp/peer-as-parameter.wat`, which runs
+    and prints 7): connecting to the address read straight off a typed handle gives a peer that
+    is the surface's type, and it passes to a function declared to take one.
+  - **An address declared as a bare `:wat::kernel::Address` does not**
+    (`probes/sicp/connect-bare-address.wat`, a worker dialling a service it was handed):
+    > `:probe::read-once: parameter #1 expects :probe::Cell; got (:wat::kernel::Peer :- [:?2830 :?2831])`
 
-  The same match, written inline in the `let` that builds a struct whose field is typed
-  `:probe::Cell`, checks and runs. Every service client in this repository writes it that way:
-  `books/seasoned-schemer/lib/counter.wat`, `books/little-java/ch10-the-state-of-things-to-come.wat`,
-  `mal/lib/env.wat`, and now the SICP chapters.
-- **So:** a connected peer has a two-parameter kernel type, which unifies with a surface's name
-  only where a declared field or parameter says so. A function that answers one has nowhere to
-  say it, so the connect is copied to every site that needs it: six times in this repository.
-- **Class:** GAP. Fix: let a surface's name be the type a connect answers, so `-> :probe::Cell`
-  checks. Clean: if some spelling does work, document it.
+    The peer's two type parameters stay unresolved, so the connection speaks to nothing: a
+    parameter refuses it, and so does a struct field.
+- **So:** an address carries its service's protocol in its type, and the spelling that keeps it
+  is `(:wat::kernel::Address :- [<Surface>::Op <Surface>::Reply])`, as the stdlib's own
+  services declare it (`wat/kernel/services/stdio.wat`). Declared bare, the type is lost and
+  the error names only two unresolved variables — not what to write instead. With the full
+  spelling, a worker on another thread can dial the service and speak to it
+  (`sicp/ch34-concurrency.wat`).
+- **Class:** GAP. Fix: let a function declare a peer's type as its surface's name. Correct: when
+  a connect answers a peer whose parameters are unresolved, say that the address needs its
+  protocol (`Address :- [X::Op X::Reply]`). Clean: the guide never shows the address spelling.
+- **Repro:** `probes/sicp/connect-return-type.wat` (a function answering a peer),
+  `probes/sicp/peer-as-parameter.wat` (a peer as an argument, which works),
+  `probes/sicp/connect-bare-address.wat` (an address without its protocol).
+
+### F-053: a forced lazy stream doesn't remember, so walking one twice computes it twice
+
+- **Where:** SICP §3.5 in wat (`sicp/ch35-streams.wat`). Its nine values match guile's, but the
+  chapter's point is that `delay` memoizes: an element is computed once, however often the
+  stream is walked.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/sicp/stream-memo.wat`. One stream
+  value, `(smap counted (integers-from 1))`, walked three times, each computation counted on a
+  counter service:
+
+  | walked | wat computed | guile computed |
+  |---|---|---|
+  | the first five | 5 | 6 |
+  | the same five again | 10 | 6 |
+  | the first seven | 17 | 8 |
+
+- **So:** `:wat::stream::lazy` re-evaluates its body at every force. A stream is lazy but not
+  shared: an algorithm that walks one twice pays twice, and SICP's feedback definitions (§3.5.3's
+  integral, the implicit fibs) would cost exponentially instead of linearly. Scheme's `delay`
+  memoizes, and so do Clojure's lazy seqs.
+- **Class:** GAP. Extend: remember a forced thunk, or offer a memoizing stream beside the
+  re-evaluating one, and say which is which.
 - **Repro:** the probe.
+
+### F-054: a definition that names itself reads its own name as a keyword, and the error says only "got `:wat::core::keyword`"
+
+- **Where:** SICP §3.5 defines the Fibonacci stream by naming it inside its own definition:
+  `(define fibs (cons-stream 0 (cons-stream 1 (add-streams (stream-cdr fibs) fibs))))`. Only the
+  delay makes that honest.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/sicp/self-referential-stream.wat`:
+  four type-check errors, the first being
+  > `:probe::rest-of: parameter #1 expects :probe::IntStream; got :wat::core::keyword`
+
+  Inside its own body the name `:probe::fibs` is a keyword literal (F-020's family: a bare
+  keyword is a value), so the complaint is about a type, and nothing says that a definition
+  can't name itself.
+- **So:** a stream defined in terms of itself can't be written; `sicp/ch35-streams.wat` writes
+  fibs as a function of its two seeds instead, and the Scheme oracle says it the same way so
+  that the two agree on how, not only on what. Mutually recursive `defn`s are fine (C-008), so
+  this is about values, not functions.
+- **Class:** GAP. Correct: say that a definition cannot refer to itself, where the type error
+  is now. Extend: let a `def` whose body is lazy name itself, as Scheme's `define` does.
+- **Repro:** the probe.
+
+## Advent of Code
+
+### F-055: walking a Vector by `rest` copies it, so the idiomatic walk is quadratic
+
+- **Where:** the Advent of Code puzzles in wat (`aoc/`). Every puzzle walks its input, and the
+  two ways a functional program does that are `(rest xs)` down to empty and `(conj acc x)` up
+  from empty.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/aoc/nth-scaling.wat`, one Vector of 20000 numbers, summed twice:
+
+    | walked | time |
+    |---|---|
+    | by index, with `nth` | 250 ms |
+    | by `rest`, to the end | 4869 ms |
+
+  - `probes/aoc/conj-subs-scaling.wat`: `conj` 5000 times takes 292 ms and 10000 times 1057 ms
+    — four times the work for twice the elements. One-character `subs` is linear: 2000
+    characters in 25 ms, 4000 in 54 ms.
+- **So:** `rest` clones what is left of the Vector, as `conj` clones the whole of it (F-023).
+  Indexing with `nth` is constant, at about 12 µs. A 2000-line puzzle input is comfortable
+  either way; a 20000-line one is five seconds of copying, for a sum. Strings are not the
+  problem: scanning a grid character by character is linear.
+- **Class:** GAP (performance). Improve: let `rest` on a Vector be a view rather than a copy.
+  Clean: say which sequence type is meant for walking — a `PersistentVector` exists, and
+  nothing points a user to it.
+- **Repro:** the two probes.
 
 ## Predicted, unverified
 
