@@ -168,7 +168,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
-- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-017).
+- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-020).
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.
 - [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.

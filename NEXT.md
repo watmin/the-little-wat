@@ -7,6 +7,25 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
+## Where this stands (2026-09-15)
+
+§1–§5 are done, each in its own directory with its own oracle, and all of them run under
+`./run.sh`:
+
+| | suite | result |
+|---|---|---|
+| §1 | Clojure Koans | `koans/` — 229 rows: 29 literal, 163 the wat way, 17 with no route, 20 refused by design (C-030) |
+| §2 | Make-a-Lisp | `mal/` — 11/11 steps, 909 of mal's own tests (C-032) |
+| §3 | SICP chapter 3 | `sicp/` — 4 chapters, 65 results against guile |
+| §4 | Advent of Code | `aoc/` — 5 puzzles, 10 answers against Clojure |
+| §5 | PAIP chapters 11–12 | `paip/` — 2 chapters, 58 results against guile (C-033, C-034) |
+
+**§6, the Shield slice, is not being built** — the builder's call, 2026-09-15. It needs
+`holon-lab-ddos` (a Clojure detection pipeline with known behaviour) and traffic to run it
+against, neither of which is on this machine; and §6 names the builder as the only oracle for
+the right answer, so there is no honest way to grade it here. `holon-rs` does carry the VSA
+encoding, if the item is ever revived.
+
 ## 1. Clojure Koans / 4Clojure: is wat actually a Clojure dialect?
 
 - **What:** hundreds of small problems, each already an assertion with a known answer.

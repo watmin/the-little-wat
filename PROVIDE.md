@@ -33,6 +33,9 @@ the names and the design are the builder's call.
 | P-015 | Bit operations on integers | core (F-035) | open |
 | P-016 | A seeded, pure random number generator | stdlib (F-036) | open |
 | P-017 | Clojure core's small functions (`inc`, `comp`, `partial`, `merge`, `group-by`, set operations …) | stdlib (C-030) | open |
+| P-018 | A set that shares structure, to go with `PersistentMap` and `PersistentVector` | stdlib (F-057) | open |
+| P-019 | An ordered collection: a sorted map or set, a priority queue, a heap | stdlib (F-056) | open |
+| P-020 | An improper list — or a reader that refuses at the dot instead of admitting a symbol named `.` | core/reader (F-059) | open |
 
 ## Stdlib
 
@@ -137,6 +140,53 @@ the names and the design are the builder's call.
   over its functions' types; `(group-by f coll)` answering a `HashMap` of `Vector`s; the set
   operations on `HashSet`.
 - **Evidence:** the Clojure Koans table in FINDINGS.md; `koans/literal/*.tsv`.
+
+### P-018: a set that shares structure
+
+- **What we wrote:** `(:wat::core::PersistentMap :- [:wat::core::i64 :wat::core::bool])`, used as
+  a set by ignoring the value — the settled squares in `aoc/day05-paths.wat`, and the same shape
+  would be wanted for any visited set, seen-set or dedup pass.
+- **Why:** `HashSet` copies on every `conj`, so accumulating into one is quadratic;
+  `PersistentMap` and `PersistentVector` share structure and stay linear, but there is no
+  persistent **set** to go with them (F-057). Moving day05's frontier to the sharing containers
+  took it from 135.1 s to 20.6 s, and the settled set had to be faked as a map to `true` to get
+  there.
+- **Shape:** whatever `PersistentMap` is, with the value side removed — `conj`, `contains?`,
+  `disj`, `length`, `empty?`, and something to enumerate it (F-046 says a `HashSet` cannot be
+  enumerated today either).
+- **Evidence:** F-057, F-046, `probes/aoc/persistent-insert-scaling.wat`,
+  `probes/aoc/map-insert-scaling.wat`.
+
+### P-019: an ordered collection
+
+- **What we wrote:** a bucket per cost — Dial's algorithm — in `aoc/day05-paths.wat`, which
+  works only because every step in that puzzle costs between 1 and 9. A general Dijkstra cannot
+  be written that way.
+- **Why:** wat has no sorted set, sorted map, priority queue or heap; only `sort` and `sort-by`
+  over a whole collection (F-056). A priority queue is the data structure of shortest paths,
+  schedulers, event simulation, top-k and merge — and sorting the whole frontier on every pop is
+  not a substitute.
+- **Shape:** at minimum a heap with `push`, `pop-min` and `peek`. A sorted map would also answer
+  the "next key after k" questions that `sort` cannot.
+- **Evidence:** F-056, `probes/aoc/sorted-structures.wat`, `aoc/day05-paths.wat`.
+
+### P-020: an improper list, or a reader that says no at the dot
+
+- **What we wrote:** nothing — this one cannot be written. PAIP chapter 12's membership clauses
+  need a list with a variable tail, `(?i . ?rest)`, and they are absent from `paip/` for that
+  reason. The Reasoned Schemer met the same wall and answered it by leaving quoted data
+  entirely: `:rs::Term` is an enum with its own `Pair` variant, which exists precisely because
+  "quoted lists can't hold a pair with a variable tail".
+- **Why:** wat reads `(?i . ?rest)` as a three-element list whose middle element is a symbol
+  named `.`, then prints it back as `(?i . ?rest)` — so an improper list round-trips unchanged
+  while meaning something else (F-059). Anything that reads Lisp source with dotted pairs in it
+  — clause heads, association lists, improper argument lists, `cons` cells generally — gets a
+  form that looks right and isn't.
+- **Shape:** either a real pair in the reader and in `ast->children`, or a refusal at the dot.
+  Either is honest. Silently admitting a symbol named `.` into a list is the thing to stop.
+- **Note:** P-010's open design point is this same gap, seen from the relational side.
+- **Evidence:** F-059, `probes/paip/dotted-pattern.wat`,
+  `books/reasoned-schemer/lib/ch10-under-the-hood.wat`.
 
 ## Checker and runtime
 
