@@ -18,6 +18,11 @@ Clojure's bigints are the closest thing to what wat claims to have.
 | file | problems | answers | wat |
 |---|---|---|---|
 | p16-p20-p25-digits | the digit sum of 2^1000; the digit sum of 100!; the first Fibonacci term with 1000 digits | 8, all matching Clojure | 0.67 s |
+| p22-names-scores | 2000 names sorted, each scored by its letters and its position | 9, all matching Clojure | 1.17 s |
+
+The names in `input/p22-names.txt` are **ours** — Project Euler's own `names.txt` is not
+redistributable — generated deterministically from a fixed seed, in the same shape as the real
+one: quoted, comma-separated, unsorted on disk.
 
 The time is the whole run, wat's 0.29 s of startup included — so the bigint arithmetic itself
 costs a few hundred milliseconds to build 2^1000 by doubling, 100! by multiplication, and walk
@@ -46,6 +51,36 @@ directly so the `N`-trimming below is not taken on trust.
   not by coincidence.
 - **No power, so 2^1000 is built by doubling** — the same shape day04 needed for bit operations,
   which wat also lacks (F-035).
+
+## What names scores showed
+
+p22 was chosen because it is made of the two things wat is worst at, and both showed.
+
+- **Parsing, without a regex that can report what it matched.** The file is
+  `"NAME","NAME",…`, and `:wat::regex::matches?` answers only a bool — `:wat::regex::find` does
+  not exist (F-061). So the names come out by trimming the trailing newline, splitting on `","`
+  and stripping each piece's quotes with `subs`. It works; it is the workaround the finding
+  predicts, written out longhand.
+- **Scoring, without character access.** A String has no characters (F-062), so every letter is
+  a one-character `subs`. Getting a letter's *value* then needs a second lookup, and the choice
+  between the two roads is measured (`probes/euler/letter-lookup-cost.wat`, 26000 letters — the
+  size p22 walks):
+
+  | letter value by | wall |
+  |---|---|
+  | scanning `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` with `subs` | 2751 ms |
+  | a `PersistentMap` from letter to value, built once | 395 ms |
+
+  **7.0×** — worth measuring, because reasoning gave the wrong number: "up to 26 `subs` calls
+  per letter" suggests 26×, but the average letter sits about a third of the way into the
+  alphabet and the map road still pays one `subs` to read the character at all. The solution
+  takes the map road, so p22 finishes in 1.17 s; the naive road would have taken about ten
+  seconds for the same nine answers.
+- **Sorting Strings agrees with Clojure exactly** (`probes/euler/string-sort-order.wat`):
+  `"Z" < "a"`, `"MARY" < "MARYANN"`, `"B" < "AA"` false, and an eight-name sort in the identical
+  order, repeats surviving. Worth checking rather than assuming — every score is multiplied by
+  its position, so a collation difference would have corrupted the total silently and given no
+  hint where.
 
 ## Running
 

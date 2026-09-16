@@ -19,7 +19,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
-| Project Euler (after NEXT.md) | 3 problems, 8 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. F-047, F-060 |
+| Project Euler (after NEXT.md) | 4 problems, 17 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. Then p22 names scores (C-035) adds the text half, chosen because it is made of the two things wat is worst at: **F-061**, the whole regex surface is `matches?` answering a bool — a capture group compiles and what it matched can never be read, though wat-rs depends on the entire `regex` crate — so the file is parsed by trim, split and `subs`; and **F-062**, a String has no characters, no `index-of`, `replace`, `split-lines` or `blank?`, `reverse` refuses it and `split` refuses `""`, so every letter is a one-character `subs` at about 16.7 µs. Scoring by scanning the alphabet costs 2751 ms against 395 ms through a `PersistentMap` (7.0×, measured — not the 26× the reasoning suggested). String sort order matches Clojure exactly, checked rather than assumed. F-047, F-060, F-061, F-062 |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -2758,6 +2758,36 @@ name. Rows blocked are counted once per row.
 - **Class:** GAP. Extend: `:wat::bigint::to-string`, and a comparison (F-047). Clean: until
   then, say where a bigint's digits come from and that the writer appends `N`.
 - **Repro:** the three probes.
+
+### C-035: names scores ports, and pays for every missing text operation on the way
+
+- **Where:** `euler/p22-names-scores.wat` — 2000 names sorted, each scored by its letters and its
+  position — checked against our own Clojure (`oracle/euler/p22-names-scores.clj`, 9 answers).
+  The names are ours, generated deterministically; Project Euler's `names.txt` is not
+  redistributable.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): all 9 answers match, in 1.17 s. The
+  problem was chosen because it is made of the two things wat is worst at, and both showed
+  without blocking it.
+- **Parsing, without a regex that reports what it matched (F-061).** The file is
+  `"NAME","NAME",…`. `:wat::regex::matches?` answers a bool and `:wat::regex::find` does not
+  exist, so the names come out by `trim`, `split` on `","`, and a `subs` per piece to strip its
+  quotes. Longhand, and correct.
+- **Scoring, without character access (F-062).** Every letter is a one-character `subs`, and its
+  value needs a second lookup. Both roads measured over 26000 letters, the size p22 walks
+  (`probes/euler/letter-lookup-cost.wat`): scanning `"ABCDEFGHIJKLMNOPQRSTUVWXYZ"` with `subs`
+  costs **2751 ms**, a `PersistentMap` from letter to value **395 ms** — **7.0×**. The solution
+  takes the map road, which is why it finishes in 1.17 s rather than about ten seconds.
+- **Worth recording about the 7×:** reasoning predicted 26×, from "up to 26 `subs` calls per
+  letter". It is 7×, because the average letter sits about a third of the way into the alphabet
+  and the map road still pays one `subs` to read the character at all. The second time this
+  session that a measurement has corrected a confident ratio — the first was F-062's own
+  index-0 control.
+- **Sorting agrees with Clojure exactly** (`probes/euler/string-sort-order.wat`): `"Z" < "a"`,
+  `"MARY" < "MARYANN"`, `"B" < "AA"` false, and an eight-name sort in the identical order with
+  repeats surviving. Checked rather than assumed, because every score is multiplied by its
+  position: a collation difference would have changed the total silently and given no hint
+  where.
+- **Class:** CLEAN.
 
 ### F-061: regex is a single predicate, so a pattern can be written and what it matched can never be read
 
