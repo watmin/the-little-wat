@@ -18,7 +18,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
 | SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
-| PAIP (NEXT.md §5) | ch 11, 25 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog is next |
+| PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -28,11 +28,11 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting · F-059 a dotted pair reads as a three-element list with `.` as an ordinary symbol, then prints back as a dotted pair — so an improper list round-trips while meaning something else |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias |
 | **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
 | **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · PROVIDE.md's P-001–P-017 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · PROVIDE.md's P-001–P-017 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -170,6 +170,10 @@ give each one's detail.
 - **F-058:** a `PersistentMap` constructor refuses a bracketed type that is not a keyword, so a
   map of vectors — the shape F-057's own advice leads to — must be spelled through a typealias,
   where the `HashMap` twin accepts the nesting directly.
+- **F-059:** wat has no dotted pair. `(?i . ?rest)` reads as a `"list"` of three children, the
+  middle one a symbol named `.`, and then prints back as `(?i . ?rest)` — so an improper list is
+  silently a different structure that round-trips unchanged. It is why The Reasoned Schemer
+  built `:rs::Term`, and why PAIP's membership clauses cannot be written.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -2602,6 +2606,44 @@ name. Rows blocked are counted once per row.
 
 ## PAIP
 
+### F-059: a dotted pair reads as a three-element list with `.` as an ordinary symbol, and prints back as a dotted pair
+
+- **Where:** PAIP chapter 12's membership clause, the classic recursive one, whose head carries a
+  list with a variable tail:
+  ```
+  ((member ?i (?i . ?rest)))
+  ((member ?i (?head . ?rest)) (member ?i ?rest))
+  ```
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/paip/dotted-pattern.wat`:
+  ```
+  source of (?i . ?rest): (?i . ?rest)
+  kind of (?i . ?rest): list
+  children of (?i . ?rest): 3
+  each child: ?i | . | ?rest
+  ```
+  The form reads. It is a `"list"`. Its children are **three** nodes — `?i`, the symbol `.`, and
+  `?rest` — so the dot is an ordinary symbol and there is no tail. `ast->source` then prints it
+  back as `(?i . ?rest)`, so it round-trips and looks preserved.
+- **So:** quoted data cannot express a pattern with a variable tail, and does not say so. A
+  dotted pair is not refused, not flagged, and not lost on the round trip; it is silently a
+  different structure — a three-element proper list containing a symbol named `.`. Any port that
+  reads Lisp source with dotted pairs in it (a Prolog's clause heads, an association list, an
+  improper argument list) gets a form that prints correctly and means something else. This is
+  the same wall The Reasoned Schemer hit and built its way around:
+  `books/reasoned-schemer/lib/ch10-under-the-hood.wat` says "Quoted lists can't hold a pair with
+  a variable tail, `(a . d)`, so terms are their own enum" — that is `:rs::Term`'s whole reason
+  for existing, arrived at independently.
+- **The consequence for NEXT.md §5.** Chapter 11's unification ports to quoted data completely
+  (C-033) because every pattern in it is a proper list. Chapter 12 is where quoted data runs
+  out: the family-tree half needs no dotted heads and ports, and the membership half cannot be
+  written at all. That is the answer to "quoted data versus typed data" — quoted data carries
+  symbolic pattern matching right up to the improper list, and no further.
+- **Class:** GAP. Fix: read a dotted pair as a pair, or refuse it — either is honest; printing
+  it back unchanged while meaning a three-element list is not. Extend: if wat is not to have
+  improper lists, `ast-kind` or the reader should say so at the dot, rather than admitting a
+  symbol named `.` into a list.
+- **Repro:** `probes/paip/dotted-pattern.wat`.
+
 ### C-033: PAIP's unifier ports to quoted data, with no term language at all
 
 - **Where:** `paip/ch11-unification.wat` on `paip/lib/unify.wat`, checked against guile
@@ -2636,6 +2678,43 @@ name. Rows blocked are counted once per row.
 - **Mutual recursion across definition order is accepted:** `occurs-in?`/`occurs-in-all?`,
   `unify`/`unify-variable`/`unify-all` and `subst`/`subst-all` each call a function defined
   below them, and the checker resolves it.
+- **Class:** CLEAN.
+
+### C-034: PAIP's Prolog runs on quoted clauses, with backtracking and renaming, and no term language
+
+- **Where:** `paip/ch12-prolog.wat` on `paip/lib/prolog.wat`, checked against guile
+  (`oracle/paip/ch12-prolog.scm`, 33 results). It reuses `paip/lib/unify.wat` whole — which is
+  what building chapter 11 first was for.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): 33 of 33 results match, on the first run.
+  A clause is a quoted list, head first and goals after; the database is a `Vector` of them.
+  `ast->children` splits a clause, `first`/`rest` take it apart, and nothing is converted into a
+  term type anywhere.
+- **Renaming works, and the last query is what proves it.** A clause's variables are renamed
+  apart before each attempt (`?x` → `?x-1`), or a rule that calls itself collides with itself.
+  `ancestor` is that rule, and `(ancestor ?a ?d)` must yield nine pairs: the five direct
+  `parent` facts from the base clause, then four transitive ones from the recursive clause. Get
+  renaming wrong and the transitive four vanish or duplicate. All nine match guile.
+  `:wat::core::symbol-node` builds the renamed variable, and `probes/paip/renamed-symbol.wat`
+  shows it round-trips through `ast-name` and still satisfies `variable?`. The separator is `-`
+  and not PAIP's `.`, because a dot carries reader meaning inside a list (F-059).
+- **The counter is threaded, not kept.** Renaming needs a fresh number per attempt, which is
+  mutable state; wat has no mutable variable. The two honest routes are threading a number
+  through the recursion or keeping one on a counter service (C-014's doctrine). Threading won:
+  the recursion already carries a substitution, so carrying a number beside it costs nothing,
+  and the library stays a value. A `defstruct` (`:paip::Proof`) carries the solutions and the
+  counter back together, and holds a `Vector` of `PersistentMap` without complaint.
+- **The database is a value, not a service.** C-014 puts mutable state on services, but nothing
+  here mutates, and a message costs about 224 µs against a function call's two (F-051) — a
+  Prolog asks its database thousands of times. A read-only database is a value.
+- **Backtracking is eager.** `prove` answers a `Vector` of every solution rather than a lazy
+  stream: the databases are small, and a wat stream does not remember what it forced (F-053), so
+  laziness would buy nothing back.
+- **Cyclic mutual recursion is accepted.** `prove-clauses` → `prove-all` → `prove-rest` →
+  `prove-all` genuinely cycles, unlike chapter 11's downward-only calls, and the checker
+  resolves it.
+- **What could not be written:** PAIP's membership clauses, whose heads carry a list with a
+  variable tail (F-059). They are absent from the database and from the oracle, and that absence
+  is the finding, not a gap in the port.
 - **Class:** CLEAN.
 
 ## Predicted, unverified

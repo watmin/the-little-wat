@@ -17,6 +17,31 @@ that way.
 | chapter | what it builds | results |
 |---|---|---|
 | ch11 unification | `variable?`, `unify`, the occurs check, `subst-bindings`, `unifier` | 25, all matching guile |
+| ch12 prolog | clauses, renaming variables apart, `prove`, `prove-all`, backtracking | 33, all matching guile |
+
+## Where quoted data runs out
+
+Chapter 11 ports to quoted data completely, because every pattern in it is a proper list.
+Chapter 12 is where the road ends. PAIP's membership clause is the classic recursive one, and
+both of its heads carry a list with a **variable tail**:
+
+```
+((member ?i (?i . ?rest)))
+((member ?i (?head . ?rest)) (member ?i ?rest))
+```
+
+wat's reader has no dotted pair. `(?i . ?rest)` reads as a `"list"` of *three* children — `?i`,
+a symbol named `.`, and `?rest` — and then `ast->source` prints it back as `(?i . ?rest)`, so it
+round-trips and looks preserved while meaning something else (F-059,
+`probes/paip/dotted-pattern.wat`). The membership clauses cannot be written, so they are not in
+the database and not in the oracle either.
+
+This is the same wall The Reasoned Schemer hit, and the reason `:rs::Term` exists at all: its
+chapter 10 says "Quoted lists can't hold a pair with a variable tail, `(a . d)`, so terms are
+their own enum". Two ports reached it independently.
+
+So NEXT.md §5's question — quoted data or typed data — has an answer with a line in it: quoted
+data carries symbolic pattern matching as far as the improper list, and no further.
 
 ## The decision: patterns are data
 
