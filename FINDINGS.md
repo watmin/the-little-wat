@@ -19,6 +19,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
+| Project Euler (after NEXT.md) | 3 problems, 8 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. F-047, F-060 |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -2716,6 +2717,41 @@ name. Rows blocked are counted once per row.
   variable tail (F-059). They are absent from the database and from the oracle, and that absence
   is the finding, not a gap in the port.
 - **Class:** CLEAN.
+
+## Project Euler
+
+### F-060: a bigint has no `to-string`, and its digits come only from the EDN writer, which appends `N`
+
+- **Where:** Project Euler's digit problems (`euler/p16-p20-p25-digits.wat`) — the sum of the
+  digits of 2^1000, the sum of the digits of 100!, and the first Fibonacci term with 1000
+  digits. All three need a big integer taken apart digit by digit.
+- **What happened** (2026-09-15, wat-rs `a3218644d`):
+  - `probes/euler/bigint-to-string.wat` is refused at startup, verbatim:
+    ```
+    1 unresolved reference … :wat::bigint::to-string
+    "call head — not a builtin, not a registered function"
+    ```
+    Every other scalar has one: `:wat::i64::to-string`, `:wat::f64::to-string`.
+  - The whole registered bigint surface is six verbs (`src/intrinsic/bigint.rs`):
+    `+`, `-`, `*`, `/`, `to-f64`, `to-rational`. There is no comparison (F-047) and no modulo.
+  - `:wat::bigint::to-f64` reaches a String only by losing the number:
+    `probes/euler/bigint-surface.wat` renders 2^1000 through f64 as 17 significant digits
+    followed by 285 zeroes.
+  - `:wat::edn::write` does answer the digits — 2^1000 comes back in full — but as **303**
+    characters whose last is `N`, so `length` is digits + 1 and a caller must strip the suffix.
+- **The working route, measured** (`probes/euler/bigint-digits-route.wat`, every line matching
+  Clojure): trim the `N`, and the digit count of 2^1000 is 302 and of 100! is 158; the digits sum
+  with `:wat::string::to-i64` over one-character substrings to 1366 and 648; and the digit
+  *count* stands in for the comparison F-047 says is refused, giving Fibonacci indices 12 and
+  4782.
+- **So:** big integers are usable, but the way in is undiscoverable. A user looks for
+  `:wat::bigint::to-string` by analogy with every other scalar, doesn't find it, finds `to-f64`,
+  and silently loses their number — `to-f64` is the trap, because it succeeds. The route that
+  works goes through the EDN writer, which is not where anyone looks for a number's digits, and
+  which appends a suffix that makes a naive `length` or `subs` off by one.
+- **Class:** GAP. Extend: `:wat::bigint::to-string`, and a comparison (F-047). Clean: until
+  then, say where a bigint's digits come from and that the writer appends `N`.
+- **Repro:** the three probes.
 
 ## Predicted, unverified
 
