@@ -17,7 +17,10 @@ across `USER-GUIDE.md`, `WAT-CHEATSHEET.md`, `CLOJURE-ROSETTA.md` and the docs `
 
 | case | what it exercises | results | wat |
 |---|---|---|---|
-| q01-two-backends | ensure-schema, a five-row put, three keyset scan pages, a GSI scan — through one `Store`-typed function, against both backends | 5, identical either side | 1.24 s |
+| q01-two-backends | ensure-schema, a five-row put, three keyset scan pages, a GSI scan — through one `Store`-typed function, against both backends | 5, identical either side | 0.72 s |
+
+The time is the whole run, wat's 0.29 s of startup included — so spawning two service threads,
+dialing both, and driving nine operations across them costs a few hundred milliseconds.
 
 ## What it showed
 

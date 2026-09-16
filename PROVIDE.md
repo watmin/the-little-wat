@@ -39,6 +39,7 @@ the names and the design are the builder's call.
 | P-021 | A regex that reports what it matched: `find`, `captures`, `replace`, split-on-pattern | stdlib, `:wat::regex` (F-061) | open |
 | P-022 | A String's characters, and the operations built on them (`index-of`, `replace`, `split-lines`, `blank?`, `reverse`) | stdlib, `:wat::string` (F-062) | open |
 | P-023 | A catch that doesn't spawn a thread, outside `:wat::test::` | core or stdlib (F-063) | open |
+| P-024 | A way to say "every other outcome is a failure" once, when calling a service | core or stdlib (F-069) | open |
 
 ## Stdlib
 
@@ -241,6 +242,31 @@ the names and the design are the builder's call.
   its whole record to stderr, 806 KB for 2000 handled failures, with no flag to stop it.
 - **Evidence:** F-063, F-064, `probes/err/catch-cost.wat`,
   `probes/err/try-catches-assertion.wat`, `probes/err/error-in-stream.wat`.
+
+### P-024: one way to say "every other outcome is a failure"
+
+- **What we wrote:** 56 match arms in 182 lines, to do five operations against a service
+  (`store/q01-two-backends.wat`). wat-rs's own consumer fixture writes the same five operations
+  in the same 182 lines, with a **529-character** `connect` line
+  (`wat-rs/tests/rete/probe_arc278_smem_roundtrip.wat`).
+- **Why:** three things compound, and none of them is wrong on its own.
+  - Every call to a service answers a `RecvOutcome`, so `Message` / `Lost` / `Stopped` /
+    `Closed` must be spelled at every call site, whatever the call meant.
+  - Every operation then answers its own outcome enum — `Success` plus `Constraint` /
+    `Transient` / `Fatal` / `RequestTooLarge` / `RequestMalformed` — of which four usually
+    cannot happen at that site.
+  - The dial itself cannot be factored into a helper: "a helper that returns the peer leaves the
+    service thread dead" (wat-rs's own words for F-052), so `start` + `connect` is written
+    inline, in full, at every use.
+- **Shape:** not fewer arms — the exhaustiveness is right and is why wat catches what it catches.
+  What is missing is a way to handle the uninteresting ones as a group: an `expect`-style helper
+  over `RecvOutcome`, or letting an outcome enum's error variants be matched collectively with
+  the failure message derived from the variant. Anything that lets a consumer write the
+  interesting arm and one fallback.
+- **Note:** this is the cost of the service model at its best — a well-designed contract, four
+  operations, two backends. It is not a criticism of `:wat::query::Store`; every consumer of
+  every service pays it.
+- **Evidence:** F-069, C-038, `store/q01-two-backends.wat`, and the line counts in F-069's table.
 
 ## Checker and runtime
 
