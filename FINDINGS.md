@@ -4117,6 +4117,18 @@ name. Rows blocked are counted once per row.
   **79 of 87 appear in `USER-GUIDE.md`**, 13 in `docs/README.md`, 10 in the cheatsheet, 3 in the
   rosetta. **None sits under a "planned", "future" or "not yet" heading**; there are no such
   headings in these documents.
+- **The 68 MISSING verdicts were re-probed a second way** — each name called with three value
+  arguments instead of none, so an arity-specific retirement could not masquerade as an absence.
+  **All 68 still report "not a builtin, not a registered function."** The zero-arg artifact is
+  confined to the one `RETIRED` case named above. A useful control fell out of it:
+  `:wat::kernel::spawn-program` answers *"no clause matches arity 1"* — a resolved name failing on
+  arity, which is exactly what a false MISSING would have looked like, and it was classified
+  EXISTS by both probes.
+- **Widening the corpus barely moves it.** Repeating the audit over all **24** files in `docs/`
+  adds only 18 new names (221 total): 11 more MISSING, 1 more RETIRED — **99 of 221, 45%**. The
+  rejected names are already concentrated in the pages a user is told to read. (Two of those 11,
+  `:wat::cache::lru-svc` and `:wat::pause::*`, are service names rather than verbs and would need
+  their own probe shape; the four-document figure above does not depend on them.)
 - **And it is not confined to a stale corner.** Across the three teaching documents, **49 of 159
   fenced code blocks (30%) contain at least one name the compiler rejects**, and **26 of them use
   `:wat::core::define`**, which is retired (Stone 241.11).
