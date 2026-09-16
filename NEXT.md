@@ -7,7 +7,28 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## Where this stands (2026-09-15)
+## Where this stands (2026-09-16)
+
+§1–§5 are done and §6 is declined (both recorded below). §7–§12 are the next wave, queued
+2026-09-16 after a measurement of what this repository has actually produced:
+
+| era | findings | involving a port | probe of wat only |
+|---|---|---|---|
+| F/C-001…050 | 100 | 40 | 55 |
+| F/C-051…075 | 25 | **18** | 6 |
+| F/C-076…095 | 20 | 1 | **18** |
+
+The last stretch was a systematic sweep of wat's own namespaces (linter, grep, cache,
+telemetry, docs, rationals, fix, brackets, reflection, deporder) and that sweep is now
+**exhausted — every namespace has probes**. The stretch before it was suite-building, and it
+was port-driven at 18 of 25. So porting still works; what stopped was me doing it. §7–§12
+return to porting, choosing each suite for the machinery it stresses rather than for being a
+book.
+
+Two items (§7, §8) are instruments rather than ports, and §7 is the only thing here with a
+deadline.
+
+## Where §1–§6 stand (2026-09-15)
 
 §1–§5 are done, each in its own directory with its own oracle, and all of them run under
 `./run.sh`:
@@ -77,8 +98,73 @@ encoding, if the item is ever revived.
 - **Lead:** `holon-lab-ddos` presumably already has pieces of this. It is not cloned on the
   daily driver yet.
 
+## 7. A performance baseline, before the byte-code work — **time-critical**
+
+The builder's next phase is "byte code" / a jump DAG. A before/after can only be captured
+**before**, and the numbers are currently scattered across the ledger:
+
+| | measured |
+|---|---|
+| a message to a service | 224 µs, ~100 function calls (F-051) |
+| the formatter | ~10 KB/s, ~800 ms fixed floor (F-075) |
+| deporder over the same kind of source | ~1 MB/s (C-050) — 100× the formatter |
+| `bracket::map`, thread pool | 1.69× on 16 runners, vs 5.90× for OS processes (F-094) |
+| copying vs sharing containers | 135 s → 20.6 s on one AoC day (F-057) |
+| the interpreter | 100–430× the JVM, 13× guile, >100× Racket |
+
+**Deliverable:** `bench/` plus `tools/bench.sh`, one runnable suite emitting a dated table, so
+the jump-DAG work has a baseline to be measured against. Nothing else here expires.
+
+## 8. Turn the repo into a regression instrument
+
+17 oracle scripts exist; the recent ones (`doc-names-audit`, `cli-surface`, `fix-roundtrip`,
+`bracket-os-oracle`) are reproducible *measurements* rather than one-shot investigations.
+
+**Deliverable:** one `./audit.sh` that runs them against any wat-rs build and emits a dated
+report, plus a pass that re-checks each open finding and reports **FIXED / STILL OPEN**. That
+converts 145 static findings into a standing signal that says when a fix has landed.
+
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand)
+
+The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
+explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a
+**language host**, which is what the rest of the roadmap sits on. Oracle: the book's own
+expected values, and Racket/guile for the reference implementations.
+
+## 10. Okasaki — *Purely Functional Data Structures*
+
+~30 structures, each small and runnable, each with a stated amortized bound. Lands directly
+on the weak spot this repo has already measured: F-057 (copying vs sharing containers), F-055
+(`rest` clones, so walking is quadratic), F-023 (`conj` clones), and the **missing persistent
+set** (a visited set has to be a `PersistentMap` to `true`). Laziness and amortization are
+wat's `:wat::stream::` territory, which F-088 showed is documented as an API that does not
+exist. Oracle: the book's bounds, and timing curves rather than single points (C-050's method).
+
+## 11. Downey — *The Little Book of Semaphores*
+
+~30 concurrency puzzles with known-correct answers **and** known failure modes, which makes it
+a rare self-oracling corpus. F-094 measured `bracket::map`'s thread pool at 29% of what the
+same machine does with OS processes, so this is a live battleground. **No networking** — the
+builder's call, 2026-09-16: networking is simulated via IPC anyway (processes over unnamed
+Unix domain sockets, threads over crossbeam-style channels), so the puzzles run against
+`:wat::spawn::`/`:wat::bracket::`/`:wat::service::` directly.
+
+## 12. *Crafting Interpreters*, Part II — the bytecode VM
+
+A flat instruction array, a dispatch loop, a value stack, jump patching. Not for the book's
+sake: it rehearses the exact machinery §7's baseline is being taken for, and it tests whether
+wat can host the shape of its own next phase.
+
 ## Suggested order
 
-Finish the Friedman books. Then Clojure Koans as a fast breadth check that lines up with
-the codemods; then mal as the deep test; with the Shield slice as the capstone. Each gets
-its own directory, like `books/`, and this repo becomes a general acceptance-test repo.
+§7 first, because it is the only item that expires. Then §8, which makes everything already
+found keep paying. Then the ports, in the order §10, §11, §9, §12 — Okasaki first because it
+aims at defects already measured, Semaphores next because F-094 left a live question, EOPL
+because it is the largest, and Crafting Interpreters last so it can be written against
+whatever the byte-code work has become.
+
+A note on spelling, 2026-09-16: the builder expects to drop the o.g. wat syntax for a
+Clojure/EDN-compliant scheme within weeks, with "typed Clojure" as the end game. New ports
+should be written in whatever spelling is current and **not** hand-tuned for the migration;
+`tools/fix-roundtrip.sh` already exists to convert the corpus and differential-test the result
+when the flip lands.
