@@ -1159,7 +1159,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wat-friedman"
+name = "the-little-wat"
 version = "0.1.0"
 dependencies = [
  "wat",
