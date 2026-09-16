@@ -24,6 +24,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | SQLite (after NEXT.md) | 1 case, 17 results | wat ships `:wat::sqlite::` — open / open-readonly / execute-ddl / execute / select / begin / commit / pragma — and nothing here had touched it. `sqlite/s01-crud.wat` puts the same schema and queries to wat and to the sqlite3 CLI (`tools/sqlite-oracle.sh`), the same engine wat binds, and all 17 agree (C-037): bound parameters, NULL through `Cell.Nil`, aggregates over a nullable column, GROUP BY with NULL as its own group, update, delete, ordering, and a zero-row result. **Two things it does better than the language around it:** the read-only connection is capability-honest and a write through one is refused *at startup*, not by the database; and failures arrive as `Result` values (`Error.Transient/Constraint/Fatal`), so a program survives four of them without the thread-spawning catch F-063 priced at 1.3 ms. **F-068:** `begin` and `commit` exist, `rollback` does not, on a surface explicitly closed to additions — though raw `execute conn "ROLLBACK"` works and does undo the write. Rows are positional: `select` answers vectors of `Cell`s with no column names. F-034 confirmed again: a `REAL` holding 2.0 renders as `2` |
 | The Store contract (after NEXT.md) | 1 case, 5 results | wat ships a backend-agnostic storage contract, `:wat::query::Store` (DynamoDB-shaped pk/sk/data with named GSIs), and **two** services satisfying it — `mem-store` and `sqlite-store`. `wat/query/mem.wat` says the in-memory one exists partly to be "differential-tested against", so the backends check each other and no external oracle is needed. `store/q01-two-backends.wat` drives ensure-schema, a put, three keyset pages and a GSI scan through one `Store`-typed function against both peers: all five results identical (C-038). wat-rs asserts the same inside its own harness; the addition here is that it holds for an **ordinary program**, with no deftest or fixture loader. A dialed peer really is the surface — not F-029, since that surface is non-parametric. **F-069:** a consumer writes more outcome arms than logic — 56 of 182 lines are match arms, and wat-rs's own fixture lands at exactly 182 too, with a 529-character `connect` line because F-052 forbids factoring the dial into a helper |
 | wat's own documentation (probes only) | 626 examples executed | wat reflects every `@example` in its source into typed records and ships a runner for them, so the documentation is executable. The runner is masked: one unguarded comparison raises and hides every other example, which wat-rs records in a NOTE with three refuted fixes and an `#[ignore]`d gate saying "FIVE failures, ONE cause". Unmasked by wrapping each verdict in `:wat::test::run-thread`, the count is **134 of 485 runnable** (F-070): 44 stale constructor spellings, 23 stale variant spellings, the builder's 5 angle-bracket cases reproduced exactly, 19 eval-context limits, 6 maskers, 17 genuine mismatches, 20 other. The NOTE's open question — whether the runner can guard its own comparison — is answered yes: `run-thread` exists and `wat/test.wat` loads at #34 against `wat/doctest.wat` at #38; it looks absent only because F-063 puts wat's one general catch in the test namespace. Its picture is also incomplete: `eval-ast!` raises past its own Result too. Its unidentified "instance 2" is `:wat::core::Option/expect`. F-071: the match-arm refusal names `<enum>::<Variant>` as the remedy — the spelling it just refused |
+| The holon algebra (probes only) | 12 VSA laws, 3 probes | `:wat::holon::` is wat's largest surface — 94 verbs — and the layer wat exists for. It needs no oracle: a vector-symbolic architecture has laws. Ternary vectors, d = 10000. **Eleven of twelve hold exactly** (C-039): identity, quasi-orthogonality, bind commutes, bind makes a new vector, bundle stays similar to its parts, bundle commutes, permute destroys similarity, permute inverts, permute distributes over bind. **F-072:** the twelfth — the self-inverse axiom — holds only to cosine 0.818, stable at 0.815 ± 0.003 over six pairs, and compounds multiplicatively (0.667 at two rounds, 0.543 at three), so nesting is bounded at about three levels before dropping under the 0.49 that `presence?` requires. There is no unbind verb, so binding twice is the only way back, and nothing documents any of it. A codebook lookup still wins by two orders of magnitude. **F-073:** `coincident?` is documented as "whether a's cosine clears the coincident floor" but implemented as `(1 - cosine) < floor` — the opposite test; the floor is a tolerance below identity (0.99), not a similarity threshold (0.01). Confirmed three times over by `coincident-explain`'s own `min-sigma-to-pass`. **F-074:** `presence?` refuses the raw `Vector`s that `vector-bind`/`bundle`/`permute` produce, so the looser recognition test is unreachable from the raw path — exactly where F-072 puts you |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -34,10 +35,10 @@ give each one's detail.
 | Task | Findings |
 |---|---|
 | **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting · F-059 a dotted pair reads as a three-element list with `.` as an ordinary symbol, then prints back as a dotted pair — so an improper list round-trips while meaning something else · **F-067 wat's rete disagrees with its own declared SPEC: a bare accumulator (`count`, `sum`) asserts its result over the empty first pass, so `fire-rules$oracle` and the public `fire-fixpoint` keep a stale `0` beside the right answer where `fire-rules` does not** · F-070 `wat/doctest.wat` guards neither its comparison nor its evaluations, so one bad example masks all 485 — and the guard it needs (`:wat::test::run-thread`) is already loaded at that point (test.wat #34, doctest.wat #38) |
-| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias · F-068 nothing says that a sqlite transaction is abandoned by passing `"ROLLBACK"` to `execute`, since the surface lists no `rollback` · C-037 the read-only write refusal names the internal `:rust::sqlite::ReadConnection` rather than the user-facing `:wat::sqlite::ReadConnection` (the F-006/F-008 family) · **F-071 the match-arm refusal says "write `<enum>::<Variant>`" — the exact spelling it just refused; the accepted form is `<enum>.<Variant>`, and its bare-variant sibling names the dot form correctly** |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) · F-063 nothing says that `Result/try` propagates rather than catches, or that the only general catch is `:wat::test::run-thread` · **F-065 the rete — 134 verbs, 4154 lines, `defrule`, `defquery`, negation, existence, nine accumulators — appears in no user-facing page at all** · F-066 nothing says whether a rete closure is a set of facts or a bag of derivations, and the two count differently · F-068 a `rollback` verb: `:wat::sqlite::` has `begin` and `commit` and no way to spell the third, on a surface closed to additions · **F-070 67 of wat's own `@example` lines are written in spellings two completed migrations retired — 44 use the bare `(Vector 1 2)` constructor, 23 use `Enum::Variant` arms or a bare `:None`. The examples are the documentation, and this is a codemod rather than a judgement call** |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias · F-068 nothing says that a sqlite transaction is abandoned by passing `"ROLLBACK"` to `execute`, since the surface lists no `rollback` · C-037 the read-only write refusal names the internal `:rust::sqlite::ReadConnection` rather than the user-facing `:wat::sqlite::ReadConnection` (the F-006/F-008 family) · **F-071 the match-arm refusal says "write `<enum>::<Variant>`" — the exact spelling it just refused; the accepted form is `<enum>.<Variant>`, and its bare-variant sibling names the dot form correctly** · **F-073 `coincident?` is documented as "cosine clears the floor" and implemented as `(1 - cosine) < floor` — the opposite test, so a floor of 0.01 reads as permissive when it admits only near-identity** |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) · F-063 nothing says that `Result/try` propagates rather than catches, or that the only general catch is `:wat::test::run-thread` · **F-065 the rete — 134 verbs, 4154 lines, `defrule`, `defquery`, negation, existence, nine accumulators — appears in no user-facing page at all** · F-066 nothing says whether a rete closure is a set of facts or a bag of derivations, and the two count differently · F-068 a `rollback` verb: `:wat::sqlite::` has `begin` and `commit` and no way to spell the third, on a surface closed to additions · **F-070 67 of wat's own `@example` lines are written in spellings two completed migrations retired — 44 use the bare `(Vector 1 2)` constructor, 23 use `Enum::Variant` arms or a bare `:None`. The examples are the documentation, and this is a codemod rather than a judgement call** · F-072 nothing says that `bind` is its own inverse, that the inverse is lossy at ~0.82 a round, that the loss compounds, or that recovery is by nearest neighbour rather than reconstruction |
 | **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) · **F-069 a service consumer writes more outcome arms than logic — 56 of 182 lines, and wat-rs's own fixture lands at the same 182 with a 529-character `connect` line; there is no way to say "every other outcome is a failure" once** |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · F-063 a catch that doesn't spawn a thread — recovery costs 1.3 ms and lives in `:wat::test::` · F-064 a stream that remembers a failure, not only a value (F-053) · F-069 whatever would let a `start`+`connect` be factored into a function, since the spawn scope law (F-052) forces every dial to be written inline · PROVIDE.md's P-001–P-024 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · F-063 a catch that doesn't spawn a thread — recovery costs 1.3 ms and lives in `:wat::test::` · F-064 a stream that remembers a failure, not only a value (F-053) · F-069 whatever would let a `start`+`connect` be factored into a function, since the spawn scope law (F-052) forces every dial to be written inline · F-074 let `presence?` take a raw `Vector`, as `cosine`, `dot` and `coincident?` already do — the raw algebra's own output cannot be handed to it · PROVIDE.md's P-001–P-024 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -3386,6 +3387,134 @@ name. Rows blocked are counted once per row.
 - **Class:** GAP. Correct: the message should say `<enum>.<Variant>`, and ideally name the
   corrected form of the arm it refused, as the bare-variant message does.
 - **Repro:** the dot-flip comparison in F-070's evidence.
+
+## The holon algebra (VSA)
+
+### C-039: wat's vector-symbolic algebra obeys its laws — eleven of twelve exactly
+
+- **Where:** `probes/holon/vsa-algebra.wat`. `:wat::holon::` is the largest surface in wat — 94
+  verbs — and the layer wat exists for. It needs no external oracle: a vector-symbolic
+  architecture has algebraic laws, and the mathematics is the oracle.
+- **The vectors are ternary**, 10000-dimensional (measured: `vector-bytes` answers 2504 bytes =
+  10000 elements at 2 bits + a 4-byte header), produced by `(encode (leaf "name"))`.
+- **What holds, exactly** (cosine 1 or ~0 as the law requires):
+
+  | law | expected | measured |
+  |---|---|---|
+  | `cos(a,a)` — identity | 1 | **1** |
+  | `cos(a,b)` — distinct atoms quasi-orthogonal | ~0 | −0.0007, −0.012 |
+  | `cos(bind(a,b), bind(b,a))` — bind commutes | 1 | **1** |
+  | `cos(bind(a,b), a)` — binding makes a new vector | ~0 | 0.0009 |
+  | `cos(bundle(a,b,c), a)` — bundle stays similar to its parts | >0 | 0.514, 0.535 |
+  | `cos(bundle(abc), bundle(cba))` — bundle commutes | 1 | **1** |
+  | `cos(permute(a,1), a)` — permute destroys similarity | ~0 | 0.0098 |
+  | `cos(permute(permute(a,1),-1), a)` — permute inverts | 1 | **1** |
+  | `permute(bind(a,b),1) = bind(permute(a,1), permute(b,1))` — distributes | 1 | **1** |
+
+- **Class:** CLEAN. The one law that does not hold exactly is F-072.
+
+### F-072: bind is lossy, by a stable 18% a round, and nothing says so
+
+- **Where:** `probes/holon/vsa-algebra.wat`, `probes/holon/bind-lossiness.wat`.
+- **The self-inverse axiom is approximate.** `bind(bind(a,b),b)` should recover `a`. It recovers
+  it at **cosine 0.818**, not 1 — and this is the axiom the architecture rests on, because
+  **there is no unbind verb**: the whole raw surface is `vector-bind`, `vector-blend`,
+  `vector-bundle`, `vector-bytes`, `vector-permute`. Binding twice by the same vector is the only
+  way back.
+- **The loss is systematic, not noise.** Six different pairs: 0.8180, 0.8147, 0.8180, 0.8161,
+  0.8186, 0.8123 — 0.815 ± 0.003.
+- **The mechanism is sparsity.** These are ternary vectors, so `a·b·b` is `a` wherever `b ≠ 0`
+  and **zero wherever `b = 0`**. Every zero coordinate in the binder destroys that coordinate of
+  `a` permanently. Sparse-ternary binding is known to be lossy this way; dense bipolar binding is
+  not. The measured 0.818 implies roughly 18% zeros in an encoded vector.
+- **And it compounds multiplicatively.** Two rounds measured 0.667 ≈ 0.818²; three measured
+  0.543 ≈ 0.818³. So nesting depth is bounded:
+
+  | binding depth | recovered cosine |
+  |---|---|
+  | 1 | 0.818 |
+  | 2 | 0.667 |
+  | 3 | 0.543 |
+  | 4 | ~0.448 — **below the 0.49 that `presence?` requires at this dimension** |
+
+  So a role-filler structure survives about **three** levels of nesting before the recovered
+  vector falls under the architecture's own threshold for "is this the same thing".
+- **What still works, and is the point.** A codebook lookup is unharmed: the recovered vector
+  scores 0.818 against the right atom and −0.0009, −0.0057, −0.0037, 0.0006 against four others.
+  The right answer wins by two orders of magnitude. Lossy unbinding is fine for
+  nearest-neighbour recovery against a known codebook, which is how VSA is normally used.
+- **So:** this is very likely a designed tolerance rather than a defect — but nothing states it.
+  A reader of the surface sees `vector-bind` with no `vector-unbind` and no note that binding
+  twice is the inverse, no statement that the inverse is lossy, and no figure for how lossy or
+  how it compounds. That is the difference between "use a codebook" and "unbind returns what you
+  put in".
+- **Class:** GAP. Clean: say that bind is its own inverse, that the inverse is lossy at roughly
+  0.82 a round, that the loss is multiplicative, and that recovery is by nearest neighbour
+  against a codebook rather than by exact reconstruction.
+- **Repro:** the two probes.
+
+### F-073: `coincident?` tests the opposite of what its documentation says
+
+- **Where:** `probes/holon/coincident-semantics.wat`, found while checking whether F-072's lossy
+  unbinding still clears wat's own recognition thresholds.
+- **The documented contract** (`src/intrinsic/holon/atom.rs`):
+  > `(:wat::holon::coincident? a b)` → `:bool`, whether `a`'s cosine to `b` **clears the
+  > coincident floor** — the tighter of the two similarity thresholds (`presence?` is the looser
+  > one).
+- **The implementation** (`src/holon/coincident.rs`):
+  ```rust
+  // presence?     cosine > enc.presence_floor(sym)            -> cosine > 0.49
+  // coincident?   (1.0 - cosine) < enc.coincident_floor(sym)  -> cosine > 0.99
+  ```
+  Both floors are the same formula, `sigma / sqrt(dims)` (`src/vm_registry.rs`), giving 0.49 for
+  presence (sigma 49) and 0.01 for coincident (sigma 1) at d = 10000. But they are **used in
+  opposite directions**: `presence?` asks whether the cosine *exceeds* the floor; `coincident?`
+  asks whether the *distance from 1* falls *below* it.
+- **So the phrase "clears the coincident floor" describes the wrong test.** A reader who sees a
+  floor of 0.01 and the words "cosine clears the floor" will expect nearly everything to be
+  coincident. The measured ladder — every rung far above 0.01, every one rejected:
+
+  | cosine | `coincident?` |
+  |---|---|
+  | 1.0 | yes |
+  | 0.818 | **NO** |
+  | 0.667 | **NO** |
+  | 0.543 | **NO** |
+
+- **`coincident-explain` confirms the real rule arithmetically.** It reports `min-sigma-to-pass`
+  19, 34 and 46 for those three rungs; solving `1 − sigma×floor ≤ cosine` predicts 18.2, 33.3 and
+  45.7. Three independent confirmations that the test is `cosine ≥ 1 − sigma·floor` = 0.99.
+- **The doc is right that coincident? is the tighter test** (0.99 against 0.49) — only the
+  mechanism is described backwards. That it ships a `coincident-explain` diagnostic "for when a
+  coincidence judgement disagrees with expectation" suggests the confusion is already known.
+- **Class:** GAP. Correct: say that `coincident?` holds when `1 − cosine` is below the floor —
+  that the floor is a *tolerance below identity*, not a similarity threshold. The two floors
+  share a name and a formula but not a meaning.
+- **Repro:** `probes/holon/coincident-semantics.wat`.
+
+### F-074: the raw vector algebra produces `Vector`s that `presence?` will not accept
+
+- **Where:** `probes/holon/coincident-semantics.wat`, `probes/holon/bind-lossiness.wat`.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): `presence?` on two raw vectors is refused
+  at startup, verbatim:
+  ```
+  :wat::holon::presence?: parameter #1 expects :wat::holon::HolonAST; got :wat::holon::Vector
+  ```
+  The implementation calls `require_holon` on both arguments and then encodes them itself.
+  `coincident?` takes `:wat::core::Value` and accepts a raw `Vector` happily.
+- **So:** `vector-bind`, `vector-bundle` and `vector-permute` all answer a `Vector`, and the only
+  recognition predicate that will take one is `coincident?` — which is the near-identity test
+  (F-073). The looser "is this the same thing" test, `presence?` at 0.49, is **unreachable from
+  the raw vector path**; a caller has to take the cosine and compare against `presence-floor`
+  themselves. There is no `Vector → HolonAST` lift in the surface (`to-holon`, `from-holon`,
+  `to-wat`, `from-wat`, `leaf`, `literal` all work at the AST level).
+- **Which matters because F-072 makes it the common case.** Anything unbound is a raw `Vector`
+  at cosine ~0.82 — below `coincident?`'s 0.99 and above `presence?`'s 0.49 — so the one
+  predicate that would answer "yes, that's it" is exactly the one that cannot be called.
+- **Class:** GAP. Extend: let `presence?` take a `Vector`, as `cosine`, `dot` and `coincident?`
+  already do (the cheatsheet documents cosine/dot as "polymorphic over HolonAST or Vector
+  inputs"; `presence?` is listed without that note and does not have it).
+- **Repro:** the two probes.
 
 ## Predicted, unverified
 
