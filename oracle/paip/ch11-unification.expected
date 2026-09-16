@@ -1,0 +1,25 @@
+true
+false
+true
+false
+()
+fail
+()
+((?x a))
+((?x a))
+((?x ?y))
+((?x 2) (?y 1))
+((?x ?y))
+((?x a))
+fail
+fail
+((?x a))
+fail
+((?x (g ?y)) (?y b))
+fail
+fail
+(2 and 1)
+((f a) b ?z)
+(2 + 1)
+(a a a)
+fail
