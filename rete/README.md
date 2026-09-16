@@ -21,6 +21,7 @@ written twice; nobody's code is ported. `tools/rete-oracle.sh` fetches clara thr
 | case | what it exercises | results | wat |
 |---|---|---|---|
 | r01-chaining | a guarded join, forward chaining, negation over a derived fact, existence, accumulation | 8, all matching clara | 0.57 s |
+| r02-retraction | retracting a support: transitively, partially, and put back again | 8 — seven matching clara, one a documented difference (F-066) | 0.71 s |
 
 The time is the whole run, wat's 0.29 s of startup included — so compiling the network, inserting
 nine facts, computing the closure and reading four queries costs a few hundred milliseconds.
@@ -72,8 +73,42 @@ The engine is **correct**, on every question asked, first run:
   `fire-stratified`, `fire-rules-explain`. Nothing documents which to reach for; `fire-rules` is
   the answer.
 
-Facts here are inserted and never retracted. clara does truth maintenance and wat's rete may
-differ, so retraction is a separate question and is not asked yet.
+## What retraction showed
+
+r01 inserted facts and never took them back; `r02-retraction.wat` asks what happens when a
+support goes away. `:wat::rete::retract` takes a session and a fact and drops every fact equal to
+it **by value** (`wat/rete/oracle/insert.wat:77`), and the closure changes on the next
+`fire-rules`.
+
+The two engines get there differently: clara tracks dependencies, while wat recomputes —
+"retract-then-fire recomputes the full closure from the reduced input, so consequences vanish
+transitively" (`wat/rete/oracle/fire.wat:360`). **Seven of eight scenarios agree anyway**: a
+derived fact goes with its support, it goes *transitively* (taking what was derived from it),
+re-inserting restores the whole closure, retracting one of two supports leaves the fact standing,
+retracting both clears it, and retracting an unrelated fact changes nothing.
+
+The eighth diverges, and it is the interesting one (F-066). Two `Stock` lines match one `Order`,
+so the rule fires twice and both firings derive the **identical** `Shippable`:
+
+| | wat | clara |
+|---|---|---|
+| identical derived facts kept | **1** | **2** |
+| `acc::count` over them | **1** | **2** |
+| derived facts when the firings carry *different* payloads | 2 | 2 |
+
+Both engines fire the rule once per support — the last row proves it — so this is a **collapse,
+not a missing join**. wat's closure is a *set of facts*; clara's working memory is a *bag of
+derivations* that happen to be equal. Each engine's accumulator then reports what that engine
+holds, which is why the difference shows up twice rather than once.
+
+It matters to anyone writing a rule that counts or sums over derived facts: in wat, "how many
+ways was this concluded?" cannot be asked — the answer is always one. In clara that is the
+default and distinctness is the thing you ask for. Neither is wrong, and nothing tells a reader
+which they are getting, because nothing documents the rete at all (F-065).
+
+`oracle/rete/r02-retraction.expected` therefore holds **wat's** answers, with clara's printed
+beside them by `probes/rete/retraction-scenarios.wat`. Making the two agree would have hidden the
+only interesting thing in the case.
 
 ## Running
 

@@ -25,12 +25,12 @@ language, and each assumes the one before it works.
 | Advent of Code (our own puzzles, in its shape) | reading a file, parsing, grids, counting, bits, shortest paths, speed | 5 puzzles, 10 answers, all matching the Clojure reference |
 | PAIP (our own Scheme on Norvig's chapters 11–12) | symbolic pattern matching: unification and a Prolog, over quoted data | 2 chapters, 58 results, all matching guile |
 | Project Euler (our own Clojure on four of its problems) | arbitrary-precision integers, and text: digit sums, a thousand-digit Fibonacci, and names scores | 4 problems, 17 answers, all matching the Clojure reference |
-| wat's own rete, against clara-rules | a production rule engine: joins, forward chaining, negation, existence, accumulation | 1 case, 8 results, all matching clara |
+| wat's own rete, against clara-rules | a production rule engine: joins, forward chaining, negation, existence, accumulation, retraction | 2 cases, 16 results |
 
 97 chapters (1,399 checks), 27 koan programs (163 checks), 4 SICP chapters (65 results against
 guile), 5 Advent of Code puzzles (10 answers against Clojure), 2 PAIP chapters (58 results
-against guile), 4 Project Euler problems (17 answers against Clojure) and 1 rete case (8 results
-against clara-rules) pass (`./run.sh`), and the 11
+against guile), 4 Project Euler problems (17 answers against Clojure) and 2 rete cases (16
+results against clara-rules) pass (`./run.sh`), and the 11
 Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
@@ -165,7 +165,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-065 are gaps and defects.
+  - F-001 to F-066 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
   - C-001 to C-036 are clean ports and acceptance results.
 
@@ -190,7 +190,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             289 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             292 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses

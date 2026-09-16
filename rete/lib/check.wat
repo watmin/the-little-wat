@@ -18,13 +18,17 @@
                                                                        (:wat::core::first got) ", clara printed " (:wat::core::first want))))
       (:rete::compare (:wat::core::rest got) (:wat::core::rest want) (:wat::core::+ i 1)))))
 
-;; Every result, in order, must be clara's.
+;; Every result, in order, must be the expected file's. That file is clara's output wherever the
+;; two engines agree; where they differ by design it holds wat's, and the difference is recorded
+;; as a finding rather than smoothed away (F-066).
 (:wat::core::defn :rete::check-results [expected <- :wat::core::String label <- :wat::core::String got <- :rete::Lines] -> :wat::core::nil
   (:wat::core::let [want (:rete::non-empty (:wat::string::split (:wat::io::read-file expected) "\n"))]
     (:wat::core::do
       (:wat::test::assert-eq (:wat::core::length got) (:wat::core::length want))
       (:rete::compare got want 0)
-      (:wat::kernel::println (:wat::string::concat label ": ok (" (:wat::i64::to-string (:wat::core::length got)) " results match clara)")))))
+      ;; "match" and not "match clara": the expected file is clara's wherever the engines agree,
+      ;; and wat's where they differ by design (F-066). Each case's header says which it is.
+      (:wat::kernel::println (:wat::string::concat label ": ok (" (:wat::i64::to-string (:wat::core::length got)) " results match)")))))
 
 ;; A derived fact set is compared as a sorted list of strings, since neither engine promises an
 ;; order for what it derived.
