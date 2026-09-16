@@ -18,6 +18,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
 | SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
+| PAIP (NEXT.md §5) | ch 11, 25 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog is next |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -2598,6 +2599,44 @@ name. Rows blocked are counted once per row.
   as the std constructors do. Failing that, Correct: have the message say to name the inner type
   with a typealias.
 - **Repro:** the three probes.
+
+## PAIP
+
+### C-033: PAIP's unifier ports to quoted data, with no term language at all
+
+- **Where:** `paip/ch11-unification.wat` on `paip/lib/unify.wat`, checked against guile
+  (`oracle/paip/ch11-unification.scm`, 25 results).
+- **What NEXT.md §5 asked:** chapters 11–12 are "where quoted data versus typed data gets
+  decided". The Reasoned Schemer had already answered for typed data — `:rs::Term` is a
+  four-variant enum and `rs/q` converts a quoted form into it immediately, because a quoted list
+  cannot hold a pair with a variable tail. PAIP asks the opposite: a pattern **is** an
+  S-expression, and a variable is the symbol `?x`.
+- **What happened** (2026-09-15, wat-rs `a3218644d`): it ports directly, and passed on the first
+  run — 25 of 25 results matching guile. Nothing is converted; `:wat::WatAST` is walked as it
+  stands. What carries it (measured first in `probes/paip/ast-as-data.wat`):
+  - `ast-kind` is total — `"symbol"`, `"list"`, `"int"` — and gates everything;
+  - `ast-name` gives a symbol's verbatim text, so `?x` is recognised by
+    `(:wat::string::starts-with? (:wat::core::ast-name x) "?")`. It **raises** on a node that is
+    not a Symbol/Keyword/StringLit, so the kind test must come first; that ordering is the only
+    trap in the chapter;
+  - `ast->children` decomposes a list and yields nothing for a leaf, so PAIP's car/cdr recursion
+    becomes an index walk with a length test where the two lists would run out together;
+  - `with-children` rebuilds a node of the same kind, which is the whole of `subst-bindings`;
+  - `=` is structural on nested forms, which is PAIP's `equal?`;
+  - `ast->source` prints a node back as source, and prints `(2 + 1)` and `(?x (f ?y))` exactly
+    as guile prints them — so the chapter needs no printer of its own.
+- **Two choices worth recording:**
+  - the substitution maps a variable's **name** to a term, not a node to a term: two `?x` nodes
+    read from two different quoted forms are different AST nodes but one variable;
+  - it is a `PersistentMap`, which shares structure where a `HashMap` copies on every insert
+    (F-057) — a unifier extends its substitution once per variable it meets. F-057's lesson,
+    applied in a new suite rather than rediscovered.
+- **Failure is `Option.None`.** PAIP uses the symbol `fail`; wat has no failure marker, and an
+  enum of two cases would be the typed representation this chapter exists to avoid.
+- **Mutual recursion across definition order is accepted:** `occurs-in?`/`occurs-in-all?`,
+  `unify`/`unify-variable`/`unify-all` and `subst`/`subst-all` each call a function defined
+  below them, and the checker resolves it.
+- **Class:** CLEAN.
 
 ## Predicted, unverified
 

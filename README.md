@@ -23,9 +23,11 @@ language, and each assumes the one before it works.
 | Make-a-Lisp (kanaka/mal) | building a language: reader, eval, environments, tail calls, macros, try | 11/11 steps: 909 of mal's own tests pass, every hard one; 38 optional ones don't (metadata, debug tracing) |
 | SICP chapter 3 (our own Scheme on its topics) | state, mutable data, concurrency, streams | 4 chapters, 65 results, all matching guile |
 | Advent of Code (our own puzzles, in its shape) | reading a file, parsing, grids, counting, bits, shortest paths, speed | 5 puzzles, 10 answers, all matching the Clojure reference |
+| PAIP (our own Scheme on Norvig's chapters 11–12) | symbolic pattern matching: unification over quoted data | ch 11, 25 results, all matching guile |
 
 97 chapters (1,399 checks), 27 koan programs (163 checks), 4 SICP chapters (65 results against
-guile) and 5 Advent of Code puzzles (10 answers against Clojure) pass (`./run.sh`), and the 11
+guile), 5 Advent of Code puzzles (10 answers against Clojure) and 1 PAIP chapter (25 results
+against guile) pass (`./run.sh`), and the 11
 Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
@@ -162,7 +164,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
   - F-001 to F-058 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-032 are clean ports and acceptance results.
+  - C-001 to C-033 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -180,7 +182,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             268 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             269 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
