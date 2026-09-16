@@ -174,6 +174,12 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
+- [BASELINE.md](BASELINE.md): the performance baseline, taken 2026-09-16 against wat-rs
+  `a3218644d` — **before** the byte-code / jump-DAG work, because a before/after cannot be
+  captured afterwards.
+- `./audit.sh ../wat-rs`: point it at any wat-rs build and read what changed. It runs the
+  per-finding re-check (**OPEN / FIXED**), the documentation audit, the CLI surface and the
+  benchmark. The FIXED lines are the findings to close.
 - [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-025).
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.

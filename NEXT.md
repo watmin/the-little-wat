@@ -98,7 +98,7 @@ encoding, if the item is ever revived.
 - **Lead:** `holon-lab-ddos` presumably already has pieces of this. It is not cloned on the
   daily driver yet.
 
-## 7. A performance baseline, before the byte-code work — **time-critical**
+## 7. A performance baseline, before the byte-code work — **DONE 2026-09-16** (`BASELINE.md`)
 
 The builder's next phase is "byte code" / a jump DAG. A before/after can only be captured
 **before**, and the numbers are currently scattered across the ledger:
@@ -115,14 +115,46 @@ The builder's next phase is "byte code" / a jump DAG. A before/after can only be
 **Deliverable:** `bench/` plus `tools/bench.sh`, one runnable suite emitting a dated table, so
 the jump-DAG work has a baseline to be measured against. Nothing else here expires.
 
-## 8. Turn the repo into a regression instrument
+## 8. Turn the repo into a regression instrument — **DONE 2026-09-16**
 
 17 oracle scripts exist; the recent ones (`doc-names-audit`, `cli-surface`, `fix-roundtrip`,
 `bracket-os-oracle`) are reproducible *measurements* rather than one-shot investigations.
 
-**Deliverable:** one `./audit.sh` that runs them against any wat-rs build and emits a dated
-report, plus a pass that re-checks each open finding and reports **FIXED / STILL OPEN**. That
-converts 145 static findings into a standing signal that says when a fix has landed.
+**Delivered:** `./audit.sh` runs `tools/recheck.sh`, `tools/doc-names-audit.sh`,
+`tools/cli-surface.sh` and `tools/bench.sh` against any build and emits a dated report;
+`--full` adds the slow ones (`fix-roundtrip`, `bracket-os-oracle`).
+
+`tools/recheck.sh` is the signal. A probe *documents* a defect — it passes while the defect is
+present — so "did the probe pass?" is the wrong question. Each check is instead a minimal program
+plus the verdict expected **while the finding is open**, and a flip means the status changed.
+11 checks at first run: `OPEN=11 FIXED=0`, which is correct for an unchanged build.
+
+Two things were got wrong building it, both now fixed in place: the F-096 check did one accessor
+per iteration and reported **FIXED** because the 3.6 µs loop overhead compressed a real 5.0× to
+2.15× (the harness's own lesson, violated one file over); and an attempt to auto-detect
+arity-specific retirements failed because a generic re-probe cannot know whether a verb takes
+positional or keyword arguments — it is now an explicit, documented list of one.
+
+**Still to add:** checks for the findings without a crisp machine-checkable signature. 11 of
+~96 are covered.
+
+## §9–§12: four books, ranked by what they'd stress
+
+Not ranked by how good the book is — by which part of wat each one puts under load. The
+Friedman books tested wat as a **Lisp**; these test it as a language host, a container library,
+a concurrency runtime and a compiler target respectively.
+
+| | book | what it stresses | why now |
+|---|---|---|---|
+| §9 | **EOPL** (Friedman & Wand) | wat as a **language host** | the big uncovered Friedman; everything else in the roadmap sits on it |
+| §10 | **Okasaki** | the **container** story | lands on defects already measured: F-057, F-055, F-023, the missing persistent set |
+| §11 | **Downey, Semaphores** | the **concurrency** runtime | F-094 left a live question; rare self-oracling corpus |
+| §12 | **Crafting Interpreters II** | wat as a **compiler target** | rehearses the jump-DAG shape §7 baselined |
+
+**If only one: EOPL.** It is Friedman, it is big, it is uncovered, and it exercises the part of
+wat that everything else here depends on. The execution order below still opens with §10, because
+Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
+investment, not the first one.
 
 ## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand)
 
@@ -142,8 +174,8 @@ exist. Oracle: the book's bounds, and timing curves rather than single points (C
 
 ## 11. Downey — *The Little Book of Semaphores*
 
-~30 concurrency puzzles with known-correct answers **and** known failure modes, which makes it
-a rare self-oracling corpus. F-094 measured `bracket::map`'s thread pool at 29% of what the
+~30 concurrency puzzles with known-correct answers **and** known failure modes — a rare
+**self-oracling** corpus, where a wrong implementation fails in a way the book already names. F-094 measured `bracket::map`'s thread pool at 29% of what the
 same machine does with OS processes, so this is a live battleground. **No networking** — the
 builder's call, 2026-09-16: networking is simulated via IPC anyway (processes over unnamed
 Unix domain sockets, threads over crossbeam-style channels), so the puzzles run against

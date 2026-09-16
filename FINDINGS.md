@@ -4673,6 +4673,9 @@ name. Rows blocked are counted once per row.
   `:wat::grep::Facts`, `:wat::query::StoredRow`, `:wat::lint::Finding`, `:wat::telemetry::Metric`.
   `probes/grep/facts-invariants.wat` walks 137,690 nodes; at 6.1 µs a field read, a single pass of
   one accessor over that corpus is **0.84 s** of accessor alone.
+- **The builder expects them to share a backing** (2026-09-16: "afaik they are both backed by
+  structs anyways"), which makes the 5x a surprise on the implementation side rather than a
+  design consequence — and narrows where to look.
 - **Class:** IMPROVE. This is also the most actionable item for the byte-code work: of everything
   in `BASELINE.md`, the record accessor is the largest multiple over the cheapest operation in the
   same interpreter, which makes it the clearest single target.

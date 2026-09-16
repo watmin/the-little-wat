@@ -42,6 +42,19 @@ while read -r n; do
   printf '%s\t%s\t%s\n' "$v" "$n" "$d" >> "$OUT/verdicts.tsv"
 done < "$OUT/candidates.txt"
 
+# ARITY ARTIFACTS. A RETIRED verdict from a zero-arg probe can be an arity-specific retirement
+# rather than a retired verb: (:wat::kernel::assertion-failed!) is retired, but
+# (:wat::kernel::assertion-failed! :message "x") works and is what this repo's own probes use.
+#
+# This is a LIST and not a heuristic on purpose. A generic re-probe would have to guess each
+# verb's argument shape, and guessing wrong reproduces the very error it is meant to catch --
+# passing (… 1 2 3) to a keyword-argument verb still fails, so the artifact stays invisible.
+# Each entry below was verified by hand with that verb's real calling convention. The other
+# no-replacement retirements (define, enum, struct) were re-run WITH arguments and are genuine.
+cat > "$OUT/arity_artifacts.txt" <<'ARTIFACTS'
+:wat::kernel::assertion-failed!
+ARTIFACTS
+
 # A name the docs mention ONLY to say it does not exist is the documentation being CORRECT.
 # Counting those against it is a false positive -- 6 of 87 on the first run of this audit.
 : > "$OUT/disclaimed.txt"
@@ -55,5 +68,6 @@ done
 echo "candidates: $(wc -l < "$OUT/candidates.txt")"
 cut -f1 "$OUT/verdicts.tsv" | sort | uniq -c | sort -rn
 echo "named only to disclaim (not counted): $(wc -l < "$OUT/disclaimed.txt")"
-echo "TAUGHT AND REJECTED: $(( $(grep -cE '^(MISSING|RETIRED)' "$OUT/verdicts.tsv") - $(wc -l < "$OUT/disclaimed.txt") )) of $(wc -l < "$OUT/candidates.txt")"
+echo "arity artifacts, not retirements (not counted): $(wc -l < "$OUT/arity_artifacts.txt")"
+echo "TAUGHT AND REJECTED: $(( $(grep -cE '^(MISSING|RETIRED)' "$OUT/verdicts.tsv") - $(sort -u "$OUT/disclaimed.txt" "$OUT/arity_artifacts.txt" | grep -c .) )) of $(wc -l < "$OUT/candidates.txt")"
 echo "full table: $OUT/verdicts.tsv"
