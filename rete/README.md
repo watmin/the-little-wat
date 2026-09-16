@@ -110,6 +110,41 @@ which they are getting, because nothing documents the rete at all (F-065).
 beside them by `probes/rete/retraction-scenarios.wat`. Making the two agree would have hidden the
 only interesting thing in the case.
 
+## wat against itself: the native/oracle differential
+
+Every fire and insert verb has two mouths — `fire-rules` reaches the Rust kernel, and
+`fire-rules$oracle` is pure wat, which `wat/rete/oracle/fire.wat:356` calls **"the SPEC /
+differential oracle"**. They are meant to agree, so this is a check wat can run on itself with no
+other language in the room. It needs no oracle script and no clara.
+
+They disagree (F-067). On a rule that counts a derived fact:
+
+| fired with | tally values |
+|---|---|
+| `fire-rules` (native) | `2` |
+| `fire-rules$oracle` (the SPEC) | `0\|2` |
+| `fire-once` | `0` |
+| `fire-fixpoint` | `0\|2` |
+
+The accumulator runs on the first pass, before anything is derived, and asserts `n = 0`; the
+next pass asserts `n = 2`; and because a closure is a set of facts (F-066), both survive. Only
+the **bare** folds do this — `count` and `sum` leak a `0`, while `min` and `max` don't, because
+an empty `Option` fold is dropped rather than asserted (`accum-pass.wat:16`).
+
+What makes it matter beyond an internal discrepancy: `fire-fixpoint` is public and user-callable,
+and it is the verb a reader would reach for by name in a forward-chaining engine. It silently
+returns a superset of the truth, and nothing documents any of this (F-065).
+
+`fire-rules-explain` works and carries real provenance — a `DerivationNode` tree where `rule` is
+`Some(name)` for a derived fact and `None` for an asserted leaf. Two support entries for a
+two-layer derivation, and the same conclusions as a plain fire
+(`probes/rete/explain-support.wat`). Another capability nothing tells you about.
+
+**A spelling that cost me an hour, since nothing writes it down:** an accumulator's operand is a
+`?`-variable bound in the `:from` condition — `(acc::sum ?q) :from (:R (?q <- :qty))` — not a
+field keyword. `(acc::sum :qty)` raises `acc: var unbound` from `wat/rete/acc.wat:83`, deep in
+wat's own source, where it reads like a defect in wat rather than a mistake in your rule.
+
 ## Running
 
 ```
