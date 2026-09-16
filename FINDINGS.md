@@ -4111,6 +4111,11 @@ name. Rows blocked are counted once per row.
   artifact is confined to that one name. An earlier pass of mine reported "87 of 98 (89%)"; that
   denominator was a set I had already filtered to suspicious names, which is selection bias on my
   side. 43% is the figure against every verb the docs name.
+- **Every one of the 87 is genuinely in the corpus** — checked by attributing each back to a
+  file, with zero misattributions — and they concentrate in the main teaching document:
+  **79 of 87 appear in `USER-GUIDE.md`**, 13 in `docs/README.md`, 10 in the cheatsheet, 3 in the
+  rosetta. **None sits under a "planned", "future" or "not yet" heading**; there are no such
+  headings in these documents.
 - **And it is not confined to a stale corner.** Across the three teaching documents, **49 of 159
   fenced code blocks (30%) contain at least one name the compiler rejects**, and **26 of them use
   `:wat::core::define`**, which is retired (Stone 241.11).
