@@ -36,6 +36,8 @@ the names and the design are the builder's call.
 | P-018 | A set that shares structure, to go with `PersistentMap` and `PersistentVector` | stdlib (F-057) | open |
 | P-019 | An ordered collection: a sorted map or set, a priority queue, a heap | stdlib (F-056) | open |
 | P-020 | An improper list — or a reader that refuses at the dot instead of admitting a symbol named `.` | core/reader (F-059) | open |
+| P-021 | A regex that reports what it matched: `find`, `captures`, `replace`, split-on-pattern | stdlib, `:wat::regex` (F-061) | open |
+| P-022 | A String's characters, and the operations built on them (`index-of`, `replace`, `split-lines`, `blank?`, `reverse`) | stdlib, `:wat::string` (F-062) | open |
 
 ## Stdlib
 
@@ -187,6 +189,38 @@ the names and the design are the builder's call.
 - **Note:** P-010's open design point is this same gap, seen from the relational side.
 - **Evidence:** F-059, `probes/paip/dotted-pattern.wat`,
   `books/reasoned-schemer/lib/ch10-under-the-hood.wat`.
+
+### P-021: a regex that reports what it matched
+
+- **What we wrote:** nothing — there is nothing to write it with. `:wat::regex::matches?` answers
+  a bool, and that is the entire namespace.
+- **Why:** every text program needs the matched text, a capture group, a position, a
+  replacement, or a split on a pattern. wat can ask only whether a pattern matches somewhere. A
+  group like `(foo|bar)baz` compiles and matches, and what it captured is unreachable (F-061).
+- **Shape:** `find`, `captures`, `replace`, and a split on a pattern. wat-rs already depends on
+  the whole `regex` crate (`Cargo.toml:111`) and already compiles it in, so this is exposure
+  rather than implementation.
+- **Evidence:** F-061, `probes/euler/regex-surface.wat`, `probes/euler/regex-find.wat`,
+  `probes/euler/regex-replace.wat`.
+
+### P-022: a String's characters, and the operations built on them
+
+- **What we wrote:** `:mal::char-at` in `mal/lib/reader.wat` — a one-character `subs` — and then
+  the same thing again in `aoc/day02-smoke.wat`, and again in `euler/p16-p20-p25-digits.wat`.
+  wat-rs's own `format` macro writes it a fourth time, at expand time
+  (`src/intrinsic/string.rs:550`).
+- **Why:** a String has no characters in wat. There is no `chars`, no `:wat::char::` namespace,
+  no `index-of`, `last-index-of`, `replace`, `split-lines` or `blank?`; `reverse` refuses a
+  String and `split` refuses an empty separator, so a String cannot even be taken apart the long
+  way round. And the substitute is expensive: about 16.7 µs a character, eight times a plain
+  function call — 80000 of them cost 1.66 s (F-062).
+- **Shape:** characters first, since everything else is built on them; then `index-of`,
+  `replace`, `split-lines`, `blank?`, and `reverse` on a String. `split` should accept `""`.
+- **Note:** the cost is not the char-indexing — 80000 `subs` calls at index 0 cost 1.34 s of the
+  1.66 s. It is the per-call overhead, so a cheaper single-character read is the improvement
+  that matters.
+- **Evidence:** F-062, `probes/euler/char-at-cost.wat`, `probes/euler/char-at-scaling.wat`,
+  `probes/euler/char-at-exponent.wat`, `probes/euler/string-split-empty.wat`.
 
 ## Checker and runtime
 

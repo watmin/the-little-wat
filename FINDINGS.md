@@ -33,7 +33,7 @@ give each one's detail.
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias |
 | **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
 | **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · PROVIDE.md's P-001–P-020 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · PROVIDE.md's P-001–P-022 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -171,6 +171,12 @@ give each one's detail.
 - **F-058:** a `PersistentMap` constructor refuses a bracketed type that is not a keyword, so a
   map of vectors — the shape F-057's own advice leads to — must be spelled through a typealias,
   where the `HashMap` twin accepts the nesting directly.
+- **F-062:** a String cannot be taken apart — no characters, `index-of`, `replace`,
+  `split-lines` or `blank?`; `reverse` refuses a String and `split` refuses `""` — and the one
+  substitute, a one-character `subs`, costs about 16.7 µs, eight times a function call. The
+  char-indexing is not the cause: 80000 calls at index 0 cost 1340 ms against 1661 ms walking.
+- **F-061:** the whole regex surface is `matches?`, a bool. A capture group compiles and matches
+  and can never be read, though wat-rs depends on the entire `regex` crate.
 - **F-059:** wat has no dotted pair. `(?i . ?rest)` reads as a `"list"` of three children, the
   middle one a symbol named `.`, and then prints back as `(?i . ?rest)` — so an improper list is
   silently a different structure that round-trips unchanged. It is why The Reasoned Schemer
@@ -2752,6 +2758,79 @@ name. Rows blocked are counted once per row.
 - **Class:** GAP. Extend: `:wat::bigint::to-string`, and a comparison (F-047). Clean: until
   then, say where a bigint's digits come from and that the writer appends `N`.
 - **Repro:** the three probes.
+
+### F-061: regex is a single predicate, so a pattern can be written and what it matched can never be read
+
+- **Where:** looking for the text-handling surface, after Project Euler's digit problems. Nothing
+  in this ledger had mentioned regex before, in sixty findings.
+- **What there is** (2026-09-15, wat-rs `a3218644d`): one verb.
+  `(:wat::regex::matches? pattern haystack)` → `bool`, unanchored, pattern first. It works, and
+  it takes real patterns — `probes/euler/regex-surface.wat` matches `^hello`, `[0-9]+`,
+  `^[A-Z][a-z]+$`, `\d{3}-\d{4}` and `(foo|bar)baz`, and correctly declines `^wor` against
+  `hello world`.
+- **What there isn't:** `probes/euler/regex-find.wat` and `probes/euler/regex-replace.wat` are
+  both refused at startup, verbatim:
+  ```
+  1 unresolved reference … :wat::regex::find
+  "call head — not a builtin, not a registered function"
+  ```
+  and the same for `:wat::regex::replace`. The whole `:wat::regex::` namespace is `matches?`.
+- **So:** an alternation group compiles, matches, and its capture is unreachable. There is no
+  way to get the matched text, its position, a capture group, a replacement, or a split on a
+  pattern — the operations a text program is actually built from. wat-rs depends on the entire
+  `regex` crate (`Cargo.toml:111`, `regex = "1"`), so this is a surface that was never exposed
+  rather than an engine that isn't there. The user guide is honest about it: `USER-GUIDE.md:3684`
+  lists the one entry and claims nothing more.
+- **Class:** GAP. Extend: `find`, `captures`, `replace` and `split` on a pattern — the crate is
+  already a dependency and already compiled in.
+- **Repro:** the three probes.
+
+### F-062: a String cannot be taken apart, and the one substitute costs 16.7 µs a character
+
+- **Where:** every suite that has touched text — mal's reader, Advent of Code day02, Project
+  Euler's digit problems — and the Clojure Koans, which recorded the pieces one row at a time
+  without ever measuring them.
+- **What is missing.** The registered `:wat::string::` surface is twenty verbs, and none of them
+  is `index-of`, `last-index-of`, `replace`, `split-lines`, `blank?` or `chars`. There is no
+  `:wat::char::` namespace at all. Two further refusals close the obvious workarounds:
+  - `:wat::core::reverse` takes a Vector, PersistentVector or List and refuses a String;
+  - `:wat::string::split` with `""` fails — at **runtime**, not startup
+    (`probes/euler/string-split-empty.wat`), verbatim:
+    ```
+    malformed :wat::string::split form: separator must not be empty
+    ```
+  So a String cannot be turned into its characters, and cannot be reversed. The two gaps compound
+  into one impossible one-liner, which is what `koans/idiom/02-strings.wat` row 11 records.
+- **The one road left** is a one-character `subs`, and it is expensive
+  (`probes/euler/char-at-scaling.wat`, `probes/euler/char-at-exponent.wat`):
+
+  | scan | wall |
+  |---|---|
+  | 10000 characters | 112 ms |
+  | 20000 characters | 244 ms |
+  | 40000 characters | 588 ms |
+  | 80000 characters | 1661 ms |
+
+  About **16.7 µs per character**, against roughly 2 µs for a plain function call (F-051's
+  baseline) — eight times the cost of a call, to look at one character.
+- **It is NOT the char-indexing that costs.** `subs` is documented as char-indexed
+  (`src/intrinsic/string.rs:542`, "the CHAR-indexed substring `[start, end)`"), which would make
+  a full scan quadratic if the seek dominated. The control says otherwise: **80000 `subs` calls
+  all at index 0 cost 1340 ms**, against 1661 ms for the same calls walking the string. The seek
+  is under 20% of it; the flat per-call overhead is the rest. Scanning is mildly superlinear,
+  not quadratic — and the expensive part is calling `subs` at all.
+- **So:** text work in wat is not asymptotically broken, it is uniformly expensive and
+  uniformly verbose. Four independent users already pay it: `mal/lib/reader.wat` builds a whole
+  Lisp reader on nine `char-at` call sites, `aoc/day02` reads a 100×100 grid one character at a
+  time, `euler/p16-p20-p25-digits.wat` walks a 302-digit number, and wat-rs's **own `format`
+  macro** walks its template with `length` + `subs i (i+1)` at expand time
+  (`src/intrinsic/string.rs:550`).
+- **Class:** GAP. Extend: `chars` (or an iterator), `index-of`, `replace`, `split-lines`,
+  `blank?`, and `reverse` on a String; let `split` take `""`. Improve: a cheaper single-character
+  read, since that is the primitive everything else is built from. Clean: `CLOJURE-ROSETTA.md`
+  mentions none of `index-of`, `replace`, `split-lines` or `blank?` in its 388 lines, so a
+  Clojure user looking for them finds neither the operation nor a route to it.
+- **Repro:** the five probes.
 
 ## Predicted, unverified
 

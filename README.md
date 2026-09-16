@@ -163,13 +163,13 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-060 are gaps and defects.
+  - F-001 to F-062 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
   - C-001 to C-034 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
-- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-020).
+- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-022).
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.
 - [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.
@@ -183,7 +183,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ```
 books/<book>/chNN-<topic>.wat       one program per chapter: loads the lib files it needs, then a main of checks
 books/<book>/lib/chNN-<topic>.wat   that chapter's definitions, no main; each program loads what it needs
-probes/                             276 small programs, each isolating one question (the repros behind FINDINGS)
+probes/                             283 small programs, each isolating one question (the repros behind FINDINGS)
 oracle/                             expected values: the Reasoned Schemer's engine in Clojure; guile running J-Bob; Racket's Pie; malt; Java
 tools/jbob2wat.wat                  J-Bob (Scheme) -> wat, built on wat's reader and AST tools like wat/fix.wat
 tools/pie-oracle*.sh                Racket's Pie on a Little Typer chapter's .pie files: its results, and what it refuses
