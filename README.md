@@ -27,12 +27,13 @@ language, and each assumes the one before it works.
 | Project Euler (our own Clojure on four of its problems) | arbitrary-precision integers, and text: digit sums, a thousand-digit Fibonacci, and names scores | 4 problems, 17 answers, all matching the Clojure reference |
 | wat's own rete, against clara-rules | a production rule engine: joins, forward chaining, negation, existence, accumulation, retraction | 2 cases, 16 results |
 | wat's own sqlite surface, against the sqlite3 CLI | a database: schema, bound parameters, NULL, aggregates, transactions | 1 case, 17 results, all matching sqlite3 |
+| wat's own Store contract, against itself | two backends satisfying one surface: put, keyset paging, a GSI | 1 case, 5 results, identical either side |
 
 97 chapters (1,399 checks), 27 koan programs (163 checks), 4 SICP chapters (65 results against
 guile), 5 Advent of Code puzzles (10 answers against Clojure), 2 PAIP chapters (58 results
 against guile), 4 Project Euler problems (17 answers against Clojure), 2 rete cases (16 results
-against clara-rules) and 1 sqlite case (17 results against the sqlite3 CLI) pass (`./run.sh`),
-and the 11
+against clara-rules), 1 sqlite case (17 results against the sqlite3 CLI) and 1 Store case (two
+backends agreeing) pass (`./run.sh`), and the 11
 Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
@@ -167,9 +168,9 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-068 are gaps and defects.
+  - F-001 to F-069 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-037 are clean ports and acceptance results.
+  - C-001 to C-038 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -186,6 +187,8 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
   nothing else writes down.
 - [sqlite/README.md](sqlite/README.md): wat's own sqlite surface against the sqlite3 CLI — where
   it does better than the language around it, and where a verb is missing.
+- [store/README.md](store/README.md): wat's two Store backends checked against each other, and
+  what a consumer of a service contract has to write.
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -221,6 +224,7 @@ rete/rNN-<name>.wat                 wat's own rete engine, put to the same rules
 tools/rete-oracle.sh                clara-rules on a case's rules (oracle/rete/NAME.clj): its results
 sqlite/sNN-<name>.wat               wat's own sqlite surface, put to the same SQL as the sqlite3 CLI
 tools/sqlite-oracle.sh              sqlite3 on a case's SQL (oracle/sqlite/NAME.sql): its results
+store/qNN-<name>.wat                wat's two Store backends, driven through one surface and compared
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers
