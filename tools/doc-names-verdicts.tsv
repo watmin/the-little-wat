@@ -1,0 +1,203 @@
+EXISTS	:wat::bracket::runner-loop	1 type-check error"
+MISSING	:wat::config::capacity-mode	
+MISSING	:wat::config::dims	
+EXISTS	:wat::config::global-seed	
+EXISTS	:wat::config::noise-floor	
+MISSING	:wat::config::set-capacity-mode!	
+MISSING	:wat::config::set-coincident-sigma!	
+MISSING	:wat::config::set-dim-count!	
+MISSING	:wat::config::set-dim-router!	
+EXISTS	:wat::config::set-eval-redef!	1 type-check error"
+MISSING	:wat::config::set-presence-sigma!	
+EXISTS	:wat::config::set-redef!	1 type-check error"
+EXISTS	:wat::core::assoc	1 type-check error"
+MISSING	:wat::core::atom-value	
+MISSING	:wat::core::body-of	
+EXISTS	:wat::core::bool::to-string	1 type-check error"
+EXISTS	:wat::core::Bytes::from-hex	1 type-check error"
+EXISTS	:wat::core::Bytes::to-hex	1 type-check error"
+EXISTS	:wat::core::concat	1 type-check error"
+EXISTS	:wat::core::cond	macro :wat::core::cond — program body eval failed"
+EXISTS	:wat::core::conj	1 type-check error"
+EXISTS	:wat::core::contains?	1 type-check error"
+EXISTS	:wat::core::count	1 type-check error"
+EXISTS	:wat::core::def	1 type-check error"
+EXISTS	:wat::core::defalias	#wat.runtime/DeclarationInExpressionPosition {:message \"
+RETIRED	:wat::core::define	is retired (Stone 241.11; eval-time residue completed Stone 241.16)
+RETIRED	:wat::core::define-dispatch	is retired (Stone 241.13); use ':wat::core::defclause' instead
+EXISTS	:wat::core::defmacro	malformed defmacro: expected (:wat::core::defmacro :name [arg <- :T ..
+EXISTS	:wat::core::defn	macro :wat::core::defn expects at least 1 arguments; got 0"
+RETIRED	:wat::core::defn-restricted	is retired (Stone 241.14); use ':wat::core::defn' with metadata-map: `(defn :name {:restricted-to [<prefix-kw>...]} [<ar
+RETIRED	:wat::core::def-restricted	is retired (Stone 241.14); use ':wat::core::def' with metadata-map: `(def :name {:restricted-to [<prefix-kw>...]} expr)`
+EXISTS	:wat::core::dissoc	1 type-check error"
+EXISTS	:wat::core::do	1 type-check error"
+EXISTS	:wat::core::empty?	1 type-check error"
+RETIRED	:wat::core::enum	is retired (Stone 241.9)
+MISSING	:wat::core::eval-ast!	
+RETIRED	:wat::core::f64::abs	is retired; use ':wat::f64::abs' instead
+RETIRED	:wat::core::f64::clamp	is retired; use ':wat::f64::clamp' instead
+RETIRED	:wat::core::f64::max	is retired; use ':wat::f64::max' instead
+RETIRED	:wat::core::f64::max-of	is retired; use ':wat::f64::max-of' instead
+RETIRED	:wat::core::f64::round	is retired; use ':wat::f64::round' instead
+RETIRED	:wat::core::f64::to-string	is retired; use ':wat::f64::to-string' instead
+EXISTS	:wat::core::filter	1 type-check error"
+EXISTS	:wat::core::find-last-index	1 type-check error"
+EXISTS	:wat::core::first	1 type-check error"
+EXISTS	:wat::core::fn	1 type-check error"
+EXISTS	:wat::core::foldl	1 type-check error"
+RETIRED	:wat::core::foldr	is retired (arc 118.B6b); use '(:wat::core::reduce f init (:wat::core::reverse coll))' instead
+MISSING	:wat::core::for-each	
+EXISTS	:wat::core::forms	
+EXISTS	:wat::core::get	1 type-check error"
+MISSING	:wat::core::i64::sqrt-floor	
+RETIRED	:wat::core::i64::to-string	is retired; use ':wat::i64::to-string' instead
+EXISTS	:wat::core::if	1 type-check error"
+EXISTS	:wat::core::keys	1 type-check error"
+RETIRED	:wat::core::lambda	is retired (arc 155); canonical FQDN is ':wat::core::fn'. Clojure-faithful single-letform vocabulary: lowercase 'fn' for
+EXISTS	:wat::core::last	1 type-check error"
+EXISTS	:wat::core::length	1 type-check error"
+EXISTS	:wat::core::let	#wat.runtime/MalformedForm {:message \"
+EXISTS	:wat::core::list	2 type-check errors"
+MISSING	:wat::core::load!	
+MISSING	:wat::core::lookup-define	
+EXISTS	:wat::core::macroexpand	1 type-check error"
+EXISTS	:wat::core::macroexpand-1	1 type-check error"
+EXISTS	:wat::core::map	1 type-check error"
+EXISTS	:wat::core::match	1 type-check error"
+MISSING	:wat::core::panic!	
+EXISTS	:wat::core::quote	1 type-check error"
+EXISTS	:wat::core::range	1 type-check error"
+EXISTS	:wat::core::reduce	1 type-check error"
+EXISTS	:wat::core::reverse	1 type-check error"
+EXISTS	:wat::core::second	1 type-check error"
+EXISTS	:wat::core::show	1 type-check error"
+MISSING	:wat::core::signature-of-defn	
+MISSING	:wat::core::string::concat	
+MISSING	:wat::core::string::contains?	
+MISSING	:wat::core::string::length	
+MISSING	:wat::core::string::split	
+MISSING	:wat::core::string::to-i64	
+MISSING	:wat::core::string::trim	
+RETIRED	:wat::core::struct	is retired (Stone 241.8)
+EXISTS	:wat::core::tuple	2 type-check errors"
+EXISTS	:wat::core::typealias	#wat.runtime/DeclarationInExpressionPosition {:message \"
+RETIRED	:wat::core::unit	is retired (arc 153); canonical FQDN is ':wat::core::nil'. Same role (singleton type, 'no meaningful return value'); ren
+EXISTS	:wat::core::use!	
+MISSING	:wat::core::uuid::v4	
+MISSING	:wat::core::uuid::v5	
+EXISTS	:wat::core::values	1 type-check error"
+EXISTS	:wat::core::vec	2 type-check errors"
+EXISTS	:wat::edn::read	1 type-check error"
+EXISTS	:wat::edn::write	1 type-check error"
+EXISTS	:wat::edn::write-json-natural	1 type-check error"
+MISSING	:wat::edn::write-notag	
+EXISTS	:wat::eval::walk	1 type-check error"
+EXISTS	:wat::form::matches?	1 type-check error"
+EXISTS	:wat::holon::bytes-vector	1 type-check error"
+EXISTS	:wat::holon::coincident?	1 type-check error"
+EXISTS	:wat::holon::coincident-explain	1 type-check error"
+EXISTS	:wat::holon::cosine	1 type-check error"
+EXISTS	:wat::holon::dot	1 type-check error"
+EXISTS	:wat::holon::encode	1 type-check error"
+EXISTS	:wat::holon::eval-coincident?	1 type-check error"
+EXISTS	:wat::holon::eval-digest-coincident?	1 type-check error"
+EXISTS	:wat::holon::eval-edn-coincident?	1 type-check error"
+EXISTS	:wat::holon::eval-signed-coincident?	1 type-check error"
+MISSING	:wat::holon::from-watast	
+EXISTS	:wat::holon::leaf	1 type-check error"
+EXISTS	:wat::holon::presence?	1 type-check error"
+EXISTS	:wat::holon::simhash	1 type-check error"
+MISSING	:wat::holon::to-watast	
+EXISTS	:wat::holon::vector-bytes	1 type-check error"
+RETIRED	:wat::kernel::assertion-failed!	is retired
+MISSING	:wat::kernel::drop	
+EXISTS	:wat::kernel::eprintln	1 type-check error"
+MISSING	:wat::kernel::extract-panics	
+MISSING	:wat::kernel::fork-program	
+MISSING	:wat::kernel::fork-program-ast	
+EXISTS	:wat::kernel::HandlePool::finish	1 type-check error"
+EXISTS	:wat::kernel::HandlePool::new	1 type-check error"
+EXISTS	:wat::kernel::HandlePool::pop	1 type-check error"
+MISSING	:wat::kernel::join-result	
+MISSING	:wat::kernel::make-bounded-channel	
+MISSING	:wat::kernel::make-unbounded-channel	
+EXISTS	:wat::kernel::pipe	
+EXISTS	:wat::kernel::println	1 type-check error"
+MISSING	:wat::kernel::process-recv	
+MISSING	:wat::kernel::process-send	
+EXISTS	:wat::kernel::raise!	1 type-check error"
+EXISTS	:wat::kernel::readln	1 type-check error"
+EXISTS	:wat::kernel::recv	1 type-check error"
+MISSING	:wat::kernel::run-sandboxed	
+MISSING	:wat::kernel::run-sandboxed-ast	
+MISSING	:wat::kernel::run-sandboxed-hermetic-ast	
+EXISTS	:wat::kernel::select	2 type-check errors"
+EXISTS	:wat::kernel::send	2 type-check errors"
+MISSING	:wat::kernel::spawn	
+EXISTS	:wat::kernel::spawn-program	2 type-check errors"
+MISSING	:wat::kernel::spawn-program-ast	
+EXISTS	:wat::kernel::spawn-thread	2 type-check errors"
+EXISTS	:wat::kernel::stopped?	
+MISSING	:wat::kernel::try-recv	
+MISSING	:wat::list::fold	
+MISSING	:wat::list::reduce	
+MISSING	:wat::lru::LocalCache::new	
+MISSING	:wat::lru::LocalCache::put	
+MISSING	:wat::lru::spawn	
+EXISTS	:wat::regex::matches?	1 type-check error"
+EXISTS	:wat::runtime::body-of	1 type-check error"
+RETIRED	:wat::runtime::define-alias	is retired (Stone 241.12); use ':wat::core::defalias' instead
+EXISTS	:wat::runtime::extract-arg-names	1 type-check error"
+EXISTS	:wat::runtime::extract-arg-types	1 type-check error"
+MISSING	:wat::runtime::lookup-callable	
+EXISTS	:wat::runtime::rename-callable-name	1 type-check error"
+EXISTS	:wat::runtime::signature-of-defn	1 type-check error"
+EXISTS	:wat::runtime::signature-of-fn	1 type-check error"
+EXISTS	:wat::service::defservice	macro :wat::service::defservice expects at least 1 arguments; got 0"
+EXISTS	:wat::sqlite::execute	1 type-check error"
+EXISTS	:wat::sqlite::pragma	1 type-check error"
+RETIRED	:wat::std::math::ln	is retired; use ':wat::math::ln' instead
+RETIRED	:wat::std::math::pi	is retired; use ':wat::math::pi' instead
+MISSING	:wat::std::member?	
+MISSING	:wat::stream::chunks	
+MISSING	:wat::stream::collect	
+MISSING	:wat::stream::flat-map	
+MISSING	:wat::stream::for-each	
+MISSING	:wat::stream::from-receiver	
+MISSING	:wat::stream::map	
+MISSING	:wat::stream::spawn-producer	
+MISSING	:wat::stream::take	
+MISSING	:wat::stream::with-state	
+MISSING	:wat::telemetry::null-metrics-cadence	
+MISSING	:wat::telemetry::uuid::v4	
+MISSING	:wat::test::assert-coincident?	
+EXISTS	:wat::test::assert-contains	1 type-check error"
+EXISTS	:wat::test::assert-eq	1 type-check error"
+MISSING	:wat::test::assert-stderr-matches	
+MISSING	:wat::test::assert-stdout-is	
+MISSING	:wat::test::assert-substring	
+EXISTS	:wat::test::deftest	macro :wat::test::deftest expects 2 arguments; got 0"
+EXISTS	:wat::test::deftest-hermetic	macro :wat::test::deftest-hermetic expects 2 arguments; got 0"
+EXISTS	:wat::test::ignore	1 type-check error"
+MISSING	:wat::test::make-deftest	
+EXISTS	:wat::test::program	
+MISSING	:wat::test::run	
+MISSING	:wat::test::run-ast	
+MISSING	:wat::test::run-hermetic-ast	
+EXISTS	:wat::test::should-panic	1 type-check error"
+EXISTS	:wat::test::time-limit	1 type-check error"
+EXISTS	:wat::time::ago	1 type-check error"
+EXISTS	:wat::time::at	1 type-check error"
+EXISTS	:wat::time::epoch-seconds	1 type-check error"
+EXISTS	:wat::time::from-iso8601	1 type-check error"
+EXISTS	:wat::time::from-now	1 type-check error"
+EXISTS	:wat::time::nanoseconds-ago	1 type-check error"
+EXISTS	:wat::time::nanoseconds-from-now	1 type-check error"
+EXISTS	:wat::time::now	
+EXISTS	:wat::time::to-iso8601	1 type-check error"
+EXISTS	:wat::uuid::from-string	1 type-check error"
+EXISTS	:wat::uuid::nil	
+EXISTS	:wat::uuid::to-string	1 type-check error"
+EXISTS	:wat::uuid::v4	
+EXISTS	:wat::uuid::v5	1 type-check error"
+EXISTS	:wat::vec::concat	1 type-check error"
