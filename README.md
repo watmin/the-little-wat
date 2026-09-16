@@ -25,10 +25,12 @@ language, and each assumes the one before it works.
 | Advent of Code (our own puzzles, in its shape) | reading a file, parsing, grids, counting, bits, shortest paths, speed | 5 puzzles, 10 answers, all matching the Clojure reference |
 | PAIP (our own Scheme on Norvig's chapters 11–12) | symbolic pattern matching: unification and a Prolog, over quoted data | 2 chapters, 58 results, all matching guile |
 | Project Euler (our own Clojure on four of its problems) | arbitrary-precision integers, and text: digit sums, a thousand-digit Fibonacci, and names scores | 4 problems, 17 answers, all matching the Clojure reference |
+| wat's own rete, against clara-rules | a production rule engine: joins, forward chaining, negation, existence, accumulation | 1 case, 8 results, all matching clara |
 
 97 chapters (1,399 checks), 27 koan programs (163 checks), 4 SICP chapters (65 results against
 guile), 5 Advent of Code puzzles (10 answers against Clojure), 2 PAIP chapters (58 results
-against guile) and 4 Project Euler problems (17 answers against Clojure) pass (`./run.sh`), and the 11
+against guile), 4 Project Euler problems (17 answers against Clojure) and 1 rete case (8 results
+against clara-rules) pass (`./run.sh`), and the 11
 Make-a-Lisp steps pass 909 of mal's own tests (`tools/mal-all.sh`). The code is our own implementation of what
 each chapter builds; the books' text is not reproduced. The one exception is The Little
 Prover's J-Bob: its authors publish it (BSD 2-Clause), so it is vendored in `vendor/j-bob`
@@ -163,9 +165,9 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-064 are gaps and defects.
+  - F-001 to F-065 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-035 are clean ports and acceptance results.
+  - C-001 to C-036 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -175,6 +177,11 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 - [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.
 - [sicp/README.md](sicp/README.md): SICP chapter 3 in wat, against guile.
 - [aoc/README.md](aoc/README.md): Advent of Code's shape in wat, against a Clojure reference.
+- [paip/README.md](paip/README.md): PAIP's unification and Prolog over quoted data, against guile
+  — and where quoted data runs out.
+- [euler/README.md](euler/README.md): Project Euler on big integers and text, against Clojure.
+- [rete/README.md](rete/README.md): wat's own rule engine against clara-rules, and the surface
+  nothing else writes down.
 - [NEXT.md](NEXT.md): the acceptance tests queued after the books (Clojure Koans,
   Make-a-Lisp, SICP, Advent of Code, PAIP, and a slice of a real packet detector).
 
@@ -202,6 +209,12 @@ sicp/chNN-<topic>.wat               SICP chapter 3 in wat, one program per secti
 tools/sicp-oracle.sh                guile on a section's Scheme (oracle/sicp/NAME.scm): its printed results
 aoc/dayNN-<name>.wat, aoc/input/    our own puzzles in Advent of Code's shape, and their inputs
 tools/aoc-oracle.sh                 Clojure on a puzzle's reference implementation (oracle/aoc/NAME.clj)
+paip/chNN-<topic>.wat               PAIP chapters 11-12 in wat: unification and a Prolog, over quoted data
+tools/paip-oracle.sh                guile on a chapter's Scheme (oracle/paip/NAME.scm): its printed results
+euler/pNN-<name>.wat, euler/input/  Project Euler problems in wat, and our own generated inputs
+tools/euler-oracle.sh               Clojure on a problem's reference implementation (oracle/euler/NAME.clj)
+rete/rNN-<name>.wat                 wat's own rete engine, put to the same rules as clara-rules
+tools/rete-oracle.sh                clara-rules on a case's rules (oracle/rete/NAME.clj): its results
 vendor/j-bob/                       The Little Prover's J-Bob, BSD 2-Clause, as published by its authors
 vendor/malt/                        the license of malt (MIT), the Little Learner's library, which lib/malt.wat ports
 FINDINGS.md, PROVIDE.md, NEXT.md    the ledgers

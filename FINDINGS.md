@@ -20,6 +20,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
 | Project Euler (after NEXT.md) | 4 problems, 17 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. Then p22 names scores (C-035) adds the text half, chosen because it is made of the two things wat is worst at: **F-061**, the whole regex surface is `matches?` answering a bool — a capture group compiles and what it matched can never be read, though wat-rs depends on the entire `regex` crate — so the file is parsed by trim, split and `subs`; and **F-062**, a String has no characters, no `index-of`, `replace`, `split-lines` or `blank?`, `reverse` refuses it and `split` refuses `""`, so every letter is a one-character `subs` at about 16.7 µs. Scoring by scanning the alphabet costs 2751 ms against 395 ms through a `PersistentMap` (7.0×, measured — not the 26× the reasoning suggested). String sort order matches Clojure exactly, checked rather than assumed. F-047, F-060, F-061, F-062 |
+| The rete (after NEXT.md) | 1 case, 8 results | wat ships a production rule engine and nothing here had touched it — nor had any documentation (F-065: zero word-boundary hits in USER-GUIDE, CHEATSHEET, CLOJURE-ROSETTA or the docs README, against 134 verbs and 4154 lines of wat). `rete/r01-chaining.wat` puts the same supply-chain rules to wat and to clara-rules (`tools/rete-oracle.sh`) and all 8 results agree (C-036): a guarded join, forward chaining through a derived fact, negation over that derived fact, existence that doesn't collapse into a join, and an accumulator over derived facts. The engine is correct; only the documentation is missing |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -31,7 +32,7 @@ give each one's detail.
 |---|---|
 | **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting · F-059 a dotted pair reads as a three-element list with `.` as an ordinary symbol, then prints back as a dotted pair — so an improper list round-trips while meaning something else |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) · F-063 nothing says that `Result/try` propagates rather than catches, or that the only general catch is `:wat::test::run-thread` |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) · F-063 nothing says that `Result/try` propagates rather than catches, or that the only general catch is `:wat::test::run-thread` · **F-065 the rete — 134 verbs, 4154 lines, `defrule`, `defquery`, negation, existence, nine accumulators — appears in no user-facing page at all** |
 | **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
 | **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · F-063 a catch that doesn't spawn a thread — recovery costs 1.3 ms and lives in `:wat::test::` · F-064 a stream that remembers a failure, not only a value (F-053) · PROVIDE.md's P-001–P-023 |
 
@@ -2947,6 +2948,82 @@ name. Rows blocked are counted once per row.
 - **Class:** GAP. This is F-053's consequence for errors. Extend: a stream that remembers what it
   forced, failures included.
 - **Repro:** `probes/err/error-in-stream.wat`.
+
+## The rete
+
+### C-036: wat's rete is correct — chaining, negation over derived facts, existence and accumulation all agree with clara
+
+- **Where:** `rete/r01-chaining.wat`, a small supply chain, against the same rules written on
+  clara-rules (`oracle/rete/r01-chaining.clj`, run by `tools/rete-oracle.sh`). The rules are
+  ours, written twice; nobody's code is ported. 8 results, all matching, on the first run.
+- **What it exercises,** each building on the last:
+  - **a join** — an `Order` and a `Stock` line for the same part, with a guard
+    `(:wat::rete::where (:wat::rete::i64::> ?qty 0))`. Two of three orders ship;
+    the out-of-stock one doesn't.
+  - **forward chaining** — the derived `Shippable` feeds the rule deriving `Invoice`. This fires
+    only if the engine puts what it derived back into the network, so it is a direct test that
+    `fire-rules` computes a closure rather than one pass. It does: `fire-rules$oracle`
+    "delegates to fire-stratified … within each stratum fire-stratified still uses
+    fire-fixpoint" (`wat/rete/oracle/fire.wat:356`).
+  - **negation over a derived fact** — `(:wat::rete::not (:sc::Hold (?id <- :id)))` on a
+    `Shippable`. The held order is shippable and not invoiced; stratification is what makes that
+    come out right.
+  - **existence** — `(:wat::rete::exists (:sc::Supplier (?part <- :part)))`. Two suppliers for
+    one part derive **one** `Sourced`, not two: `exists` is not a join.
+  - **accumulation over a derived fact** — `(?n <- (:wat::rete::acc::count) :from (:sc::Shippable))`
+    counts 2.
+- **The surface used:** `defrecord` facts, `(:wat::rete::defrule :ns::name :when […] :then […])`,
+  `(:wat::rete::defquery :ns::name :params [] :when […])`,
+  `(:wat::rete::collect-rules :ns)` — which reflects the symbol table for a namespace's rules
+  (`src/rete/collect.rs`) — `compile-all`, `insert-all`, `fire-rules`, `query`. A query answers a
+  `(PersistentVector :- [PersistentMap])` whose keys are the binding names **with** the question
+  mark, so the whole fact bound as `(?f <- :sc::Shippable)` is read back at `"?f"`.
+- **Guards are type-namespaced:** `:wat::rete::i64::{< <= = > >= not= mod quot rem}`, and the
+  same for `f64`, `string`, `keyword`, `bool`, plus `:wat::rete::core::{and or not if let match
+  cond}` and `enum::=`. rete has its own `cond`, its own `if`, its own everything — a parallel
+  namespace, deliberately (`BRIEF-rete-cond-is-its-own-macro.md`).
+- **Nine accumulators exist:** `count`, `sum`, `min`, `max`, `mean`, `distinct`, `all`,
+  `group-by`, `gather-vals`.
+- **Class:** CLEAN. The engine works. What is missing is any way to find out that it exists —
+  F-065.
+
+### F-065: the rete has 134 verbs, 4154 lines of wat, and no user-facing documentation at all
+
+- **Where:** looking for the next untouched part of wat, after bigints, text and errors.
+- **What happened** (2026-09-15, wat-rs `a3218644d`). A word-boundary search for `\brete\b`,
+  `:wat::rete::` or `defrule` across the user-facing documentation:
+
+  | page | hits |
+  |---|---|
+  | `USER-GUIDE.md` | 0 |
+  | `WAT-CHEATSHEET.md` | 0 |
+  | `CLOJURE-ROSETTA.md` | 0 |
+  | `docs/README.md` | 0 |
+  | `SERVICE-PROGRAMS.md` | 0 |
+  | `CONVENTIONS.md` | 1 — and it is a Rust module-path listing (`rete/` beside `kernel/`, `value/`), not about the engine |
+
+  Against a subsystem of **134 `:wat::rete::` verbs** and **4154 lines** of wat source
+  (`wat/rete.wat`, `wat/rete/*.wat`, `wat/rete/oracle/*.wat`), with a native Rust implementation
+  beside a pure-wat reference for every fire and insert verb.
+- **A caution about the measurement.** Counting `rete` case-insensitively gives 3 hits in
+  USER-GUIDE and 4 in the cheatsheet — every one of them the word **conc-rete**. The same trap
+  swallowed an earlier count of this ledger's own references (18 hits, all "concrete" or
+  "interp-rete-r"). Word boundaries are the only honest way to count this name.
+- **So:** a user cannot discover that wat has a production rule engine, cannot learn that
+  `defrule` exists, and has nowhere to read what `:when`/`:then` accept, what
+  `(?v <- :field)` means, which of the five `fire-*` verbs to call, or that guards live in
+  type-namespaced operators like `:wat::rete::i64::>`. Everything in C-036 above was recovered by
+  reading `wat/rete/syntax.wat`, `src/rete/collect.rs`, and fixtures under `wat-rs/tests/rete/`.
+  This is the largest documented-nowhere surface the project has found: `CLOJURE-ROSETTA.md`
+  never mentions it, though clara-rules is exactly the Clojure-world counterpart a reader would
+  arrive with.
+- **Class:** GAP. Clean: a `RETE.md` — or a cheatsheet section — covering `defrule`, `defquery`,
+  the condition forms (`where`, `not`, `exists`, `acc::*`, `:from`), the fire verbs and how they
+  differ, `collect-rules`, and the shape a query answers. PROVIDE's P-010 already notes wat
+  "already ships a Rete, which reacts forward to facts"; that is currently truer than any
+  documentation admits.
+- **Repro:** the grep table above, and `rete/r01-chaining.wat`, which had to be written from
+  source and fixtures.
 
 ## Predicted, unverified
 
