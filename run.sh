@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
-# run.sh: run every chapter program under books/ with the wat binary and report each.
+# run.sh: run the suites' programs with the wat binary and report each.
+#
+# With no arguments it runs everything. Name paths to run a subset:
+#   ./run.sh sqlite            one suite
+#   ./run.sh aoc paip euler    several
+#   ./run.sh books/little-mler one book
+#
+# A subset is usually the honest thing to run. Nothing here cross-loads: every program is
+# standalone, each suite has its own lib/check.wat, and `:wat::load-file!` resolves beside the
+# file that calls it — so a change inside one suite cannot break another. A FULL run earns its
+# 16 minutes when this file's discovery changes, when the wat binary changes, or as a periodic
+# backstop; not after editing one puzzle. (Of that 16 minutes, the five slowest programs are
+# nine, and books/little-learner/ch13 alone is five.)
 #
 # A chapter passes when `wat <file>` exits 0. Its checks are wat.test/assert-eq calls that
 # stop the program at the first failure and say where (FINDINGS.md, C-002).
@@ -28,6 +40,18 @@ if [ -n "${RECORD:-}" ] && [ ! -f timings.tsv ]; then
   printf 'utc\twat_rs\tfile\tms\texit\n' > timings.tsv
 fi
 
+# The trees to search: what was asked for, or every suite.
+roots=("$@")
+if [ "${#roots[@]}" -eq 0 ]; then
+  roots=(books koans/idiom sicp aoc paip euler rete sqlite)
+fi
+for r in "${roots[@]}"; do
+  if [ ! -e "$r" ]; then
+    echo "run.sh: no such path: $r"
+    exit 2
+  fi
+done
+
 pass=0
 fail=0
 while IFS= read -r f; do
@@ -46,14 +70,14 @@ while IFS= read -r f; do
   if [ -n "${RECORD:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$WAT_REV" "$f" "$ms" "$rc" >> timings.tsv
   fi
-done < <(find books koans/idiom sicp aoc paip euler rete -name '*.wat' -not -path '*/lib/*' 2>/dev/null | sort)   # lib/ files are definitions only, no main
+done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' 2>/dev/null | sort)   # lib/ files are definitions only, no main
 
 echo "---"
 echo "$pass passed, $fail failed  (wat-rs $WAT_REV)"
 
-# Zero chapters found must not read as "all passed".
+# Zero programs found must not read as "all passed".
 if [ $((pass + fail)) -eq 0 ]; then
-  echo "run.sh: no chapter programs found under books/"
+  echo "run.sh: no programs found under: ${roots[*]}"
   exit 2
 fi
 [ "$fail" -eq 0 ]
