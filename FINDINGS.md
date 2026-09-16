@@ -17,7 +17,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
 | SICP (NEXT.md §3) | 4 chapters, 65 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
-| Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 125 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup; the fifth, which is nearly all hash-map and hash-set updates, is 45 times slower. F-055, F-056 |
+| Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | The others | — | Friedman's two textbooks, *Essentials of Programming Languages* (with Wand) and *Scheme and the Art of Programming* (with Springer), are not queued. NEXT.md lists the acceptance tests that come after the books |
 
 ### Relay to wat-rs, by task
@@ -27,11 +27,11 @@ give each one's detail.
 
 | Task | Findings |
 |---|---|
-| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type |
-| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) |
+| **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting |
+| **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias |
 | **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
-| **Improve** (works, but slowly or narrowly) | F-057 hash maps and hash sets copy on every insert, so accumulating anything is quadratic (the same root as F-023 and F-055; it made a 90000-square search 45× slower than Clojure) · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · PROVIDE.md's P-001–P-017 |
+| **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · PROVIDE.md's P-001–P-017 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -163,8 +163,12 @@ give each one's detail.
   elements take 4.9 s by `rest` and 0.25 s by `nth`. `conj` clones too (F-023).
 - **F-056:** there is no ordered collection — no sorted set, sorted map, priority queue or heap
   — only `sort` over a whole collection, so a frontier can't be kept in order as it grows.
-- **F-057:** hash maps and hash sets copy on every insert, like Vectors (F-023, F-055): twice
-  the entries cost four times the time, so accumulating anything is quadratic.
+- **F-057:** `HashMap` and `HashSet` copy on every insert (twice the entries, four times the
+  time), while `PersistentMap` shares structure and stays linear — ten times faster at 4000
+  entries. Nothing points a user from the first to the second.
+- **F-058:** a `PersistentMap` constructor refuses a bracketed type that is not a keyword, so a
+  map of vectors — the shape F-057's own advice leads to — must be spelled through a typealias,
+  where the `HashMap` twin accepts the nesting directly.
 - **F-037:** a call to an undefined keyword-named function, with a struct as its argument, is
   reported as a missing field on that struct ("field `ll::naked-gradient-descent` is not
   declared on `:ll::Hypers`"). The real cause, an unresolved function, isn't mentioned.
@@ -2486,9 +2490,9 @@ name. Rows blocked are counted once per row.
   nothing points a user to it.
 - **Repro:** the two probes.
 
-### F-057: every collection is copy-on-write, so building one entry at a time is quadratic
+### F-057: `HashMap` and `HashSet` copy on every insert, while `PersistentMap` shares — and nothing tells the user which to reach for
 
-- **Where:** the shortest-path puzzle (`aoc/day05-paths.wat`), which takes 125 s where its
+- **Where:** the shortest-path puzzle (`aoc/day05-paths.wat`), which took 135 s where its
   Clojure reference takes 2.8 s. Nearly all of its work is putting squares into a hash map of
   buckets and a hash set of settled squares: 90000 of them.
 - **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/aoc/map-insert-scaling.wat`,
@@ -2501,16 +2505,49 @@ name. Rows blocked are counted once per row.
 
   Twice the entries cost four times the time: each insert copies what is already there. Reading
   is not affected — 4000 lookups in the 4000-entry map take 41 ms, about 10 µs each.
-- **So:** this is the same defect as `conj` and `rest` on a Vector (F-023, F-055), and it holds
-  across every container: Vector, HashMap and HashSet all copy on write, with no structural
-  sharing. Any program that accumulates — a frequency count, a visited set, a memo table, a
-  graph frontier — is quadratic in what it accumulates. That is most programs. `PersistentMap`
-  and `PersistentVector` exist and may be the intended answer, but nothing in the docs points a
-  user from `HashMap` to them, and the stdlib's own services use `HashMap`.
-- **Class:** GAP (performance). Improve: share structure on insert, as Clojure's maps and
-  Rust's `im` do. Clean: if `PersistentMap` is the one to accumulate into, say so where
-  `HashMap` is documented.
-- **Repro:** the probe.
+- **And `PersistentMap` does share** (`probes/aoc/persistent-insert-scaling.wat`, both filled in
+  the same run):
+
+  | filled | n = 2000 | n = 4000 | ratio |
+  |---|---|---|---|
+  | `HashMap`, by `hashmap::assoc` | 106 ms | 381 ms | 3.6× |
+  | `PersistentMap`, by `map::assoc` | 20 ms | 40 ms | 2.0× |
+
+  Linear, and already ten times faster at 4000 entries, with the gap widening.
+- **And nothing is given up for it.** `probes/aoc/persistent-arity.wat` and
+  `probes/aoc/persistent-valuetype.wat`, each beside a HashMap control that is refused the same
+  way: `:wat::map::get` handed seven arguments is refused at startup (`:wat::map::get: expected
+  2 argument(s); got 7`), and a `PersistentMap` declared `[:wat::core::i64 :wat::core::i64]`
+  propagates its value type, so using that value as a String is refused (`:probe::want-string:
+  parameter #1 expects :wat::core::String; got :wat::core::i64`). The fast container is checked
+  as closely as the slow one. Worth saying because wat-rs's own note of 2026-08-20,
+  `docs/arc/2026/04/109-kill-std/NOTE-the-persistent-family-is-outside-the-type-checker.md`,
+  measured the opposite — thirteen persistent verbs blanket-accepted, their annotations
+  "INERT" — but that was the retired `PersistentMap/get` spelling; at `a3218644d` the
+  `:wat::map::`/`:wat::vector::` intrinsics carry real schemes. **The note is stale**, and it is
+  the kind of note a reader would act on.
+- **So:** wat has the container that shares structure and the container that copies, and the
+  one everybody reaches for is the copying one. `HashMap` is what the examples use, what the
+  stdlib's own services keep their state in, and what the name suggests; `PersistentMap` is
+  named for its persistence, not for being the one to accumulate into. A program that builds a
+  frequency count, a visited set, a memo table or a graph frontier out of `HashMap` is
+  quadratic in what it accumulates, and nothing says so. **Measured on the real workload:** the
+  same program, the same two answers, back to back on an idle machine —
+
+  | `aoc/day05-paths.wat`, 90000 squares | wall |
+  |---|---|
+  | frontier and settled set as `HashMap`/`HashSet` | 135.1 s |
+  | the same, as `PersistentMap` | 20.6 s |
+
+  6.5× for a change of a dozen lines: `:wat::hashmap::` became `:wat::map::`, `:wat::core::conj`
+  became `:wat::vector::conj`, and `:wat::hashset::conj` became an assoc of `true`, there being
+  no persistent set. The puzzle looked like evidence that wat is 45 times slower than Clojure
+  here; it was evidence about the container. The same split is open for `Vector` against
+  `PersistentVector` (F-023, F-055).
+- **Class:** GAP. Clean: say, where `HashMap` is documented, that an accumulating map should be
+  a `PersistentMap`. Improve: make `hashmap::assoc` share, or have the checker say which
+  container a growing map wants.
+- **Repro:** the two probes.
 
 ### F-056: there is no ordered collection: no sorted set, no sorted map, no priority queue, no heap
 
@@ -2531,6 +2568,36 @@ name. Rows blocked are counted once per row.
   arbitrary weights would have nothing to fall back on.
 - **Class:** GAP. Extend: a priority queue (a binary heap is enough), or an ordered map or set.
 - **Repro:** the probe, and `aoc/day05-paths.wat` for what the absence costs to work around.
+
+### F-058: a `PersistentMap`'s bracketed type must be a keyword, so a map of vectors cannot be written the way a `HashMap`'s can
+
+- **Where:** taking F-057's own advice, in `aoc/day05-paths.wat`. The frontier is a map from a
+  cost to the squares waiting at that cost — a map whose values are vectors.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), from
+  `(:wat::core::PersistentMap :- [:wat::core::i64 (:wat::core::PersistentVector :- [:wat::core::i64])])`
+  (`probes/aoc/persistent-nested-type.wat`), verbatim:
+  ```
+  malformed :wat::core::PersistentMap form: bracketed type must be a type keyword
+  ```
+- **The control passes.** The same nesting on the copying twin,
+  `(:wat::core::HashMap :- [:wat::core::i64 (:wat::core::Vector :- [:wat::core::i64])])`, is
+  accepted and runs (`probes/aoc/persistent-nested-type-control.wat`) — and it is what day05
+  was built on before the conversion. So this is not a rule about nested types.
+- **And the container is not the limit.** Naming the inner type first and putting that name in
+  the brackets is accepted, and the map holds and returns the vector
+  (`probes/aoc/persistent-nested-type-alias.wat`, which prints 1 then 7):
+  ```
+  (:wat::core::typealias :probe::Cells (:wat::core::PersistentVector :- [:wat::core::i64]))
+  (:wat::core::PersistentMap :- [:wat::core::i64 :probe::Cells])
+  ```
+- **So:** the refusal is about the spelling, not about what a `PersistentMap` can hold, and it
+  lands on precisely the users F-057 sends to the persistent family — the first thing you want
+  to accumulate is often a map of collections. The diagnostic carries `:remedies []`, though the
+  remedy is a single typealias.
+- **Class:** GAP. Fix: accept a parametric type form inside a persistent constructor's brackets,
+  as the std constructors do. Failing that, Correct: have the message say to name the inner type
+  with a typealias.
+- **Repro:** the three probes.
 
 ## Predicted, unverified
 

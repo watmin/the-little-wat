@@ -25,8 +25,15 @@
 
 (:wat::core::typealias :aoc::Ints (:wat::core::Vector :- [:wat::core::i64]))
 (:wat::core::typealias :aoc::Grid (:wat::core::Vector :- [(:wat::core::Vector :- [:wat::core::i64])]))
-(:wat::core::typealias :aoc::Buckets (:wat::core::HashMap :- [:wat::core::i64 (:wat::core::Vector :- [:wat::core::i64])]))
-(:wat::core::typealias :aoc::Settled (:wat::core::HashSet :- [:wat::core::i64]))
+;; the frontier's containers are the persistent ones: they share structure where HashMap and
+;; HashSet copy on every insert (F-057). wat has no persistent set, so the settled squares are a
+;; PersistentMap to true.
+(:wat::core::typealias :aoc::Cells (:wat::core::PersistentVector :- [:wat::core::i64]))
+;; the value type is written as the :aoc::Cells keyword, not as the nested
+;; (PersistentVector :- [i64]) form a HashMap accepts there: a PersistentMap constructor refuses
+;; a bracketed type that is not a keyword (F-058, probes/aoc/persistent-nested-type.wat).
+(:wat::core::typealias :aoc::Buckets (:wat::core::PersistentMap :- [:wat::core::i64 :aoc::Cells]))
+(:wat::core::typealias :aoc::Settled (:wat::core::PersistentMap :- [:wat::core::i64 :wat::core::bool]))
 
 ;; the frontier: the squares waiting at each cost, and the squares already settled
 (:wat::core::defstruct :aoc::Frontier
@@ -60,25 +67,25 @@
 
 ;; ---- the frontier
 
-(:wat::core::defn :aoc::bucket-at [f <- :aoc::Frontier cost <- :wat::core::i64] -> :aoc::Ints
-  (:wat::core::match (:wat::hashmap::get (:aoc::Frontier/buckets f) cost)
+(:wat::core::defn :aoc::bucket-at [f <- :aoc::Frontier cost <- :wat::core::i64] -> :aoc::Cells
+  (:wat::core::match (:wat::map::get (:aoc::Frontier/buckets f) cost)
     [:wat::core::Option.Some {:value cells} cells]
-    [:wat::core::Option.None {} (:wat::core::Vector :- [:wat::core::i64])]))
+    [:wat::core::Option.None {} (:wat::core::PersistentVector :- [:wat::core::i64])]))
 
 (:wat::core::defn :aoc::push [f <- :aoc::Frontier cost <- :wat::core::i64 cell <- :wat::core::i64] -> :aoc::Frontier
-  (:aoc::Frontier :buckets (:wat::hashmap::assoc (:aoc::Frontier/buckets f) cost (:wat::core::conj (:aoc::bucket-at f cost) cell))
+  (:aoc::Frontier :buckets (:wat::map::assoc (:aoc::Frontier/buckets f) cost (:wat::vector::conj (:aoc::bucket-at f cost) cell))
                   :settled (:aoc::Frontier/settled f)))
 
 (:wat::core::defn :aoc::drop-bucket [f <- :aoc::Frontier cost <- :wat::core::i64] -> :aoc::Frontier
-  (:aoc::Frontier :buckets (:wat::hashmap::dissoc (:aoc::Frontier/buckets f) cost)
+  (:aoc::Frontier :buckets (:wat::map::dissoc (:aoc::Frontier/buckets f) cost)
                   :settled (:aoc::Frontier/settled f)))
 
 (:wat::core::defn :aoc::settle [f <- :aoc::Frontier cell <- :wat::core::i64] -> :aoc::Frontier
   (:aoc::Frontier :buckets (:aoc::Frontier/buckets f)
-                  :settled (:wat::hashset::conj (:aoc::Frontier/settled f) cell)))
+                  :settled (:wat::map::assoc (:aoc::Frontier/settled f) cell true)))
 
 (:wat::core::defn :aoc::settled? [f <- :aoc::Frontier cell <- :wat::core::i64] -> :wat::core::bool
-  (:wat::hashset::contains? (:aoc::Frontier/settled f) cell))
+  (:wat::map::contains-key? (:aoc::Frontier/settled f) cell))
 
 ;; ---- the search
 
@@ -103,9 +110,9 @@
     (:aoc::push-neighbour g h w side f3 y (:wat::core::+ x 1) cost)))
 
 (:wat::core::defn :aoc::walk-bucket [g <- :aoc::Grid h <- :wat::core::i64 w <- :wat::core::i64 side <- :wat::core::i64
-                                     f <- :aoc::Frontier cells <- :aoc::Ints i <- :wat::core::i64
+                                     f <- :aoc::Frontier cells <- :aoc::Cells i <- :wat::core::i64
                                      cost <- :wat::core::i64 goal <- :wat::core::i64] -> :aoc::Step
-  (:wat::core::if (:wat::core::>= i (:wat::core::length cells))
+  (:wat::core::if (:wat::core::>= i (:wat::vector::length cells))
     (:aoc::Step :f f :found -1)
     (:wat::core::let [cell (:wat::core::nth cells i)]
       (:wat::core::if (:aoc::settled? f cell)
@@ -128,8 +135,8 @@
                     w (:wat::core::length (:wat::core::first g))
                     side (:wat::core::* scale w)
                     goal (:wat::core::- (:wat::core::* side side) 1)
-                    start (:aoc::Frontier :buckets (:wat::core::HashMap :- [:wat::core::i64 (:wat::core::Vector :- [:wat::core::i64])])
-                                          :settled (:wat::core::HashSet :- [:wat::core::i64]))]
+                    start (:aoc::Frontier :buckets (:wat::core::PersistentMap :- [:wat::core::i64 :aoc::Cells])
+                                          :settled (:wat::core::PersistentMap :- [:wat::core::i64 :wat::core::bool]))]
     (:aoc::run g h w side (:aoc::push start 0 0) 0 goal)))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil

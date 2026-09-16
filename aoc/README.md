@@ -18,7 +18,7 @@ print, in order (`lib/check.wat`).
 | day02 smoke | a 100×100 grid of heights | risk of the low points, and steps downhill to the left | 1.80 s | 2.40 s |
 | day03 words | 5000 words | how many are distinct, and how often the commonest occurs | 0.90 s | 2.50 s |
 | day04 binary | 1000 binary numbers | the product of the common-bit numbers, and of the two narrowed rows | 1.05 s | 2.50 s |
-| day05 paths | a 60×60 grid of risks, then the same grown to 300×300 | the cheapest path across each | 125.4 s | 2.78 s |
+| day05 paths | a 60×60 grid of risks, then the same grown to 300×300 | the cheapest path across each | 20.6 s | 2.78 s |
 
 All ten answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and
 the JVM's about 1.49 s of Clojure's.
@@ -43,13 +43,24 @@ the JVM's about 1.49 s of Clojure's.
   reference keeps it in a sorted set. wat has no sorted set, sorted map, priority queue or heap
   (F-056), only `sort` over a whole collection, so day05 keeps a bucket per cost — which works
   only because every step costs between 1 and 9.
-- **Building a map is where the time goes, because every insert copies the map.** day05 is 45
-  times slower than its reference, and nearly all of its work is `hashmap::assoc` and
+- **Building a map is where the time goes, and the obvious container is the wrong one.** day05
+  first ran for 135 s — 45 times its reference — and nearly all of that was `hashmap::assoc` and
   `hashset::conj` over 90000 squares. `probes/aoc/map-insert-scaling.wat` shows why: 2000
-  entries into a hash map take 84 ms and 4000 take 341 ms — four times the time for twice the
-  entries — and a hash set behaves the same (45 ms and 163 ms). Reading is cheap and linear:
-  4000 lookups take 41 ms. So every container in wat copies on write (F-057, with F-023 and
-  F-055), and anything that accumulates is quadratic in what it accumulates.
+  entries into a `HashMap` take 84 ms and 4000 take 341 ms — four times the time for twice the
+  entries — and a `HashSet` behaves the same (45 ms, 163 ms). Reading is cheap and linear: 4000
+  lookups take 41 ms. `PersistentMap` shares structure and stays linear instead (20 ms and
+  40 ms, `probes/aoc/persistent-insert-scaling.wat`), and it is checked just as closely: an
+  arity error and a wrong value type are both refused at startup
+  (`probes/aoc/persistent-arity.wat`, `probes/aoc/persistent-valuetype.wat`). Moving the
+  frontier onto it — a dozen lines — took day05 **from 135.1 s to 20.6 s**, same answers, same
+  machine. wat has the right container; nothing points you to it (F-057).
+- **Taking that advice runs into a wall.** The frontier is a map from a cost to the squares
+  waiting at it, and `(:wat::core::PersistentMap :- [:wat::core::i64 (:wat::core::PersistentVector :- [:wat::core::i64])])`
+  is refused — "bracketed type must be a type keyword" — where the `HashMap` spelling of the
+  same nesting is accepted. Naming the inner type with a typealias works, and the error says
+  nothing about that (F-058, `probes/aoc/persistent-nested-type*.wat`).
+- **There is no persistent set.** `PersistentVector` and `PersistentMap` share structure; no set
+  does, so the settled squares are a `PersistentMap` to `true` (F-057).
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 
