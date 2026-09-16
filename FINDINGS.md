@@ -31,9 +31,9 @@ give each one's detail.
 |---|---|
 | **Fix** (behaviour is wrong) | F-001 debug build panics · F-002 new test file never run · F-003 `wat.test/deftest` skipped · F-004 `()` in `wat.core/quote` refused · F-009 constructors fail at runtime · F-010 fn-typed param misread · F-012 `wat/load-file!` no-op · F-014 symbol-headed calls unchecked · F-016 flat `cond` crashes · F-017 `wat.core/match` arms misread · F-018 `wat.core/def u/x` defines nothing · F-021 `~@` of a vector form in a program body · F-022 `wat.core/defmacro` defines nothing · F-024 `wat.core/let` body checked without bindings · F-026 retired nested pattern passes · F-030 printing a newtype panics · F-031 `length` on a String passes the checker · F-038 a builtin verb as a function value passes the checker in two of three places · F-019 a variant keeps its narrowed type, so two values of one enum can't be compared with `=` · F-020 a unit variant isn't a value · F-029 a fn generic over a surface refuses the structs that implement it (hit in two books: ML functors, Java visitors) · F-039 an `extend-type` that leaves a feature out passes the checker; the call fails at runtime · F-041 `str` takes one argument, and more pass the checker · F-042 `#(…)` read as the symbol `#` · F-043 a map in call position passes the checker · F-044 a keyword lookup `(:k m)` isn't type-checked · F-045 `first` and `rest` die on an empty collection · F-048 a record's accessor binds a generic T to `:wat::core::Record` · F-050 end of input in the middle of a frame panics ("disconnected") · F-052 a function can't declare a connected peer as its return type · F-058 a `PersistentMap` constructor refuses a bracketed type that isn't a keyword, where its `HashMap` twin accepts the same nesting · F-059 a dotted pair reads as a three-element list with `.` as an ordinary symbol, then prints back as a dotted pair — so an improper list round-trips while meaning something else |
 | **Correct** (a diagnostic misleads or points the wrong way) | F-006/F-008 errors located in wat-rs's Rust or stdlib source (again: `src/check.rs:15104`, `wat/core.wat:66`) · F-007 unknown bare call name caught only at runtime · F-011 `<WatAST>` shown for both values · F-015 docstring refusal reported at the call · F-025 the non-exhaustive error suggests `_` · F-034 an f64 prints without its decimal point · F-037 an undefined function reported as a missing struct field · F-054 a definition naming itself is reported as a keyword's type error · F-040 a defstruct in a Pure enum: the containment error offers only `:wat::enum::Impure`, never `defrecord`, and is located in `src/check.rs` · the Peer `:messages` hint names `defrecord` for an enum · the "malformed form" label on `first` and `rest` of an empty collection (F-045) · F-058's refusal carries `:remedies []`, though the remedy is a single typealias |
-| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) |
+| **Clean** (docs behind the code) | the docs never map Clojure's `defprotocol`/`extend-protocol` to `defsurface`/`extend-type` (`CLOJURE-ROSETTA.md` has neither) · the user guide's retired verb names (`:wat::core::f64::to-string`, `:wat::std::math::exp`, `:wat::core::i64::to-f64`, the `log` alias) · the cheatsheet's `first` returning an Option · no top-level doc mentions `defstruct`, or says that a `defrecord` may cross a boundary and a `defstruct` may not (F-040) · the user guide's first stdin program (§2) is refused as written · a Clojure-name to wat-route table for the koans' missing names (`vals` → `:wat::hashmap::values`, `pr-str` → `:wat::edn::write`, `atom` → a service …) · F-063 nothing says that `Result/try` propagates rather than catches, or that the only general catch is `:wat::test::run-thread` |
 | **Improve** (works, but slowly or narrowly) | F-057 `HashMap` and `HashSet` copy on every insert where `PersistentMap` shares (10× at 4000 entries, and widening), and nothing points the user to the sharing one — a 90000-square search takes 135 s on the copying containers and 20.6 s on the sharing ones, for a dozen lines of change · F-055 `rest` on a Vector clones it, so walking one is quadratic where `nth` is constant · F-023 `conj` clones a Vector · F-027/F-028 no tuple patterns, and nested arms never cover a variant · F-033 taking a WatAST apart copies every subtree · a Peer surface must declare every datatype its messages carry, so one datatype shared by two services is restated in each (Friction, A Little Java ch 10) · `take-nth` takes its count first, `take`/`drop` the collection · `cond` refused in a macro body where `if` is allowed · F-051 a message to a service costs about 224 µs, a hundred function calls, so a mal call on a service-held environment costs 3 ms · the interpreter's speed: 100 to 430 times the JVM (miniKanren), 13 times guile (J-Bob), over 100 times Racket (malt) |
-| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · PROVIDE.md's P-001–P-022 |
+| **Extend** (missing) | F-005 no symbol spelling for types outside `wat::core` · F-013 `#_` · F-032 `λ Π Σ →` in symbols · F-035 bit operations · F-036 random numbers · the Clojure core names the koans reach for and wat lacks (`inc`, `dec`, `even?`, `comp`, `partial`, `list`, `merge`, `for`, `group-by`, `partition`, `case`, set operations …; the Clojure Koans table) · `first`/`rest` total, like `last` (F-045) · F-046 enumerate a HashSet · F-047 an orderable bigint · F-056 a priority queue, or any ordered collection · F-049 a raw write to stdout (a prompt, plain text) · F-050 a plain `read-line` · F-053 a stream that remembers what it forced · F-054 a definition that can name itself · a String's `reverse`, `index-of` and characters · a persistent **set**: `PersistentVector` and `PersistentMap` share structure, but a sharing set is missing, so a visited set has to be a `PersistentMap` to `true` (F-057) · an improper list, or a reader that says no at the dot rather than admitting a symbol named `.` into a list (F-059) · F-060 a bigint's `to-string`, where every other scalar has one · F-061 a regex that can report what it matched (`find`, `captures`, `replace`, split-on-pattern) — the crate is already a dependency, only `matches?` is exposed · F-062 a String's characters, `index-of`, `replace`, `split-lines`, `blank?` and `reverse`; and `split` on `""` · F-063 a catch that doesn't spawn a thread — recovery costs 1.3 ms and lives in `:wat::test::` · F-064 a stream that remembers a failure, not only a value (F-053) · PROVIDE.md's P-001–P-023 |
 
 **Codemod hazards** (for the Clojure/EDN syntax migration), most serious first:
 - **F-014:** calls written with a symbol head are **not type-checked at startup**: neither
@@ -1621,6 +1621,19 @@ The things that were annoying while writing Little Schemer, now tested. All agai
 
 ### Friction: a thread death handled as data still prints its full failure record to stderr
 
+- **Measured at scale (2026-09-15), and it is not incidental.** `probes/err/catch-cost.wat`
+  catches 2000 deliberate failures with `:wat::test::run-thread`, handles every one as a value,
+  and still writes **2000 lines and 806,000 bytes to stderr** — one full `AssertionFailure`
+  record per catch, complete with thread name, location and captured frames. The program's own
+  output is three lines. A program that recovers inside a loop cannot be run with readable
+  stderr.
+- **It is deliberate, and there is no flag.** `src/panic_hook.rs:4` records that this replaced
+  an `install_silent_assertion_panic_hook` "which silently swallowed" — so the printing was
+  chosen on purpose, and nothing in the hook takes a quiet or suppress setting. The right fix is
+  probably not silence but *attribution*: a death that a `run-thread` is about to hand back as
+  a value has a handler, and needn't be reported as though nothing caught it.
+- See also F-063, which prices the catch itself.
+
 - **Where:** the refusal tests of C-026.
 - **What happened** (2026-09-15, wat-rs `a3218644d`): ch 1's run exits 0, and its stdout
   holds only the verdict lines. Its stderr holds 9 failure records, one for each refused
@@ -2861,6 +2874,79 @@ name. Rows blocked are counted once per row.
   mentions none of `index-of`, `replace`, `split-lines` or `blank?` in its 388 lines, so a
   Clojure user looking for them finds neither the operation nor a route to it.
 - **Repro:** the five probes.
+
+## Errors and recovery
+
+### F-063: catching a failure spawns a thread, so recovery costs 1.3 ms — and the only general catch is a test verb
+
+- **Where:** looking for wat's error-recovery story after Project Euler. Sixty-two findings in,
+  no suite had measured what surviving a failure costs, though `books/little-typer/lib/pie.wat`
+  leans on it for all 108 of Pie's refusals and two probes use it the same way.
+- **The whole vocabulary** is small: `:wat::core::Result` (a two-variant Pure enum,
+  `Ok [value <- T]` / `Err [error <- E]`), `Result/try`, `Result/expect`,
+  `:wat::kernel::assertion-failed!`, and `:wat::test::run-thread` →
+  `:wat::kernel::RunResult.Passed` / `.Failed [failure <- :wat::kernel::Failure]`. The lowercase
+  `:wat::core::try` is retired in favour of `Result/try` (`src/remedy/retirement.rs:120`).
+- **`Result/try` is not a catch.** Its own contract (`src/intrinsic/result.rs`) says:
+  `@ret :T the wrapped value, if res is Ok; otherwise short-circuits the enclosing function with
+  (Err e)`. It is the `?` operator — it propagates an `Err` outward. It cannot even be written in
+  a function that doesn't return a `Result`; `probes/err/try-catches-assertion.wat` is refused at
+  startup, verbatim:
+  ```
+  malformed :wat::core::Result/try form: enclosing function returns :();
+  `:wat::core::Result/try` requires the enclosing function to return (:wat::core::Result :- [T E])
+  ```
+  That refusal is a good diagnostic — it names the rule and the actual return type — but it
+  settles that `Result/try` never recovers from a fault.
+- **So the only way to survive a fault is `:wat::test::run-thread`,** a macro from the **test**
+  namespace (`wat/test.wat:364`), which expands to `:wat::test::spawn-thread-program`: it spawns
+  a thread, runs the body in it, and faces the death as a value through the parent's `recv`.
+  Catching means spawning.
+- **What that costs** (`probes/err/catch-cost.wat`, 2000 iterations each, stdout and stderr
+  separated so the timings stand alone):
+
+  | | per call |
+  |---|---|
+  | a plain function call | 8 µs |
+  | `run-thread` around a call that succeeds | 1257 µs |
+  | `run-thread` around a call that dies | 1405 µs |
+
+  About **157× a plain call**, and roughly six times the 224 µs a service message costs (F-051).
+  Catching nothing at all still costs 1.26 ms, because the thread is spawned either way.
+- **What a caught failure carries:** `:wat::kernel::Failure` is a record of
+  `[error, frames, actual, expected]` (`wat/kernel/diagnostics.wat:107`), with
+  `Failure/message` and `Failure/location` derived from `error`, and `frames` a real captured
+  stack (file, line, symbol). There is an `upstream-chain` field on `AssertionFailure`, but
+  `src/assertion.rs:235` says it is `Some` only when called from `result::expect` on an `Err`
+  arm carrying a `Vec<*DiedError>` — the spawn-cascade path. An ordinary `assertion-failed!`
+  carries `nil`, as observed. So a caught failure keeps a stack and no cause chain.
+- **So:** a program that wants to recover from anything — a bad parse, a missing key, an
+  out-of-range index — pays a millisecond and a thread per attempt, through a verb named for
+  testing. A retry loop, a parser that backtracks over failures, or a server that survives a bad
+  request are all priced out.
+- **Class:** GAP. Extend: a catch that doesn't spawn — recovery belongs outside `:wat::test::`.
+  Improve: if spawning is the design, make the thread cheap. Clean: nothing says that
+  `Result/try` propagates rather than catches, or that `run-thread` is the catch.
+- **Repro:** `probes/err/catch-cost.wat`, `probes/err/try-catches-what.wat`,
+  `probes/err/try-catches-assertion.wat`.
+
+### F-064: a failure inside a lazy stream waits for the force, then happens again on every walk
+
+- **Where:** the natural place errors and laziness meet — a stream that computes something that
+  can fail.
+- **What happened** (2026-09-15, wat-rs `a3218644d`), `probes/err/error-in-stream.wat`: a stream
+  whose second element raises prints `built the stream without dying` first, so **building the
+  stream doesn't raise**; the failure waits for the force. Then the same stream, walked twice,
+  fails **both** times.
+- **So:** two distinct problems. The failure surfaces where the stream is forced rather than
+  where it was built, which moves an error away from its cause — the hardest kind to locate, and
+  the reason F-006/F-008's "located in wat-rs's own source" complaints matter here too. And
+  because a forced stream doesn't remember what it forced (F-053), a failure isn't remembered
+  either: a program that catches the error, recovers, and walks the stream again gets the same
+  failure a second time, having already handled it. Memoisation would fix both halves.
+- **Class:** GAP. This is F-053's consequence for errors. Extend: a stream that remembers what it
+  forced, failures included.
+- **Repro:** `probes/err/error-in-stream.wat`.
 
 ## Predicted, unverified
 

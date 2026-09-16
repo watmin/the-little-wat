@@ -38,6 +38,7 @@ the names and the design are the builder's call.
 | P-020 | An improper list — or a reader that refuses at the dot instead of admitting a symbol named `.` | core/reader (F-059) | open |
 | P-021 | A regex that reports what it matched: `find`, `captures`, `replace`, split-on-pattern | stdlib, `:wat::regex` (F-061) | open |
 | P-022 | A String's characters, and the operations built on them (`index-of`, `replace`, `split-lines`, `blank?`, `reverse`) | stdlib, `:wat::string` (F-062) | open |
+| P-023 | A catch that doesn't spawn a thread, outside `:wat::test::` | core or stdlib (F-063) | open |
 
 ## Stdlib
 
@@ -221,6 +222,25 @@ the names and the design are the builder's call.
   that matters.
 - **Evidence:** F-062, `probes/euler/char-at-cost.wat`, `probes/euler/char-at-scaling.wat`,
   `probes/euler/char-at-exponent.wat`, `probes/euler/string-split-empty.wat`.
+
+### P-023: a catch that doesn't spawn a thread
+
+- **What we wrote:** `:wat::test::run-thread`, in `books/little-typer/lib/pie.wat` (all 108 of
+  Pie's refusals), in `probes/java/builtin-verb-as-value.wat`, and in
+  `probes/learner/f64-in-failure-record.wat`. Every one of them reaches into the **test**
+  namespace to do ordinary error handling, because there is nowhere else to reach.
+- **Why:** `Result/try` is the `?` operator — it propagates an `Err` out of the enclosing
+  function and is refused unless that function returns a `Result` — so it never recovers from a
+  fault. `run-thread` is a macro that expands to `spawn-thread-program`: catching means spawning
+  a thread and facing its death through a `recv`. That costs about **1.26 ms even when nothing
+  fails**, against 8 µs for a plain call (F-063).
+- **Shape:** a form that runs a body and answers `Ok`/`Err` without a thread — whatever wat's
+  doctrine wants to call it. The pieces already exist: `Failure` is a record with a captured
+  stack, and `RunResult` is already the shape of the answer.
+- **Note:** the Little Typer's friction belongs here too — a death handled as data still prints
+  its whole record to stderr, 806 KB for 2000 handled failures, with no flag to stop it.
+- **Evidence:** F-063, F-064, `probes/err/catch-cost.wat`,
+  `probes/err/try-catches-assertion.wat`, `probes/err/error-in-stream.wat`.
 
 ## Checker and runtime
 
