@@ -27,6 +27,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | The holon algebra (probes only) | 12 VSA laws, 3 probes | `:wat::holon::` is wat's largest surface — 94 verbs — and the layer wat exists for. It needs no oracle: a vector-symbolic architecture has laws. Ternary vectors, d = 10000. **Eleven of twelve hold exactly** (C-039): identity, quasi-orthogonality, bind commutes, bind makes a new vector, bundle stays similar to its parts, bundle commutes, permute destroys similarity, permute inverts, permute distributes over bind. **F-072:** the twelfth — the self-inverse axiom — holds only to cosine 0.818, stable at 0.815 ± 0.003 over six pairs, and compounds multiplicatively (0.667 at two rounds, 0.543 at three), so nesting is bounded at about three levels before dropping under the 0.49 that `presence?` requires. There is no unbind verb, so binding twice is the only way back, and nothing documents any of it. A codebook lookup still wins by two orders of magnitude. **F-073:** `coincident?` is documented as "whether a's cosine clears the coincident floor" but implemented as `(1 - cosine) < floor` — the opposite test; the floor is a tolerance below identity (0.99), not a similarity threshold (0.01). Confirmed three times over by `coincident-explain`'s own `min-sigma-to-pass`. **F-074:** `presence?` refuses the raw `Vector`s that `vector-bind`/`bundle`/`permute` produce, so the looser recognition test is unreachable from the raw path — exactly where F-072 puts you |
 | The formatter (probes only) | 62 stdlib files | `:wat::fmt::` is grep facts + 54 rete rules + a dumb emitter, with the rules deliberately unbaked in `wat-scripts/fmt/rules/`. **Idempotent on all 62 files of wat's own stdlib, 0 failures** (C-040) — the right property, and it holds. It is not a pure layout tool: formatting changes the parse of 14 files, and every one of those diffs is purely the **param-spec migration** (107 `[]` insertions, zero deletions) — deliberate, since enums will require a param-spec, and a useful census of what is still on the bare spelling. **F-075:** it runs at about 10 KB/s with an ~800 ms fixed floor (two files of 2 KB and 5 KB both took 812 ms), so `service.wat` takes 22.9 s and the cheapest possible format costs 0.8 s. Linear, not quadratic — the cost is honest, just high; caching the compiled rule network across formats would pay the floor once per process |
 | The docs, compiled (tools only) | 203 verbs verified | **F-087:** every `:wat::` verb the four user-facing documents name, handed to the compiler one at a time. **68 MISSING, 19 RETIRED, 116 EXISTS, less 6 the docs name only to disclaim — 81 of 203 rejected (40%).** **49 of 159 fenced code blocks (30%)** carry at least one, and 26 use the retired `:wat::core::define`. The material is primary, not cautionary: §4 "Writing functions" is headed ``### `define` — named registration``; the "slightly richer first program" is refused for `-> :()`; a reference table at L3703 gives signatures for six `:wat::stream::` verbs where the namespace has four, none of them those. The refusals are excellent — almost all name their replacement and cite the arc — so the substrate holds the mapping the prose lacks, which is F-076's shape at forty times the scale |
+| Load order (probes only) | 1 probe, 5 cases | **C-050:** `:wat::deporder::` verifies that wat's `.wat` files declare their load order correctly, and does exactly that. The real baked order over **62 files reports 0 violations** — and the same 62 files **reversed report 457**, so the zero is a measurement rather than a silence (R59, *nisi frangas, nihil probas*). A two-file case reports exactly 1 with both positions and the symbol; swapped, 0; and the `defmacro` order-free exemption holds. Reading 62 files: 1 ms. `verify` over ~1.3 MB: **1291 ms, ~1 MB/s** — a hundred times the formatter's ~10 KB/s (F-075), so parsing and walking are not what makes the formatter slow |
 | Runtime reflection (probes only) | 1 probe | `:wat::runtime::` is 17 verbs and — unusually here — **documented** (`USER-GUIDE.md:2986`), so it can be checked docs-against-code. **C-049:** the verbs work; `signature-of-defn`, `body-of`, `extract-arg-names`, `extract-arg-types` and `return-type-of` all answer correctly. **F-095:** the section gives **every** return as `:wat::holon::HolonAST` (L2994, 2999, 3002, 3011, 3120) where they return `:wat::WatAST` — and `HolonAST` is a real, different type, the VSA AST `HolographicLru` keys on. It calls `extract-arg-names`' result "bare-symbol arg names (suitable for splicing as call positions)"; they are **keywords**. It teaches `lookup-callable`, which does not exist, and names it again in "Coverage today". And the signature it returns is in the retired `define` shape |
 | Brackets (probes + tools) | 2 probes, 10 timed rows | `:wat::bracket::` is wat's parallelism layer ("Ruby's Parallel over spawn-program"). **C-048:** `map` is correct and **order-preserving** — verified with an *inverted* workload where item *i* costs `(n-i)`, so completion order would be the exact reversal; wat-rs's own fixture uses a constant-cost work-fn and would pass by luck. `:wat::spawn::Locus` accepts both `ThreadOpts` and `ProcessOpts` (second witness for C-046). **F-094:** but the **thread pool does not parallelize**. 16 equal CPU-bound items on 16 runners: sequential 16073 ms, thread **9513 ms (1.69x)**, process **5142 ms (3.38x)**, and 16 independent OS `wat` processes on the identical burn — the ceiling for this machine — **5.90x**. Thread wall time grows **10.3x** for 16x the work; process grows 3.4x. An allocation confound was found and removed (it helped, and the gap survived). The layer is named once in all four user-facing pages, as a *syntax specimen* |
 | wat-fix (probes + tools) | 16 programs round-tripped | **F-092:** `wat/fix.wat` is the wat-to-wat converter whose header reads "THE PROVING POINT: wat writes wat", and whose documented STASH-DANCE applies it to a whole corpus at once. Converted 16 green self-contained probes and ran both: **7 identical, 8 no longer start, 1 failed to convert.** Four causes, and **three of them have no correct output at all**: only the fn-type bracket is a mis-dispatch (`to-symbol` vs `to-type-form` differ correctly; `fix-seq` can't see which bracket it is in), while `:wat::WatAST`, `Type/method` and a `defenum` name have **no faithful-Clojure spelling** — every candidate is unresolved, and `Result/try` canonicalizes its `/` back to `::`, a different name. The fix for those three is to refuse, not rewrite. **F-093:** and the 7 that converted cleanly each lost call-site type checking. The same program declared `i64 -> i64` and handed a String is **refused at startup** in rust-scheme and **runs, printing the String, exit 0** in faithful-Clojure. Declarations are checked (unknown annotation types and bad return literals are both caught); the argument at the call is not. F-014's consequence, and the codemod's `head-rule` exists to move every call into that spelling |
@@ -4600,6 +4601,44 @@ name. Rows blocked are counted once per row.
   a note that `return-type-of`/`signature-of-fn` take values. Clean: retire `lookup-callable` from
   the prose and from the coverage sentence.
 - **Repro:** `wat probes/runtime/reflection.wat`.
+
+
+## The load-order analyzer
+
+### C-050: deporder does exactly what it claims, and can be made to fail
+
+- **Where:** `probes/deporder/order-laws.wat`.
+- **What it is.** `:wat::deporder::` is "the stdlib load-order analyzer" — given an ordered list of
+  `SourceFile{path,source}` it builds a symbol → (file, kind) map and returns the `Violation`s
+  where a file eval-depends on a **later-loaded** file. Its header states the classification rule
+  it works by: `defmacro` is **order-free**;
+  `defn`/`defenum`/`defalias`/`def`/`defprotocol`/`defclause`/`typealias`/`defstruct`/`newtype`/
+  `extend-type`/`derive` are **eval-dependent**.
+- **A checker that reports zero has proved nothing until you know it can report something.**
+  wat-rs's own rune for this is R59, *NISI FRANGAS, NIHIL PROBAS*. So:
+
+  | | result |
+  |---|---|
+  | **D1** the real baked stdlib order, 62 files | **0 violations** |
+  | **D2** the *same 62 files*, order reversed | **457 violations** |
+  | **D3** two files, referencer before definer | **1**, `a.wat (pos 0) -> b.wat (pos 1) symbol :u::callee` |
+  | **D4** the same two, definer first | **0** |
+  | **D5** a reference ahead of the `defmacro` that defines it | **0** — the order-free rule holds |
+
+  D2 is the one that makes D1 mean anything: the same input, reordered, produces 457 findings, so
+  the zero is a measurement and not a silence.
+- **The Violation is fully addressed.** It names the referencing file *and its position*, the
+  defining file *and its position*, and the symbol — everything needed to act, which is more than
+  F-078's lex error manages for the linter.
+- **And it is fast.** Reading the 62 files takes 1 ms; `verify` parses and analyzes ~1.3 MB of
+  stdlib in **1291 ms**, about **1 MB/s**.
+
+  That is a useful control for F-075. The formatter does comparable pure-wat work over source at
+  roughly **10 KB/s** — a hundred times slower — so wat's parsing and walking are not the
+  formatter's problem, which is what F-075 suspected when it pointed at the rete network being
+  rebuilt from 54 rules on every invocation.
+- **Class:** CLEAN.
+- **Repro:** `wat probes/deporder/order-laws.wat`.
 
 
 ## Predicted, unverified
