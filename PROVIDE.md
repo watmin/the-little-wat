@@ -403,3 +403,19 @@ These are fixes, not additions, but each is something users currently write them
 - **Why it might not belong anywhere:** it was needed only for the book's `set-kdr!`
   chapter and ch 20's store. Listed so the need is on record; it is the weakest entry here.
 - **Evidence:** C-016, C-018.
+
+### P-025: `:wat::stream::collect`, and the rest of a stream vocabulary
+
+- **What we wrote:** `probes/stream/drain.wat` — a six-line recursive drain over
+  `:wat::stream::next` that turns a `Stream` into a `PersistentVector`.
+- **Why it belongs in the stdlib:** it is already documented as being there.
+  `USER-GUIDE.md:3709` tabulates `:wat::stream::collect` with its signature, alongside
+  `map`, `filter`, `inspect`, `take` and `fold`. None of the nine stream verbs the
+  user-facing documents name exists (F-088); the four that do — `cons`, `empty`, `lazy`,
+  `next` — are named in those documents zero times.
+- **And something needs it.** `:wat::core::filterv` has no `PersistentVector` clause
+  (F-080), so the fallback is `:wat::core::filter`, which answers a `Stream`. Without a
+  collect there is no supported way back to a vector, and `(length <Stream>)` type-checks
+  and then dies at runtime (F-031). A user who takes wat's own advice about persistent
+  containers (F-057) reaches this corner by the shortest path available.
+- **Evidence:** F-088, F-080, F-031.
