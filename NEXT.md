@@ -112,9 +112,9 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 12 | **Compiling logic programs** | **done** (C-033) |
 | 13 | **Object-oriented programming** | **done** (C-085, F-109) | wat has single dispatch and cannot express multiple dispatch |
 | 14 | **Knowledge representation** | **done** (C-086) | override and cycles; F-057's visited set is load-bearing for TERMINATION here |
-| 15 | Symbolic mathematics with canonical forms | **not started** |
-| 16 | Expert systems | **not started** — compare with the rete engine (F-065) |
-| 17 | Line-diagram labeling by constraint satisfaction | **not started** |
+| 15 | **Canonical forms** | **done** (C-089) | the best pairing with ch8: an identity becomes checkable rather than provable |
+| 16 | **Expert systems** | **done** (C-089) | certainty factors; a range [-100,100] the type system cannot say |
+| 17 | **Constraint satisfaction** | **done** (C-089) | decided / impossible / ambiguous all tested; F-104's purest case |
 | 18 | **Othello** | **done** (C-086) | alpha-beta 37 nodes against minimax's 73; F-104 lands on a game board |
 | 19 | Introduction to natural language | **not started** |
 | 20 | Unification grammars | **not started** |
@@ -124,7 +124,7 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 24 | ANSI Common Lisp | **no portable content** |
 | 25 | Troubleshooting | **no portable content** |
 
-**14 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+**17 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
 (`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
