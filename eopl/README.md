@@ -8,6 +8,12 @@ The book's method is to build one language (LET → PROC → LETREC) and then ch
 controlled experiment, and the difference between the two is a property of wat rather than of the
 port.
 
+## Scope
+
+**This is ~15% of the book.** What is here is a slice of chapter 3 (the LETREC language) and a
+slice of chapter 5 (the CPS interpreter) — two machines over one language. EOPL is nine chapters;
+see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the most valuable of it.
+
 ## Chapters (2026-09-16, wat-rs `a3218644d`)
 
 | chapter | machine | result |

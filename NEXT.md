@@ -197,7 +197,26 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **ch 3 + ch 5 DONE 2026-09-16**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED, ~15% done**
+
+**Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
+*slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
+C-061, not enough to call the book ported. EOPL is nine chapters:
+
+| ch | topic | status | why it matters here |
+|---|---|---|---|
+| 1–2 | inductive data, data abstraction | not started | largely covered by the Friedman books |
+| 3 | LET / PROC / **LETREC** | **slice done** | the language C-061 runs |
+| 4 | **state**: refs, a store, **call-by-name / call-by-need** | **not started — next** | call-by-need *is* P-027's suspension; a direct tie-in |
+| 5 | CPS interpreters, **exceptions**, **threads** | **slice done** (the interpreter) | the threads section is a scheduler on continuations — bears on F-102 |
+| 6 | CPS transformation, registerization | not started | rehearses the jump-DAG, like §12 |
+| 7 | **types**: a checker, then **inference with unification** | **not started — highest value** | wat is a typed language heading for "typed Clojure"; this tests it hosting a type system |
+| 8 | modules | not started | |
+| 9 | objects and classes | not started | Little Java already covered OO |
+
+**Order from here:** ch 4's call-by-need (small, and it exercises `lib/susp.wat` for something
+other than Okasaki), then ch 7's checker and inferencer (the largest and the most relevant), then
+ch 5's threads if F-102 has moved by then.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a
