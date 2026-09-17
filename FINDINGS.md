@@ -4906,6 +4906,29 @@ name. Rows blocked are counted once per row.
   *"expects (wat::stream::Stream :- [T]); got [:-> …]"*. That is the whole of `:wat::stream::`'s
   documentation problem in one line (F-088: none of the four real verbs is mentioned in any
   user-facing page).
+- **And materialising DOES recover most of it — measured.** The obvious workaround is to do the
+  deferred work eagerly and share the result ("stream → vec → reuse the vec"), which is exactly
+  what `okasaki/ch05-batched-queue.wat` already is: the rotation runs eagerly instead of being
+  suspended. It is correct and flat at 8755 ns/op. What it recovers is the **ephemeral** bound —
+  each version of the structure used once — which is the common case and is precisely the
+  Enumerator pattern.
+
+  What it cannot recover is the bound under **persistence**: branching several futures off one
+  value. Taking a queue in its pre-rotation state and calling `tail` on that *same value* k times:
+
+  | k (reuses of one value) | 10 | 25 | 50 | 100 |
+  |---|---|---|---|---|
+  | persistent ÷ ephemeral | **7×** | **23×** | **46×** | **86×** |
+
+  **The penalty is k.** The rotation is paid once per reuse instead of once ever, which is exactly
+  what a memoized suspension buys and what no amount of eager materialisation can. (A first
+  version of this measurement was wrong — it drained the queue to empty, so no rotation ever
+  fired, and the two arms did different work. The numbers above are the corrected run.)
+- **So the practical summary is narrower than the finding first sounded.** Eager materialisation
+  covers everything except two cases: multiple futures branched from one version, and **worst-case**
+  rather than amortized latency (ch 7's real-time queue spreads the rotation across operations so
+  no single call is slow). Neither is what an `Enumerator` does, and neither is reachable through
+  `stream → vec`.
 - **So NEXT §10 stops at chapter 5**, and that is a result rather than an abandonment: chapters 2,
   3 and 5 are the ones whose bounds are structural, and they ported and held (C-051, C-052).
   Everything past chapter 5 would be measuring F-100 over and over.
