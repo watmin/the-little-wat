@@ -16,7 +16,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
-| SICP (NEXT.md §3) | **ch 1, 2, 3 and 4 complete**, 307 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
+| SICP (NEXT.md §3) | **COMPLETE — all 5 chapters**, 354 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
 | Project Euler (after NEXT.md) | 4 problems, 17 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. Then p22 names scores (C-035) adds the text half, chosen because it is made of the two things wat is worst at: **F-061**, the whole regex surface is `matches?` answering a bool — a capture group compiles and what it matched can never be read, though wat-rs depends on the entire `regex` crate — so the file is parsed by trim, split and `subs`; and **F-062**, a String has no characters, no `index-of`, `replace`, `split-lines` or `blank?`, `reverse` refuses it and `split` refuses `""`, so every letter is a one-character `subs` at about 16.7 µs. Scoring by scanning the alphabet costs 2751 ms against 395 ms through a `PersistentMap` (7.0×, measured — not the 26× the reasoning suggested). String sort order matches Clojure exactly, checked rather than assumed. F-047, F-060, F-061, F-062 |
@@ -6302,6 +6302,57 @@ name. Rows blocked are counted once per row.
   for trees of plain symbols. The algorithm is the same all three times, which is the section's
   real claim, and the ports make that checkable rather than asserted. One fact shape answers "who
   is a computer programmer" and "what does Ben do" depending only on where the variable sits.
+- **Class:** CLEAN.
+- **Repro:** `./run.sh sicp`.
+
+
+### C-081: SICP chapter 5 — a register machine, a collector, and the compiler's payoff as a count. **SICP is complete.**
+
+- **Where:** `sicp/ch52-register-machine.wat`, `ch53-garbage-collection.wat`,
+  `ch54-explicit-control.wat`. **14 + 13 + 20 = 47 results, all matching guile. SICP is now
+  complete: all five chapters, 354 results**, from 4 files inside chapter 3 at the start of the
+  day.
+- **§5.1-5.2 turn the chapter's central claim into a number.** SICP says a recursive procedure
+  needs a stack and an iterative one does not, and asks you to see it in a diagram. Simulating the
+  machine reports it:
+
+  | machine | result | stack high-water | steps |
+  |---|---|---|---|
+  | gcd 206 40 | 2 | **0** | 32 |
+  | iterative factorial 10 | 3628800 | **0** | — |
+  | recursive factorial 10 | 3628800 | **9** (and 4 at n=5) | — |
+
+- **§5.3's stop-and-copy checks the claim that actually needs checking.** Not that collection frees
+  memory — that is obvious — but that copying **preserves sharing**: two lists sharing a tail must
+  still share it afterwards, or the collector has silently turned one structure into two. Verified
+  as the equality of two cdr pointers *after* the copy. With one list live, 4 cells become 3; with
+  nothing live, 0. The broken heart is written **before** the recursive call exactly as in the
+  book, because that ordering is what makes sharing work — a property of the algorithm, not of
+  mutation, and nothing here mutates.
+- **§5.4-5.5 are the chapter's payoff, and it is a count:**
+
+  | the same expression | machine steps |
+  |---|---|
+  | interpreted, explicit control | **11** |
+  | compiled (3 top-level instructions) | **8** |
+
+  and both answer 42. That is the whole argument for compilation, stated as a number rather than
+  an argument. The continuation is a **list of tasks** rather than a chain of frames — the same
+  defunctionalisation EOPL ch5 does (C-061), reached from SICP's side.
+- **This is the closest thing in the repository to NEXT.md §12's byte-code VM, and it arrives with
+  a price tag.** Both machines are a step function over an explicit state, which **F-105** measured
+  at **~1.9×** the cost of mutually tail-calling procedures, because the step must allocate the
+  state it returns. The step counts above are machine-*independent*; the 1.9× is what those steps
+  cost in wat specifically. The byte-code work should pick the shape knowing both numbers.
+- **Three existing ledger rows landed for structural rather than incidental reasons:**
+  - **F-088** — popping the machine's stack cannot use `:wat::core::take`, which answers a
+    **Stream** with no way back to a Vector. A register machine pops on almost every instruction.
+  - **F-104** — GC memory is a `PersistentMap` keyed by cell index because neither vector type has
+    a positional update. A collector indexing dense integers is about the purest case for that
+    missing operation there is; fifth workload to route around it.
+  - **the containment rule** — `Mem` had to be a `defrecord`, not a `defstruct`, because a
+    defstruct is impure (F-040) and a Pure enum may not hold one. Sixth time the aggregate *kind*,
+    rather than the field types, decided a program's shape.
 - **Class:** CLEAN.
 - **Repro:** `./run.sh sicp`.
 
