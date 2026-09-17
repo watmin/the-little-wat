@@ -104,13 +104,13 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 4 | **GPS** | **done** (C-082) | means-ends analysis; the bugs tested as carefully as the successes |
 | 5 | **ELIZA** | **done** (C-083) | segment variables, backtracking over splits |
 | 6 | **Building software tools — search** | **done** (C-083) | four searches, one program; depth-first is DEARER here (29 vs 19) |
-| 7 | STUDENT: algebra word problems | **not started** |
+| 7 | **STUDENT** | **done** (C-085) | `isolate` is correct only under a precondition its own code never checks |
 | 8 | **Symbolic mathematics** | **done** (C-083) | a rule table is open to new rows and closed to new KINDS of question |
 | 9 | **Efficiency issues** | **done** (C-084) | transparent `memoize` IS writable (an Lru in a closure); it is allowed to FORGET, hence P-028 |
 | 10 | Low-level efficiency | **no portable content** — CL declarations and open-coding |
 | 11 | **Logic programming** | **done** (C-033) |
 | 12 | **Compiling logic programs** | **done** (C-033) |
-| 13 | Object-oriented programming | **not started** — compare with EOPL ch9 (C-072/C-073) |
+| 13 | **Object-oriented programming** | **done** (C-085, F-109) | wat has single dispatch and cannot express multiple dispatch |
 | 14 | Knowledge representation and reasoning | **not started** |
 | 15 | Symbolic mathematics with canonical forms | **not started** |
 | 16 | Expert systems | **not started** — compare with the rete engine (F-065) |
@@ -124,7 +124,7 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 24 | ANSI Common Lisp | **no portable content** |
 | 25 | Troubleshooting | **no portable content** |
 
-**8 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+**10 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
 (`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
