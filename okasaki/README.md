@@ -39,6 +39,21 @@ record *allocation* does not degrade with count, and removing the harness's own 
 made the curve worse. Native containers are unaffected: a `PersistentVector` field is O(1) either
 way, which is why nothing in wat's own stdlib has tripped over this.
 
+## Where the port stops, and why
+
+**Chapter 5.** Not an abandonment — a result. Chapters 2, 3 and 5 are the ones whose bounds are
+*structural*, and all three ported and held. Everything from chapter 6 on is Okasaki's Part II,
+which is built on one mechanism: a suspension forced **at most once** and shared thereafter.
+
+`probes/stream/memoization.wat` measures that mechanism directly: forcing one stream value three
+times runs the suspension **three times** (F-100). So the banker's queue, the physicist's queue,
+the real-time queue, the splay heap and the pairing heap would not merely have worse constants in
+wat — they would have no mechanism at all, and porting them would measure F-100 five more times.
+
+Chapter 7 is also where F-099 turned up: `stream::cons` is eager in its tail, so the natural
+spelling of a self-referential stream recurses at construction, and wat **segfaults silently**
+past ~110000 frames.
+
 ## Running
 
 ```
