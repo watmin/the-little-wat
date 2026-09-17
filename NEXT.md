@@ -197,7 +197,7 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 16 of 22 languages/topics done**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **COMPLETE — 22 of 22 languages/topics done**
 
 **Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
 *slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
@@ -205,10 +205,10 @@ C-061, not enough to call the book ported. EOPL is nine chapters:
 
 | ch | language / topic | status | note |
 |---|---|---|---|
-| 1 | inductive sets of data | **not started** | closest to the Friedman books already ported |
-| 2 | data abstraction, environment representations | **not started** | |
-| 3 | LET | **not started** | subsumed by LETREC below, but EOPL presents them as separate languages |
-| 3 | PROC | **not started** | |
+| 1 | **inductive sets of data** | **done** (C-074) | follow the grammar — enforced by exhaustive match, not remembered |
+| 2 | **data abstraction, environment representations** | **done** (C-074, F-107) | one client, three representations incl. a closure; the surface encoding is refused (F-029) |
+| 3 | **LET** | **done** (C-074) | built separately, per the no-skipping ruling |
+| 3 | **PROC** | **done** (C-074) | two productions and one Val variant — which is what makes Val and Env mutually recursive |
 | 3 | **LETREC** | **done** (C-061) | the language the three machines run |
 | 4 | **EXPLICIT-REFS** | **done** (C-066) | store threaded as a PersistentMap; mutation priced three ways |
 | 4 | **IMPLICIT-REFS** | **done** (C-068) | every variable is a reference; `deref` never written |
@@ -238,9 +238,12 @@ INFERRED), and chapter 4 had IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference 
 holes are now closed (C-067, C-068, C-069); the table above is the honest state.
 
 **Order from here:** ~~ch 4~~ (C-068, C-069) and ~~ch 6~~ (C-070, F-105) are **complete** as of
-2026-09-16, and so are ~~ch 8~~ (C-071, F-106) and ~~ch 9~~ (C-072, C-073). All that remains is
-**ch 1–3's earlier languages**: inductive sets of data, data abstraction and environment
-representations, and LET and PROC as languages separate from LETREC. **16 of 22 done, 6 outstanding.** No skipping.
+2026-09-16, and so are ~~ch 8~~ (C-071, F-106), ~~ch 9~~ (C-072, C-073) and ~~ch 1-3~~ (C-074,
+F-107). **EOPL is finished — 22 of 22, nine chapters, no omissions.** The no-skipping ruling cost
+four extra languages that a "close enough" reading would have dropped (ch7 CHECKED, ch4
+MUTABLE-PAIRS, ch3 LET and PROC), and two of them paid for themselves: CHECKED produced C-067 and
+ch2's dictionary produced **F-107**, a fresh defect found in a chapter I would otherwise have
+skipped as covered. **22 of 22 done. The book is complete.** No skipping.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a

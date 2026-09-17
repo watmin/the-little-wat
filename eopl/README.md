@@ -10,7 +10,7 @@ port.
 
 ## Scope
 
-**16 of the book's 22 languages and topics are done; chapters 4, 5, 6, 8 and 9 are complete.** Only chapters 1-3's earlier languages remain. NEXT.md §9
+**COMPLETE: 22 of 22 languages and topics, all nine chapters, no omissions.** NEXT.md §9 carries the per-language table. NEXT.md §9
 carries the full table, including the items still outstanding inside chapters that were previously
 reported as complete. What is here is chapter 3's LETREC language, all of chapter 4 (EXPLICIT-REFS,
 IMPLICIT-REFS, call-by-reference, MUTABLE-PAIRS and the three parameter-passing disciplines),
@@ -37,6 +37,9 @@ duplication is cheaper than an omission.
 | 8 | parameterized modules (functors) | the same module satisfies a `zero : int` requirement transparent and **fails it sealed** (C-071) |
 | 9 | CLASSES | `c2.m2` = **23** and `c2.m3` = **11** — same method name, two starting points (C-072) |
 | 9 | TYPED-OO | subsumption; `summable.m3` rejected though the value really is a c2 with m3 (C-073) |
+| 1 | inductive sets of data | follow the grammar — an inductive definition IS a defenum (C-074) |
+| 2 | three environment representations | one client, three reps incl. a **closure**; the surface encoding is refused, F-029 (C-074) |
+| 3 | LET and PROC, separately | PROC adds 2 productions and 1 Val variant — the variant is what makes Val and Env mutually recursive (C-074) |
 | 7 | **CHECKED**: a checker over annotations | rejects wrong annotations the inferencer cannot see (C-067) |
 | 7 | type reconstruction by unification | 5 types inferred and cross-checked against the evaluator; 5 rejections **including the occurs check** (C-063) |
 
@@ -129,3 +132,16 @@ dispatch through it (35 = 25 + 10, measured). What wat denies is implementation 
 structurally identical structs are not interchangeable, and there is no `extends`.
 
 So "program to an interface, not an implementation" is, in wat, not advice.
+
+## What the no-skipping ruling was worth
+
+The builder ruled on 2026-09-16 that duplication is cheaper than an omission, which forced four
+languages a "close enough" reading would have dropped: chapter 7's CHECKED, chapter 4's
+MUTABLE-PAIRS, and chapter 3's LET and PROC.
+
+Two of the four paid for themselves. CHECKED produced C-067 — a checker rejects what an
+inferencer cannot see, which is the model wat itself uses. And chapter 2, which looked like the
+most skippable chapter in the book, produced **F-107**: a generic struct's type parameter binds
+from its first field, a bare variant literal binds it to the variant rather than the enum, and an
+explicit `:- [T]` at the construction site is parsed and silently discarded. A deliberately wrong
+one errors identically. That defect was sitting in the shape every dictionary takes.
