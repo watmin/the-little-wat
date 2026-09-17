@@ -120,11 +120,11 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 20 | Unification grammars | **not started** |
 | 21 | A grammar of English | **not started** |
 | 22 | **Scheme: an interpreter** | **done** (C-087) | the interpreted language gets `call/cc`; a value domain with continuations cannot cross a service boundary |
-| 23 | Compiling Lisp | **not started** — compare with SICP §5.5 (C-081) |
+| 23 | **Compiling Lisp** | **done** (C-088) | peephole: 7 instructions to 3; a compiler pass is almost entirely cases |
 | 24 | ANSI Common Lisp | **no portable content** |
 | 25 | Troubleshooting | **no portable content** |
 
-**13 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+**14 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
 (`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
