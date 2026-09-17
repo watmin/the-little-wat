@@ -197,26 +197,48 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED, ~65% done**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 8 of 22 languages/topics done**
 
 **Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
 *slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
 C-061, not enough to call the book ported. EOPL is nine chapters:
 
-| ch | topic | status | why it matters here |
+| ch | language / topic | status | note |
 |---|---|---|---|
-| 1–2 | inductive data, data abstraction | not started | largely covered by the Friedman books |
-| 3 | LET / PROC / **LETREC** | **slice done** | the language C-061 runs |
-| 4 | **state**: refs, a store, **call-by-name / call-by-need** | **done** (C-062, C-066) | by-name O(n²) vs by-need O(n); and mutable state priced three ways — the pure threaded map is fastest |
-| 5 | CPS interpreters, **exceptions**, **threads** | **done** (C-061, C-064, C-065) | the threads scheduler gives the interpreted language the mutex F-102 says wat lacks |
-| 6 | CPS transformation, registerization | not started | rehearses the jump-DAG, like §12 |
-| 7 | **types**: a checker, then **inference with unification** | **done** (C-063) | wat hosts a type system: unification, occurs check, and agreement with the evaluator |
-| 8 | modules | not started | |
-| 9 | objects and classes | not started | Little Java already covered OO |
+| 1 | inductive sets of data | **not started** | closest to the Friedman books already ported |
+| 2 | data abstraction, environment representations | **not started** | |
+| 3 | LET | **not started** | subsumed by LETREC below, but EOPL presents them as separate languages |
+| 3 | PROC | **not started** | |
+| 3 | **LETREC** | **done** (C-061) | the language the three machines run |
+| 4 | **EXPLICIT-REFS** | **done** (C-066) | store threaded as a PersistentMap; mutation priced three ways |
+| 4 | IMPLICIT-REFS | **not started** | every variable is a reference |
+| 4 | MUTABLE-PAIRS | **not started** | |
+| 4 | **call-by-name / call-by-need** | **done** (C-062) | by-name O(n²) vs by-need O(n) |
+| 4 | call-by-reference | **not started** | |
+| 5 | **CPS interpreter** | **done** (C-061) | lifts F-099's ceiling |
+| 5 | **exceptions** | **done** (C-065) | a handler is a continuation frame |
+| 5 | **threads** | **done** (C-064) | the mutex wat itself cannot express |
+| 6 | CPS transformation | **not started** | |
+| 6 | registerization | **not started** | overlaps §12's bytecode VM — **do both anyway** |
+| 7 | **CHECKED** (a checker over annotations) | **done** (C-067) | rejects wrong annotations; inference cannot |
+| 7 | **INFERRED** (reconstruction by unification) | **done** (C-063) | unification, occurs check |
+| 8 | simple modules | **not started** | |
+| 8 | opaque types, parameterized modules | **not started** | closest to wat's own namespace design |
+| 9 | CLASSES | **not started** | Little Java covered OO, but duplication is cheaper than an omission |
+| 9 | TYPED-OO | **not started** | |
 
-**Order from here:** ch 6's registerization, which overlaps §12's bytecode VM — doing §12 first
-may subsume it. Chapters 8 (modules) and 9 (objects) are the least valuable: Little Java already
-covered OO, and modules are closest to wat's own namespace design rather than a test of it.
+**Builder's ruling, 2026-09-16: no skipping.** *"I think the cost of duplication is worth coverage
+of the books. I'd rather not have omissions in the books."* This repository is the validation
+testbed for the Clojure-ification, so a gap in coverage is a gap in validation — an argument that
+overrides "chapter 6 overlaps §12" and "Little Java already did OO".
+
+**Correction that ruling forced.** I had been skipping *within* chapters as well as between them
+and reporting the chapter as done: chapter 7's **CHECKED** language was never built (only
+INFERRED), and chapter 4 has IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference outstanding. The
+table above is the honest state.
+
+**Order from here:** ch 4's IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference; then ch 6, ch 8,
+ch 9; then ch 1–3's earlier languages. No skipping.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a
