@@ -505,11 +505,34 @@ For `fib` that is a performance difference. For anything memoized for **identity
 interning, a canonical-form table — it is *wrong*, because the invariant being bought is "the same
 input yields the very same result, always", and an evicting cache cannot promise that.
 
+**NARROWED 2026-09-17 by a measurement that refuted the argument above** (`aoc/day06-adapters.wat`,
+AoC's adapter-chain shape — 171802567918485504 arrangements over a 97-link chain, where nothing can
+enumerate and the memo is the difference between an answer and no answer).
+
+The claim was that an evicting cache is the wrong primitive *because it forgets*. On that workload
+it is not: `ways(v)` needs `v-1`, `v-2` and `v-3`, which are exactly the three most recently used
+keys, so an **LRU of capacity 3 is already enough** and 256 buys nothing. **A recurrence's access
+pattern is a recency pattern, and an LRU is built for precisely that.**
+
+What the measurement does show is that the edge is a **cliff, not a slope** — on a 26-link prefix:
+
+| capacity | time |
+|---|---|
+| 256 | 1505 µs |
+| 3 (the recurrence's order) | 1823 µs |
+| 2 | ~10000 µs — several times worse |
+| 1 | ~700000 µs — hundreds of times worse, and varying between runs, because that arm is exponential |
+
+**So the ask is narrower and better founded than it was.** It is not "eviction is wrong". It is
+**a cell whose size the caller does not have to know**: for a linear recurrence the working set is
+the recurrence's order and a user can compute it, but for an arbitrary memo it is not knowable in
+advance, and being one under is not a 10% regression — it is a different complexity class.
+
 **The surface:**
 
 | | |
 |---|---|
-| `memo : () -> Memo<K,V>` | a table that never evicts |
+| `memo : () -> Memo<K,V>` | a table that never evicts, so the caller need not size it |
 | `memo-get : Memo<K,V> -> K -> Option<V>` | |
 | `memo-put! : Memo<K,V> -> K -> V -> ()` | |
 | `memoize : [K :-> V] -> [K :-> V]` | the transparent wrapper, built from the above |
@@ -524,4 +547,4 @@ vehicle for both for the same reason.
 that bar before memoizing pays; `Lru` is `thread_owned`, so a memoized function cannot cross a
 thread boundary; and capacity 0 panics (F-084), so every wrapper must reject or clamp it.
 
-- **Evidence:** C-084, `probes/paip/transparent-memoize.wat`, P-027, F-084.
+- **Evidence:** C-084, `probes/paip/transparent-memoize.wat`, `aoc/day06-adapters.wat` (C-091), P-027, F-084.
