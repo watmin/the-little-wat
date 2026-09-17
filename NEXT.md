@@ -197,7 +197,7 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 14 of 22 languages/topics done**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 16 of 22 languages/topics done**
 
 **Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
 *slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
@@ -224,8 +224,8 @@ C-061, not enough to call the book ported. EOPL is nine chapters:
 | 7 | **INFERRED** (reconstruction by unification) | **done** (C-063) | unification, occurs check |
 | 8 | **simple modules** | **done** (C-071) | `from m take x` consults the interface, never the body |
 | 8 | **opaque types, parameterized modules** | **done** (C-071, F-106) | `opaque t` vs `transparent t = int` is one word and decides everything; wat has `newtype`'s distinctness but no sealing |
-| 9 | CLASSES | **not started** | Little Java covered OO, but duplication is cheaper than an omission |
-| 9 | TYPED-OO | **not started** | |
+| 9 | **CLASSES** | **done** (C-072) | `c2.m2`=23 and `c2.m3`=11 — same method name, two starting points for the walk |
+| 9 | **TYPED-OO** | **done** (C-073) | subsumption; and wat's surfaces already give the interface half, heterogeneous dispatch included |
 
 **Builder's ruling, 2026-09-16: no skipping.** *"I think the cost of duplication is worth coverage
 of the books. I'd rather not have omissions in the books."* This repository is the validation
@@ -238,8 +238,9 @@ INFERRED), and chapter 4 had IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference 
 holes are now closed (C-067, C-068, C-069); the table above is the honest state.
 
 **Order from here:** ~~ch 4~~ (C-068, C-069) and ~~ch 6~~ (C-070, F-105) are **complete** as of
-2026-09-16, and so is ~~ch 8~~ (C-071, F-106). Next: ch 9 (CLASSES, TYPED-OO); then ch 1–3's
-earlier languages. **14 of 22 done, 8 outstanding.** No skipping.
+2026-09-16, and so are ~~ch 8~~ (C-071, F-106) and ~~ch 9~~ (C-072, C-073). All that remains is
+**ch 1–3's earlier languages**: inductive sets of data, data abstraction and environment
+representations, and LET and PROC as languages separate from LETREC. **16 of 22 done, 6 outstanding.** No skipping.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a

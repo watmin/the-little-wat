@@ -10,7 +10,7 @@ port.
 
 ## Scope
 
-**14 of the book's 22 languages and topics are done; chapters 4, 5, 6 and 8 are complete.** NEXT.md §9
+**16 of the book's 22 languages and topics are done; chapters 4, 5, 6, 8 and 9 are complete.** Only chapters 1-3's earlier languages remain. NEXT.md §9
 carries the full table, including the items still outstanding inside chapters that were previously
 reported as complete. What is here is chapter 3's LETREC language, all of chapter 4 (EXPLICIT-REFS,
 IMPLICIT-REFS, call-by-reference, MUTABLE-PAIRS and the three parameter-passing disciplines),
@@ -35,6 +35,8 @@ duplication is cheaper than an omission.
 | 6 | registerization | `step`/`drive` is **~1.9× slower** than mutual tail calls — it must allocate the State it returns (F-105) |
 | 8 | SIMPLE-MODULES / OPAQUE-TYPES | one word — `opaque t` vs `transparent t = int` — decides whether the outside may do arithmetic (C-071) |
 | 8 | parameterized modules (functors) | the same module satisfies a `zero : int` requirement transparent and **fails it sealed** (C-071) |
+| 9 | CLASSES | `c2.m2` = **23** and `c2.m3` = **11** — same method name, two starting points (C-072) |
+| 9 | TYPED-OO | subsumption; `summable.m3` rejected though the value really is a c2 with m3 (C-073) |
 | 7 | **CHECKED**: a checker over annotations | rejects wrong annotations the inferencer cannot see (C-067) |
 | 7 | type reconstruction by unification | 5 types inferred and cross-checked against the evaluator; 5 rejections **including the occurs check** (C-063) |
 
@@ -112,3 +114,18 @@ module's **own** operations keep working, and `to-int` is the hole the interface
 leaves. Abstraction hides; it does not forbid. A checker that rejected those rows too would be
 rejecting everything and proving nothing — which is exactly the bug the functor row caught in my
 first `satisfies?`.
+
+## What chapter 9 settled
+
+CLASSES separates OO's two mechanisms with numbers. On one `c2` object, `send self m1` answers
+**23** (dynamic dispatch — c1's code finding c2's override) and `super m1` answers **11** (the
+same walk from a different start). An interpreter carrying only `self` gets the first right and
+the second wrong. Both numbers are needed to know the implementation is correct.
+
+TYPED-OO was the chapter I expected to expose a gap, and it did the opposite. wat has no classes,
+so the question was what breaks — and the answer is *nothing this chapter is for*. `defsurface` +
+`extend-type` already give subsumption, a heterogeneous collection typed at the surface, and
+dispatch through it (35 = 25 + 10, measured). What wat denies is implementation inheritance: two
+structurally identical structs are not interchangeable, and there is no `extends`.
+
+So "program to an interface, not an implementation" is, in wat, not advice.
