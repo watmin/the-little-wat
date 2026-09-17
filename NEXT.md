@@ -250,7 +250,14 @@ explicit-control evaluator — incremental, every chapter runnable, and it tests
 **language host**, which is what the rest of the roadmap sits on. Oracle: the book's own
 expected values, and Racket/guile for the reference implementations.
 
-## 10. Okasaki — *Purely Functional Data Structures* — **ch 2, 3, 5–11 DONE 2026-09-16 — the queue and list line of the book is complete**
+## 10. Okasaki — *Purely Functional Data Structures* — **ch 2–11 DONE 2026-09-16 — the queue and list line of the book is complete**
+
+**Coverage audit, 2026-09-16.** This section had said "ch 2, 3, 5–11" and called itself complete.
+Chapter 4 (LAZY EVALUATION) was missing: `okasaki/lib/llist.wat` had the operations, and every
+later chapter's header cites "ch 4 LAZINESS", but the chapter that CHECKS the incremental /
+monolithic distinction had never been written. Now `okasaki/ch04-lazy-evaluation.wat` (C-075).
+**Chapter 1 is the book's introduction and has no data structure to port** — stated here so its
+absence is a decision on the record rather than another silent gap.
 
 ~30 structures, each small and runnable, each with a stated amortized bound. Lands directly
 on the weak spot this repo has already measured: F-057 (copying vs sharing containers), F-055
