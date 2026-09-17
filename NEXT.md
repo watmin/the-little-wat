@@ -158,6 +158,27 @@ test §12 (a bytecode VM: a flat instruction array, a dispatch loop, an explicit
 safest of the remaining candidates — it needs no laziness, no blocking, and no deep recursion,
 which also routes around F-099.
 
+## What this repository already knows that bears on a CEK evaluator (2026-09-16)
+
+The builder names a CEK machine as a long-term goal, 6+ months out. Several things measured here
+bear on it directly, so they are collected rather than scattered.
+
+**`eopl/lib/cps.wat` is already a CEK machine.** `State` is Control + Environment + Kontinuation,
+`step` is the transition function, `drive` is the trampoline. It is small (about 90 lines) and it
+runs, so it is available as a shape to argue with.
+
+| what is known | where | why it matters for CEK |
+|---|---|---|
+| a non-tail recursion past ~110000 frames **segfaults**, exit 139, empty stderr | F-099 | **this is the reason to do it.** A CEK evaluator puts wat's own evaluation depth in the heap, so the ceiling becomes available memory and the failure becomes catchable rather than SIGSEGV. Not a patch — the defect ceases to exist |
+| wat's TCO is preserved **through** an interpreter written in wat | C-061 | the hard part of a CEK migration is not pushing a K frame for a tail call. The current implementation already identifies tail position correctly, even across an interpreter boundary — that discipline is in place before the rewrite starts |
+| builtin 360 ns · match-2 675 ns · user-fn 795 ns · **defrecord accessor 6130 ns** | `BASELINE.md`, F-096 | the before/after. §7 was taken for exactly this, *before* the byte-code work, because it cannot be taken afterwards |
+| a **record** field holding a user enum deep-copies; an **enum variant** shares | F-098 | a K chain is literally "an enum holding the rest of the chain". If a K frame were a record, every push would copy the tail and the machine would be O(n²). Fatal if any of the machinery is written in wat; irrelevant if it is all Rust |
+| a CEK transition in wat-the-language costs **~14 200 ns, flat** over 36k–576k transitions | measured here | not what wat-rs would reach in Rust, but the flatness confirms the shape is O(1) per step, and ~18-20 dispatch operations per transition is a sanity check for sizing |
+
+**One opportunity, not a requirement.** R-003 records that wat has no `call/cc`. A CEK machine
+makes the continuation a first-class value by construction, so that capability would fall out of
+the rewrite rather than needing to be added to it.
+
 ## §9–§12: four books, ranked by what they'd stress
 
 Not ranked by how good the book is — by which part of wat each one puts under load. The
