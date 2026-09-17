@@ -10,7 +10,7 @@ port.
 
 ## Scope
 
-**12 of the book's 22 languages and topics are done; chapters 4, 5 and 6 are complete.** NEXT.md §9
+**14 of the book's 22 languages and topics are done; chapters 4, 5, 6 and 8 are complete.** NEXT.md §9
 carries the full table, including the items still outstanding inside chapters that were previously
 reported as complete. What is here is chapter 3's LETREC language, all of chapter 4 (EXPLICIT-REFS,
 IMPLICIT-REFS, call-by-reference, MUTABLE-PAIRS and the three parameter-passing disciplines),
@@ -33,6 +33,8 @@ duplication is cheaper than an omission.
 | 5 | threads: a scheduler on continuations | a real mutex, and the lost update on demand — 40/80 at slice 1, 80/80 at slice 1000 (C-064) |
 | 6 | CPS transformation, source to source | the SAME direct interpreter dies at **n=25000** on the source and reaches **100000** on its transform (C-070) |
 | 6 | registerization | `step`/`drive` is **~1.9× slower** than mutual tail calls — it must allocate the State it returns (F-105) |
+| 8 | SIMPLE-MODULES / OPAQUE-TYPES | one word — `opaque t` vs `transparent t = int` — decides whether the outside may do arithmetic (C-071) |
+| 8 | parameterized modules (functors) | the same module satisfies a `zero : int` requirement transparent and **fails it sealed** (C-071) |
 | 7 | **CHECKED**: a checker over annotations | rejects wrong annotations the inferencer cannot see (C-067) |
 | 7 | type reconstruction by unification | 5 types inferred and cross-checked against the evaluator; 5 rejections **including the occurs check** (C-063) |
 
@@ -91,3 +93,22 @@ And registerization — the shape a CEK evaluator would naturally take — turns
 about 1.9×, because `step : State -> State` must allocate the state it returns. It is a choice
 rather than a necessity, because wat's TCO spans **mutual** tail calls (10,000,000 verified), which
 many implementations do not.
+
+## What chapter 8 settled
+
+NEXT.md flagged chapter 8 as the closest to wat's own design, and the port says precisely what
+wat has and lacks.
+
+wat has the **distinctness** half. `:wat::core::newtype` refuses arithmetic on the type and
+refuses a raw `i64` where the type is wanted — both at startup, both directions. A `typealias`
+does neither; it is an alias.
+
+wat lacks the **sealing** half. `newtype` auto-mints a constructor at the bare name and an
+accessor at `<Name>/0`, and both resolve from any namespace, so anyone can unwrap and rewrap.
+EOPL's `opaque t` gives the outside a name and nothing else. That has no wat spelling (F-106).
+
+The chapter's own positive control is worth keeping in mind when reading the table: a sealed
+module's **own** operations keep working, and `to-int` is the hole the interface deliberately
+leaves. Abstraction hides; it does not forbid. A checker that rejected those rows too would be
+rejecting everything and proving nothing — which is exactly the bug the functor row caught in my
+first `satisfies?`.
