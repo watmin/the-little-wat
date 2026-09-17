@@ -168,9 +168,9 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 ## Reading further
 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
-  - F-001 to F-100 are gaps and defects.
+  - F-001 to F-101 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-052 are clean ports and acceptance results.
+  - C-001 to C-053 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
