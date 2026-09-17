@@ -197,7 +197,7 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED, ~35% done**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED, ~45% done**
 
 **Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
 *slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
@@ -208,16 +208,15 @@ C-061, not enough to call the book ported. EOPL is nine chapters:
 | 1–2 | inductive data, data abstraction | not started | largely covered by the Friedman books |
 | 3 | LET / PROC / **LETREC** | **slice done** | the language C-061 runs |
 | 4 | **state**: refs, a store, **call-by-name / call-by-need** | **by-value/name/need done** (C-062); refs + store not started | call-by-need *is* P-027's suspension — measured: by-name O(n²), by-need O(n) |
-| 5 | CPS interpreters, **exceptions**, **threads** | **slice done** (the interpreter) | the threads section is a scheduler on continuations — bears on F-102 |
+| 5 | CPS interpreters, **exceptions**, **threads** | **interpreter + threads done** (C-061, C-064) | the threads scheduler gives the interpreted language the mutex F-102 says wat lacks |
 | 6 | CPS transformation, registerization | not started | rehearses the jump-DAG, like §12 |
 | 7 | **types**: a checker, then **inference with unification** | **done** (C-063) | wat hosts a type system: unification, occurs check, and agreement with the evaluator |
 | 8 | modules | not started | |
 | 9 | objects and classes | not started | Little Java already covered OO |
 
-**Order from here:** ch 5's **threads** (a scheduler on continuations — the one that bears on
-F-102, since wat cannot block a caller), then ch 4's **store** (refs and mutation, which in wat
-means a service or a threaded store), then ch 6's registerization if §12 has not already covered
-it.
+**Order from here:** ch 4's **store** (refs and mutation — in wat that means a service or a
+threaded store), ch 5's **exceptions** (another continuation trick, and wat's only general catch
+spawns a thread — F-063), then ch 6's registerization if §12 has not already covered it.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a
