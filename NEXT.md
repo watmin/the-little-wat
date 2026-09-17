@@ -197,7 +197,7 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 10 of 22 languages/topics done**
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **STARTED — 12 of 22 languages/topics done**
 
 **Scope correction, 2026-09-16.** What is done is a *slice* of ch 3 (the LETREC language) and a
 *slice* of ch 5 (the CPS interpreter). That is two machines over one language — enough to produce
@@ -218,8 +218,8 @@ C-061, not enough to call the book ported. EOPL is nine chapters:
 | 5 | **CPS interpreter** | **done** (C-061) | lifts F-099's ceiling |
 | 5 | **exceptions** | **done** (C-065) | a handler is a continuation frame |
 | 5 | **threads** | **done** (C-064) | the mutex wat itself cannot express |
-| 6 | CPS transformation | **not started** | |
-| 6 | registerization | **not started** | overlaps §12's bytecode VM — **do both anyway** |
+| 6 | **CPS transformation** | **done** (C-070) | source to source; the ceiling moves 20000 -> 100000+ under the SAME interpreter |
+| 6 | **registerization** | **done** (F-105) | costs ~1.9x in wat: `step` must allocate the State it returns. Mutual TCO holds to 10M, so it is a choice |
 | 7 | **CHECKED** (a checker over annotations) | **done** (C-067) | rejects wrong annotations; inference cannot |
 | 7 | **INFERRED** (reconstruction by unification) | **done** (C-063) | unification, occurs check |
 | 8 | simple modules | **not started** | |
@@ -237,10 +237,9 @@ and reporting the chapter as done: chapter 7's **CHECKED** language was never bu
 INFERRED), and chapter 4 had IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference outstanding. Both
 holes are now closed (C-067, C-068, C-069); the table above is the honest state.
 
-**Order from here:** ~~ch 4's IMPLICIT-REFS, MUTABLE-PAIRS and call-by-reference~~ — **chapter 4
-is complete** as of 2026-09-16 (C-068, C-069). Next: ch 6 (CPS transformation, registerization),
-ch 8 (simple modules, opaque/parameterized modules), ch 9 (CLASSES, TYPED-OO); then ch 1–3's
-earlier languages. **10 of 22 done, 12 outstanding.** No skipping.
+**Order from here:** ~~ch 4~~ (C-068, C-069) and ~~ch 6~~ (C-070, F-105) are **complete** as of
+2026-09-16. Next: ch 8 (simple modules, opaque/parameterized modules), ch 9 (CLASSES, TYPED-OO);
+then ch 1–3's earlier languages. **12 of 22 done, 10 outstanding.** No skipping.
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a

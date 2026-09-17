@@ -10,7 +10,7 @@ port.
 
 ## Scope
 
-**10 of the book's 22 languages and topics are done, and chapter 4 is complete.** NEXT.md §9
+**12 of the book's 22 languages and topics are done; chapters 4, 5 and 6 are complete.** NEXT.md §9
 carries the full table, including the items still outstanding inside chapters that were previously
 reported as complete. What is here is chapter 3's LETREC language, all of chapter 4 (EXPLICIT-REFS,
 IMPLICIT-REFS, call-by-reference, MUTABLE-PAIRS and the three parameter-passing disciplines),
@@ -31,6 +31,8 @@ duplication is cheaper than an omission.
 | 5 | continuation defunctionalized + trampoline | correct; reaches **300000** and is bounded by the heap (C-061) |
 | 5 | exceptions: a handler as a continuation frame | installing one costs **4 transitions**; unwinding is O(depth); wat's own catch is a 1.44 ms thread spawn (C-065) |
 | 5 | threads: a scheduler on continuations | a real mutex, and the lost update on demand — 40/80 at slice 1, 80/80 at slice 1000 (C-064) |
+| 6 | CPS transformation, source to source | the SAME direct interpreter dies at **n=25000** on the source and reaches **100000** on its transform (C-070) |
+| 6 | registerization | `step`/`drive` is **~1.9× slower** than mutual tail calls — it must allocate the State it returns (F-105) |
 | 7 | **CHECKED**: a checker over annotations | rejects wrong annotations the inferencer cannot see (C-067) |
 | 7 | type reconstruction by unification | 5 types inferred and cross-checked against the evaluator; 5 rejections **including the occurs check** (C-063) |
 
@@ -72,3 +74,20 @@ alias. `ch04-implicit-refs.wat` prints both rows for that reason.
 And all of it is built in a language with no mutation. The store is threaded as a value and
 returned in the answer — which is also, exactly, the fourth component a CEK machine carries. Three
 of these chapters (`cps.wat`, `threads.wat`, `implicit.wat`) now have the shape that work wants.
+
+## What chapter 6 settled
+
+Chapter 5 changed the machine; chapter 6 changes the **program**. In Scheme that is a theorem you
+take on faith, because the host stack grows. wat has a ceiling to hit, so it can be measured: one
+program, one interpreter, before and after.
+
+Two of my own metrics had to be thrown away first, and the numbers that show why are printed by
+`ch06-cps-transform.wat` rather than smoothed over. "Every call becomes a tail call" is **false**
+in this encoding — LETREC procedures take one argument, so the continuation is curried and
+`((f a) k)` contains a real non-tail call. The property that does hold is a **grammar**: every
+operator and operand is a SimpleExp. Source 2 violations, output 0.
+
+And registerization — the shape a CEK evaluator would naturally take — turns out to **cost** here,
+about 1.9×, because `step : State -> State` must allocate the state it returns. It is a choice
+rather than a necessity, because wat's TCO spans **mutual** tail calls (10,000,000 verified), which
+many implementations do not.
