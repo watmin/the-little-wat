@@ -1,62 +1,73 @@
-;; probes/paip/multiple-dispatch.wat — does a wat surface dispatch on more than `self`?
+;; probes/paip/multiple-dispatch.wat — does wat have multiple dispatch?
 ;;
-;; PAIP chapter 13's generic functions pick a method by looking at EVERY argument, so
-;; `collide(asteroid, ship)` and `collide(asteroid, asteroid)` run different code although the
-;; first argument is the same. C-073 found wat better equipped than expected on the single-dispatch
-;; side, so this asks the next question.
+;; **Yes: `:wat::core::defclause`.** This probe replaces an earlier one that concluded the
+;; opposite, and the history is worth keeping: the first version tested `defsurface` +
+;; `extend-type`, found that a concrete type may extend a surface only once, and stopped there.
+;; It never asked whether another mechanism existed. It does, it is one of wat's two polymorphism
+;; mechanisms, and it carries wat's own arithmetic. See F-109.
 ;;
-;; Answer (F-109, measured 2026-09-16, wat-rs a3218644d): **single dispatch only.** A concrete type
-;; may extend a surface at exactly ONE type parameter. Two extensions of the same type are refused
-;; at startup, and the message says why:
+;; What `defclause` does, measured 2026-09-16, wat-rs a3218644d:
 ;;
-;;     (:wat::core::extend-type :d::Asteroid (:d::Collide :- [:d::Ship])     (hit …))
-;;     (:wat::core::extend-type :d::Asteroid (:d::Collide :- [:d::Asteroid]) (hit …))
-;;     => "duplicate define: :d::Asteroid/hit already registered"
+;;   1. dispatches per ARGUMENT POSITION, first-match-wins -- so collide(asteroid, ship) and
+;;      collide(asteroid, asteroid) run different code, which is the whole of PAIP ch13;
+;;   2. dispatches on the RUNTIME type, not merely the declared one -- one statically-typed
+;;      function whose parameters are both a surface type selects three different clauses;
+;;   3. a missing combination at a CONCRETELY-typed call site is a COMPILE error
+;;      ("1 type-check error … NoMatchingClause"), and only degrades to a runtime error when the
+;;      call site's static type is wider than the clauses.
 ;;
-;; The method lives at `<Type>/<feature>` -- a name with no room for the argument types -- so no
-;; parameterisation of the surface can recover the second axis. That pair of lines cannot live in
-;; this file, because the refusal is a startup error; what runs below is the single dispatch that
-;; DOES work, plus the hand-built table that is the only route to the other.
+;; (3) is the part an earlier finding got backwards: it claimed a hand-built dispatch table was
+;; needed and that such a table "loses exhaustiveness". The table does; `defclause` does not.
+;;
+;; The compile-error case cannot live in this file, since it stops the program. It is:
+;;   (:wat::core::defclause :d::collide ([a <- :d::Asteroid b <- :d::Ship] -> … ))
+;;   (:d::collide (:d::Ship) (:d::Asteroid))
+;;   => #wat.check/CheckErrors "1 type-check error" … NoMatchingClause
 
-(:wat::core::defsurface :d::Collide :- [T] :nature :wat::core::Struct
-  :features [(hit [self <- (:d::Collide :- [T]) other <- T] -> :wat::core::String)])
+(:wat::core::defsurface :d::Thing :- [T] :nature :wat::core::Struct
+  :features [(name [self <- (:d::Thing :- [T])] -> :wat::core::String)])
 
 (:wat::core::defstruct :d::Asteroid [])
 (:wat::core::defstruct :d::Ship [])
 
-;; single dispatch on `self` works: two types, two implementations, chosen by the receiver
-(:wat::core::extend-type :d::Asteroid (:d::Collide :- [:wat::core::i64])
-  (hit [self other] -> :wat::core::String "asteroid hits something"))
-(:wat::core::extend-type :d::Ship (:d::Collide :- [:wat::core::i64])
-  (hit [self other] -> :wat::core::String "ship hits something"))
+(:wat::core::extend-type :d::Asteroid (:d::Thing :- [:wat::core::i64])
+  (name [self] -> :wat::core::String "asteroid"))
+(:wat::core::extend-type :d::Ship (:d::Thing :- [:wat::core::i64])
+  (name [self] -> :wat::core::String "ship"))
 
-;; the second axis, by hand: a table keyed by the TUPLE of tags (SICP §2.4's shape, C-078)
-(:wat::core::typealias :d::Fn [:wat::core::String :wat::core::String :-> :wat::core::String])
+;; MULTIPLE dispatch: the second argument's type selects the clause
+(:wat::core::defclause :d::collide
+  ([a <- :d::Asteroid  b <- :d::Ship]     -> :wat::core::String "ship destroyed")
+  ([a <- :d::Asteroid  b <- :d::Asteroid] -> :wat::core::String "both shatter")
+  ([a <- :d::Ship      b <- :d::Ship]     -> :wat::core::String "both damaged")
+  ([a <- :d::Ship      b <- :d::Asteroid] -> :wat::core::String "ship destroyed too"))
 
-(:wat::core::defn :d::table [] -> (:wat::core::HashMap :- [:wat::core::String :d::Fn])
-  (:wat::core::assoc
-    (:wat::core::assoc (:wat::core::HashMap :- [:wat::core::String :d::Fn])
-      "asteroid/ship" (:wat::core::fn [a <- :wat::core::String b <- :wat::core::String] -> :wat::core::String
-                        "ship destroyed"))
-    "asteroid/asteroid" (:wat::core::fn [a <- :wat::core::String b <- :wat::core::String] -> :wat::core::String
-                          "both shatter")))
+;; one statically-typed function: BOTH parameters are the surface type, so anything that varies
+;; between the calls below is the arguments' RUNTIME types
+(:wat::core::defn :d::via [x <- (:d::Thing :- [:wat::core::i64]) y <- (:d::Thing :- [:wat::core::i64])] -> :wat::core::String
+  (:d::collide x y))
 
-(:wat::core::defn :d::dispatch2 [a <- :wat::core::String b <- :wat::core::String] -> :wat::core::String
-  (:wat::core::match (:wat::core::get (:d::table) (:wat::string::concat a "/" b))
-    [:wat::core::Option.Some {:value f} (f a b)]
-    [:wat::core::Option.None {} "no method"]))
+;; single dispatch on `self`, for contrast: this is what a surface does
+(:wat::core::defn :d::describe [t <- (:d::Thing :- [:wat::core::i64])] -> :wat::core::String
+  (:d::Thing/name t))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil
   (:wat::core::do
-    (:wat::kernel::println "---- single dispatch on self: the LANGUAGE does this ----")
-    (:wat::kernel::println (:d::Collide/hit (:d::Asteroid) 1))
-    (:wat::kernel::println (:d::Collide/hit (:d::Ship) 1))
+    (:wat::kernel::println "---- defclause: dispatch on EVERY argument ----")
+    (:wat::kernel::println (:d::collide (:d::Asteroid) (:d::Ship)))
+    (:wat::kernel::println (:d::collide (:d::Asteroid) (:d::Asteroid)))
+    (:wat::kernel::println (:d::collide (:d::Ship) (:d::Ship)))
+    (:wat::kernel::println (:d::collide (:d::Ship) (:d::Asteroid)))
 
-    (:wat::kernel::println "---- dispatch on the second argument: only a TABLE does this ----")
-    (:wat::kernel::println (:d::dispatch2 "asteroid" "ship"))
-    (:wat::kernel::println (:d::dispatch2 "asteroid" "asteroid"))
-    (:wat::kernel::println (:d::dispatch2 "ship" "asteroid"))
+    (:wat::kernel::println "---- and on the RUNTIME type: same function, surface-typed parameters ----")
+    (:wat::kernel::println (:wat::string::concat "A,S -> " (:d::via (:d::Asteroid) (:d::Ship))))
+    (:wat::kernel::println (:wat::string::concat "A,A -> " (:d::via (:d::Asteroid) (:d::Asteroid))))
+    (:wat::kernel::println (:wat::string::concat "S,S -> " (:d::via (:d::Ship) (:d::Ship))))
 
-    (:wat::kernel::println "---- refused at startup, so recorded rather than run ----")
-    (:wat::kernel::println "  a second extend-type on :d::Asteroid =>")
-    (:wat::kernel::println "  \"duplicate define: :d::Asteroid/hit already registered\"")))
+    (:wat::kernel::println "---- a surface, for contrast: dispatch on `self` only ----")
+    (:wat::kernel::println (:d::describe (:d::Asteroid)))
+    (:wat::kernel::println (:d::describe (:d::Ship)))
+
+    (:wat::kernel::println "---- what the docs say, and where ----")
+    (:wat::kernel::println "  OP-PLACEMENT.md: \"first-match-wins by per-position type match\"")
+    (:wat::kernel::println "  mentions: USER-GUIDE 3, cheatsheet 0, rosetta 0, SERVICE-PROGRAMS 0")))

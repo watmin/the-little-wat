@@ -63,3 +63,9 @@
 (show (multi-dispatch collide-table 'collide '(ship) '(asteroid)))
 ;; how many methods a single-dispatch language would need for n types: one per PAIR
 (show (length collide-table))
+
+;; --- the same three combinations again. The wat port produces THESE with :wat::core::defclause,
+;; wat's real multiple-dispatch mechanism, and the two must agree (F-109).
+(show (multi-dispatch collide-table 'collide '(asteroid) '(ship)))
+(show (multi-dispatch collide-table 'collide '(asteroid) '(asteroid)))
+(show (multi-dispatch collide-table 'collide '(ship) '(ship)))

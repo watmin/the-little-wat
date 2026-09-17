@@ -13,3 +13,6 @@ both-damaged
 #f
 no-method
 3
+ship-destroyed
+both-shatter
+both-damaged

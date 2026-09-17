@@ -110,7 +110,7 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 10 | Low-level efficiency | **no portable content** — CL declarations and open-coding |
 | 11 | **Logic programming** | **done** (C-033) |
 | 12 | **Compiling logic programs** | **done** (C-033) |
-| 13 | **Object-oriented programming** | **done** (C-085, F-109) | wat has single dispatch and cannot express multiple dispatch |
+| 13 | **Object-oriented programming** | **done** (C-085, F-109) | `defclause` IS multiple dispatch — this row first said the opposite; see F-109's retraction |
 | 14 | **Knowledge representation** | **done** (C-086) | override and cycles; F-057's visited set is load-bearing for TERMINATION here |
 | 15 | **Canonical forms** | **done** (C-089) | the best pairing with ch8: an identity becomes checkable rather than provable |
 | 16 | **Expert systems** | **done** (C-089) | certainty factors; a range [-100,100] the type system cannot say |

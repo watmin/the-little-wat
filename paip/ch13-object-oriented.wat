@@ -1,25 +1,26 @@
 ;; PAIP chapter 13 (object-oriented programming), in wat.
 ;;
 ;; The chapter's arc goes from objects-as-closures to GENERIC FUNCTIONS that dispatch on the types
-;; of ALL their arguments. The second half is where wat has a hard limit, and it is worth stating
-;; precisely because C-073 found wat *better* equipped than expected on the single-dispatch side.
+;; of ALL their arguments. This file first claimed wat could not do the second, and recommended a
+;; hand-built table instead. **Both halves were wrong** (F-109), and the correction is the most
+;; useful thing in the chapter:
 ;;
-;; **wat has single dispatch and cannot express multiple dispatch.** A concrete type may extend a
-;; surface at exactly ONE type parameter; a second extension is refused, and the error says why:
+;;   `:wat::core::defclause` IS wat's multiple dispatch. It selects a clause by matching EVERY
+;;   argument position, first-match-wins, on the arguments' RUNTIME types -- which is what CLOS
+;;   does and what this chapter is about. And a missing combination at a concretely-typed call
+;;   site is a **compile error**, where the hand-built table gives a run-time `no-method`. So the
+;;   table this file used to recommend is strictly worse than the feature that already existed.
 ;;
-;;     (:wat::core::extend-type :d::Asteroid (:d::Collide :- [:d::Ship])     …)
-;;     (:wat::core::extend-type :d::Asteroid (:d::Collide :- [:d::Asteroid]) …)
-;;     => "duplicate define: :d::Asteroid/hit already registered"
+;; Both are kept below, and the chapter requires them to AGREE, because the table is still the
+;; right answer to a different question: `defclause` is a closed set of clauses written in one
+;; place, so it cannot be extended by a later module. A table can. That is the same open-versus-
+;; closed trade C-078 drew for SICP §2.5, and now it is a choice between two real mechanisms
+;; rather than a workaround for a missing one.
 ;;
-;; The method is registered at `<Type>/<feature>` — a name with **no room for the argument types**.
-;; So `collide(asteroid, ship)` and `collide(asteroid, asteroid)` cannot run different code through
-;; the surface mechanism, however the surface is parameterised.
-;;
-;; The workaround is not new: it is a **table keyed by the tuple of type tags**, which is exactly
-;; SICP §2.4's data-directed dispatch (C-078), already built in this repository. That is the honest
-;; summary — wat has the *language feature* for single dispatch and needs the *library pattern* for
-;; multiple dispatch, and the two are not interchangeable: the table is unchecked, open, and loses
-;; the exhaustiveness C-078 spent its last paragraph praising.
+;; What went wrong is worth naming: I tested `defsurface` + `extend-type`, found a concrete type
+;; may extend a surface only once, and stopped. The user-facing pages point at surfaces for
+;; polymorphism and mention `defclause` three times in passing; the page that explains it is an
+;; internal design document. That is the finding that survives -- see F-109.
 ;;
 ;; Objects as closures port without comment, and the port is tighter than the original in one way:
 ;; each message answers a NEW account rather than mutating one, so `a1` still reads 100 after a
@@ -91,6 +92,16 @@
     [:wat::core::Option.Some {:value f} (f a b)]
     [:wat::core::Option.None {} "no-method"]))
 
+;; ---- and the same thing with wat's real mechanism: dispatch on EVERY argument position.
+;; The two structs carry no fields; the TYPE is the whole of the dispatch key.
+(:wat::core::defstruct :paip::Asteroid [])
+(:wat::core::defstruct :paip::Ship [])
+
+(:wat::core::defclause :paip::collide
+  ([a <- :paip::Asteroid  b <- :paip::Ship]     -> :wat::core::String "ship-destroyed")
+  ([a <- :paip::Asteroid  b <- :paip::Asteroid] -> :wat::core::String "both-shatter")
+  ([a <- :paip::Ship      b <- :paip::Ship]     -> :wat::core::String "both-damaged"))
+
 (:wat::core::defn :paip::table-size [] -> :wat::core::i64
   (:wat::core::length (:wat::core::keys (:paip::collide-table))))
 
@@ -123,4 +134,9 @@
                             (:paip::b (:wat::core::= (:paip::multi-dispatch "asteroid" "ship")
                                                      (:paip::multi-dispatch "asteroid" "asteroid")))
                             (:paip::multi-dispatch "ship" "asteroid")
-                            (int (:paip::table-size))))))
+                            (int (:paip::table-size))
+                            ;; the same three, produced by defclause rather than by the table --
+                            ;; the two mechanisms must agree
+                            (:paip::collide (:paip::Asteroid) (:paip::Ship))
+                            (:paip::collide (:paip::Asteroid) (:paip::Asteroid))
+                            (:paip::collide (:paip::Ship) (:paip::Ship))))))
