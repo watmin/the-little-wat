@@ -138,6 +138,26 @@ positional or keyword arguments — it is now an explicit, documented list of on
 **Still to add:** checks for the findings without a crisp machine-checkable signature. 11 of
 ~96 are covered.
 
+## A pattern in §10 and §11, worth naming (2026-09-16)
+
+Both ports stopped early, and for the same *kind* of reason — not "wat is slow at this" but
+**"the mechanism the book is built on does not exist"**:
+
+| | stopped at | because |
+|---|---|---|
+| §10 Okasaki | ch 5 of 11 | **F-100** — lazy streams do not memoize, and Part II *is* memoized laziness |
+| §11 Downey | ch 3 of ~15 | **F-102** — a service cannot release a held caller, so every blocking primitive is a spin |
+
+That is a better outcome than finishing either book would have been. Both findings are single,
+sharp, load-bearing gaps that each unlock a whole half of a textbook, and both were reached within
+three chapters. The remaining chapters would have re-measured the same absence five or ten times.
+
+It also sharpens how to choose the next port: **pick the book whose central mechanism wat already
+has**, so the port tests wat's quality rather than re-discovering one missing primitive. On that
+test §12 (a bytecode VM: a flat instruction array, a dispatch loop, an explicit stack) is the
+safest of the remaining candidates — it needs no laziness, no blocking, and no deep recursion,
+which also routes around F-099.
+
 ## §9–§12: four books, ranked by what they'd stress
 
 Not ranked by how good the book is — by which part of wat each one puts under load. The
