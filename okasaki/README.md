@@ -19,6 +19,7 @@ a wrong structure and a right one is worth nothing.
 | 7 | `RealTimeQueue` — **worst-case** O(1), not amortized | correct; worst single op **114 µs** against the banker's **3518 µs** spike — 30× (**C-056**) |
 | 8 | `BankersDeque` — lazy rebuilding, **no cheap end** | queue *and* stack behaviour, balance invariant after every op, worst single op **84 µs** across both ends (**C-057**) |
 | 9 | `BinaryRandomAccessList` — the structure *is* a binary number | every index reads back; **O(log n)** confirmed (+8600 ns/doubling) against the cons list's O(n) — 67× at n=3200. **No laziness, so no stand-in** (**C-058**) |
+| 10 | `BootstrappedQueue` — a queue whose middle is a queue of lists | FIFO over 300; **wat takes polymorphic recursion**, datatype *and* mutually-recursive functions at differing instantiations (**C-059**) |
 
 ## What chapter 2 settled, for the rest of the port
 

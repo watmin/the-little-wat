@@ -183,7 +183,7 @@ explicit-control evaluator — incremental, every chapter runnable, and it tests
 **language host**, which is what the rest of the roadmap sits on. Oracle: the book's own
 expected values, and Racket/guile for the reference implementations.
 
-## 10. Okasaki — *Purely Functional Data Structures* — **ch 2, 3, 5–9 DONE 2026-09-16**
+## 10. Okasaki — *Purely Functional Data Structures* — **ch 2, 3, 5–10 DONE 2026-09-16**
 
 ~30 structures, each small and runnable, each with a stated amortized bound. Lands directly
 on the weak spot this repo has already measured: F-057 (copying vs sharing containers), F-055
