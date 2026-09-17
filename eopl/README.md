@@ -10,7 +10,7 @@ port.
 
 ## Scope
 
-**This is ~55% of the book.** What is here is chapter 3's LETREC language, chapter 4's three parameter-passing disciplines,
+**This is ~65% of the book.** What is here is chapter 3's LETREC language, chapter 4's three parameter-passing disciplines,
 chapter 5's CPS interpreter and chapter 7's type reconstruction — one language, three machines and
 a type system. EOPL is nine chapters;
 see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the most valuable of it.
@@ -20,6 +20,7 @@ see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the m
 | chapter | machine | result |
 |---|---|---|
 | 3 | direct recursion on the host stack | correct; **segfaults between interpreted depth 40000 and 50000** (F-099) |
+| 4 | EXPLICIT-REFS: a store | ports; and mutable state priced three ways — **threaded map 10610 ns, Lru cell 35034, service ~448000** (C-066) |
 | 4 | by-value / by-name / by-need | all three agree; by-name is **O(n²)** where by-need is **O(n)** — 460× at depth 1200 (C-062) |
 | 5 | continuation defunctionalized + trampoline | correct; reaches **300000** and is bounded by the heap (C-061) |
 | 5 | exceptions: a handler as a continuation frame | installing one costs **4 transitions**; unwinding is O(depth); wat's own catch is a 1.44 ms thread spawn (C-065) |
