@@ -19,6 +19,7 @@ see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the m
 | chapter | machine | result |
 |---|---|---|
 | 3 | direct recursion on the host stack | correct; **segfaults between interpreted depth 40000 and 50000** (F-099) |
+| 4 | by-value / by-name / by-need | all three agree; by-name is **O(n²)** where by-need is **O(n)** — 460× at depth 1200 (C-062) |
 | 5 | continuation defunctionalized + trampoline | correct; reaches **300000** and is bounded by the heap (C-061) |
 
 ## What chapter 5 settled
