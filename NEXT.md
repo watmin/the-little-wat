@@ -82,7 +82,7 @@ encoding, if the item is ever revived.
 - **Stresses:** what the textbooks never touch: reading files, splitting strings,
   performance. `wat`'s startup (~350–450ms per run on the i7-1270P laptop) will show up.
 
-## 5. Norvig's PAIP — **FULL COVERAGE (builder's ruling 2026-09-16); ch 11–12 done**
+## 5. Norvig's PAIP — **COMPLETE: 20 of 20 portable chapters (2026-09-16)**
 
 - **Stresses:** heavy symbolic pattern-matching, which is where quoted data versus typed
   data gets decided. Pairs naturally with The Reasoned Schemer.
@@ -116,15 +116,15 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 16 | **Expert systems** | **done** (C-089) | certainty factors; a range [-100,100] the type system cannot say |
 | 17 | **Constraint satisfaction** | **done** (C-089) | decided / impossible / ambiguous all tested; F-104's purest case |
 | 18 | **Othello** | **done** (C-086) | alpha-beta 37 nodes against minimax's 73; F-104 lands on a game board |
-| 19 | Introduction to natural language | **not started** |
-| 20 | Unification grammars | **not started** |
-| 21 | A grammar of English | **not started** |
+| 19 | **Natural language** | **done** (C-090) | ambiguity: two parses, and the TREES differ |
+| 20 | **Unification grammars** | **done** (C-090) | agreement by unification; one rule where a CFG needs two |
+| 21 | **A grammar of English** | **done** (C-090) | subcategorization and relative clauses |
 | 22 | **Scheme: an interpreter** | **done** (C-087) | the interpreted language gets `call/cc`; a value domain with continuations cannot cross a service boundary |
 | 23 | **Compiling Lisp** | **done** (C-088) | peephole: 7 instructions to 3; a compiler pass is almost entirely cases |
 | 24 | ANSI Common Lisp | **no portable content** |
 | 25 | Troubleshooting | **no portable content** |
 
-**17 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+**COMPLETE — 20 of 20 portable chapters done.** The five marked *no portable content* teach Common Lisp itself. Oracle: our own Scheme on each chapter's topic, run by guile
 (`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
