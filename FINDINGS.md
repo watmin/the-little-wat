@@ -16,7 +16,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | A Little Java, A Few Patterns | 10 / 10 | all pass: all 130 results match Java's (C-029). The oracle is Java itself (JDK 27): our own Java per chapter, whose toStrings print S-expressions (`tools/java-oracle.sh`). Java's classes become wat enums, and methods become functions with an arm per variant. Java's interfaces become surfaces and its visitors structs that `extend-type` them. Its mutable fields become services. F-038: a builtin verb used as a function value passes the checker in two places of three. F-039: a partial `extend-type` passes the checker. F-040: the containment error for a defstruct in a Pure enum never names `defrecord`. Surfaces have no defaults or extension, so a Java subclass restates its parent, and a Peer surface must own every datatype its messages carry (Friction) |
 | The Clojure Koans (NEXT.md §1) | 27 topics, 229 rows | our own filled-in koans, each true in Clojure. Ported with only the namespace changed, 29 run (C-030). Written the wat way, 163 more run (`koans/idiom/`, under `./run.sh`); 17 have no route today, and 20 are refused by design. F-014 measured: 38 of the 51 rows that die at runtime in the Clojure spelling are refused at startup in the keyword spelling. 74 Clojure core names are missing (the table). F-041–F-048 |
 | Make-a-Lisp (NEXT.md §2) | 11 / 11 steps | all pass mal's own tests: 909 pass, every hard one (C-032); 38 optional ones don't (DEBUG-EVAL tracing, metadata). mal's own runner and tests (`vendor/mal`, MPL 2.0, unmodified) drive the wat implementation (`mal/`) through a shim, because a wat program can't be a terminal program: its stdout is EDN only (F-049), and its stdin comes by EDN frame (F-050). mal's values are pure data, and its environments and atoms live on a store service, where a message costs about 224 µs (F-051) |
-| SICP (NEXT.md §3) | **ch 1, 2 and 3 complete**, 248 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
+| SICP (NEXT.md §3) | **ch 1, 2, 3 and 4 complete**, 307 results | all pass (`sicp/README.md`). Our own Scheme on each section's topic is the oracle, run by guile (`tools/sicp-oracle.sh`), and every printed result must match. §3.1 local state (20): an account as a service, two access points as two peers on one address. §3.3 mutable data (25): a queue and a table as services, since wat has no mutable pairs to build the book's two-pointer queue from (the Arena, C-016, is the other route). §3.4 concurrency (11): four workers on one account at once through `:wat::bracket::map`, where the service is the serializer, so the book's unserialized bug can't be written. §3.5 streams (9): the stream operations written on `:wat::stream::lazy`. Not ported: §4.1's evaluator, which Make-a-Lisp already covers. F-052, F-053 (a forced stream doesn't remember), F-054 (a definition can't name itself) |
 | Advent of Code (NEXT.md §4) | 5 puzzles, 10 answers | in progress, all matching (`aoc/README.md`). The puzzles and their inputs are ours, in Advent of Code's shape — its own texts and inputs are not redistributable — each with a Clojure reference implementation (`tools/aoc-oracle.sh`) whose answers the wat solution must print. day01 sonar (2000 readings), day02 smoke (a 100×100 grid, read one character at a time), day03 words (5000 words in a hash map), day04 binary (the bits of 1000 numbers, as arithmetic: F-035), day05 paths (Dijkstra over 3600 then 90000 squares, as a bucket queue: F-056). Times: wat 1.1 s, 1.8 s, 0.9 s, 1.0 s, 20.6 s against Clojure's 2.6 s, 2.4 s, 2.5 s, 2.5 s, 2.8 s. The first four are in Clojure's range with a fifth of its startup. The fifth is nearly all map and set updates, and took 135 s until its frontier moved from `HashMap`/`HashSet` to `PersistentMap`, which shares structure where those copy — a dozen lines, 6.5× (F-057), and the conversion ran into F-058. F-055, F-056, F-057, F-058 |
 | PAIP (NEXT.md §5) | 2 chapters, 58 results | unification ports to quoted data with no term language at all, and passed first run (C-033, `paip/README.md`). Our own Scheme is the oracle, run by guile (`tools/paip-oracle.sh`); Norvig's code is not read or copied. A pattern is an ordinary quoted form and a variable is the symbol `?x`, so `paip/lib/unify.wat` walks `:wat::WatAST` itself: `ast-kind` gates, `ast-name` reads a symbol's text (it raises on anything else, so the kind test must come first), `ast->children` decomposes, `with-children` rebuilds, `=` is structural, and `ast->source` prints exactly as guile does. The substitution maps a variable's name — not its node — to a term, and is a `PersistentMap` (F-057). Failure is `Option.None`. Chapter 12's Prolog then runs on quoted clauses too (C-034, 33 results): a clause is a quoted list, the database is a value rather than a service (nothing mutates, and F-051 charges 224 µs a message), backtracking is eager (F-053 means a stream would not memoise), and a clause's variables are renamed apart with `symbol-node` through a threaded counter, since wat has no mutable variable. Cyclic mutual recursion is accepted. **F-059 is where quoted data runs out:** PAIP's membership clauses carry a list with a variable tail, and wat's reader has no dotted pair — `(?i . ?rest)` reads as three children with a symbol named `.` in the middle, then prints back unchanged. Those clauses cannot be written, in either implementation. That is NEXT.md §5's answer: quoted data carries symbolic pattern matching as far as the improper list, and no further |
 | Project Euler (after NEXT.md) | 4 problems, 17 answers | p16, p20 and p25 — the digit sum of 2^1000, the digit sum of 100!, and the first Fibonacci term with 1000 digits. Chosen to press where the ledger was thinnest: F-047 (a bigint computes but cannot be compared) had been found in a single koan row and never exercised by a workload. The oracle is our own Clojure (`tools/euler-oracle.sh`); Project Euler's problem statements are not reproduced. **F-060:** a bigint has no `to-string` where every other scalar does, and its whole surface is six verbs (`+ - * /`, `to-f64`, `to-rational`) — no comparison, no modulo. Its digits come only from `:wat::edn::write`, which appends `N`, so `length` is digits + 1; and `to-f64`, the thing a user finds instead, silently loses the number (2^1000 becomes 17 significant digits and 285 zeroes). p25 never compares two bigints: it asks whether the digit count has reached 1000, which is an i64 comparison. Then p22 names scores (C-035) adds the text half, chosen because it is made of the two things wat is worst at: **F-061**, the whole regex surface is `matches?` answering a bool — a capture group compiles and what it matched can never be read, though wat-rs depends on the entire `regex` crate — so the file is parsed by trim, split and `subs`; and **F-062**, a String has no characters, no `index-of`, `replace`, `split-lines` or `blank?`, `reverse` refuses it and `split` refuses `""`, so every letter is a one-character `subs` at about 16.7 µs. Scoring by scanning the alphabet costs 2751 ms against 395 ms through a `PersistentMap` (7.0×, measured — not the 26× the reasoning suggested). String sort order matches Clojure exactly, checked rather than assumed. F-047, F-060, F-061, F-062 |
@@ -6255,6 +6255,55 @@ name. Rows blocked are counted once per row.
   EOPL's (C-061) and §2.2's three representations (C-077).
 - **Class:** CLEAN.
 - **Repro:** `wat sicp/ch32-environment-model.wat`.
+
+
+### C-080: SICP chapter 4 — a genuinely metacircular evaluator, and the one place the checker cannot help
+
+- **Where:** `sicp/ch41-metacircular.wat`, `ch42-lazy-evaluation.wat`, `ch43-nondeterministic.wat`,
+  `ch44-logic-programming.wat`. **17 + 12 + 13 + 17 = 59 results, all matching guile in order.**
+- **§4.1 keeps the word METACIRCULAR honest, and that is the point of the port.** Almost every
+  port of this chapter quietly declares an `Exp` enum, which yields an interpreter for a
+  *different* language that happens to look similar. (EOPL's ports here do exactly that, correctly,
+  because EOPL is not claiming otherwise.) wat does not have to: `:wat::WatAST` is wat's own quoted
+  form (C-004), so the programs are written `(:wat::core::quote (+ 1 2))` — real wat syntax, read
+  by wat's own reader — and the evaluator takes them apart with `ast-kind`, `ast-name`, `first`,
+  `rest`. Nothing re-declares the evaluated language's syntax. `let` is derived, not primitive.
+- **And the cost showed up while building it, which is the finding.** Dispatch on `ast-kind` is a
+  chain of **string comparisons, not a `match`**, so this is the only evaluator in the repository
+  whose dispatch the checker cannot prove exhaustive. A fallthrough for the non-int, non-symbol
+  case sent a node into `first`/`empty?` and failed at **run time**:
+  > `:wat::core::empty?: expected (Vector :- [T]), … got wat::WatAST "<WatAST>"`
+
+  `ast-kind` has more kinds than the evaluator handled (string, float, keyword) and nothing warned.
+  That is exactly the trade C-004 records, and it is why the enum versions elsewhere are the right
+  default: **metacircularity in a typed host buys fidelity and gives up exhaustiveness.**
+- **§4.2's lazy evaluator is the third independent route to P-027.** One change — an operand
+  becomes a thunk — buys the divergent-argument demonstration and `unless` as an ordinary
+  procedure, and costs repeated evaluation. Counted, with the counter **threaded** rather than
+  mutated (C-066's shape): an argument used three times forces **3**, used once forces **1**,
+  ignored forces **0**. SICP's fix is a memoizing thunk; wat has no force-once-and-shared cell,
+  which is why `okasaki/lib/susp.wat` exists. EOPL C-062 priced the same gap asymptotically and
+  C-075 counted it on streams; this is SICP's side of the same missing primitive.
+- **§4.3's `amb` is the first thing here to need TWO continuations at once**, and the types are
+  the interesting part:
+  ```wat
+  (:wat::core::typealias :sicp::Fail    [:-> :sicp::Out])
+  (:wat::core::typealias :sicp::Succeed [:sicp::NVal :sicp::Fail :-> :sicp::Out])
+  (:wat::core::typealias :sicp::Comp    [:sicp::Succeed :sicp::Fail :-> :sicp::Out])
+  ```
+  Three mutually referring function types, including the **zero-argument** `[:-> Out]`, taken
+  without ceremony. Pythagorean triples to 20 come back in the right order, and `require` prunes by
+  calling the failure continuation. **The cost is that the answer type must be fixed:** in Scheme
+  one computation answers a value to `first-of` and a list to `all-of`; here both must answer the
+  same `Out`, so `Out` is a three-variant enum. A polymorphic answer type would need the
+  computation generic in it — **F-029** territory.
+- **§4.4 is unification for the third time in this repository, on a third kind of data** — PAIP
+  ch11 builds it for Prolog terms, EOPL ch7 (C-063) for type trees with the occurs check, and here
+  for trees of plain symbols. The algorithm is the same all three times, which is the section's
+  real claim, and the ports make that checkable rather than asserted. One fact shape answers "who
+  is a computer programmer" and "what does Ben do" depending only on where the variable sits.
+- **Class:** CLEAN.
+- **Repro:** `./run.sh sicp`.
 
 
 ## Predicted, unverified
