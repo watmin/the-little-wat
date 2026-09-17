@@ -29,3 +29,15 @@
     [:ok::List.Cons {:h h :t t} (:ok::rev-onto t (:ok::cons h acc))]))
 
 (:wat::core::defn :ok::rev [l <- :ok::List] -> :ok::List (:ok::rev-onto l (:ok::nil)))
+
+;; append — O(length of a). Needed by the banker's queue's rotation.
+(:wat::core::defn :ok::append [a <- :ok::List b <- :ok::List] -> :ok::List
+  (:wat::core::match a
+    [:ok::List.Nil {} b]
+    [:ok::List.Cons {:h h :t t} (:ok::cons h (:ok::append t b))]))
+
+(:wat::core::defn :ok::head-or [l <- :ok::List d <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::match l [:ok::List.Nil {} d] [:ok::List.Cons {:h h :t t} h]))
+
+(:wat::core::defn :ok::rest [l <- :ok::List] -> :ok::List
+  (:wat::core::match l [:ok::List.Nil {} l] [:ok::List.Cons {:h h :t t} t]))

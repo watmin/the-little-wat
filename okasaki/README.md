@@ -15,6 +15,7 @@ a wrong structure and a right one is worth nothing.
 | 2 | `UnbalancedSet` — a persistent set as a BST | correct (C-051); **40× slower than the workaround it would replace** (F-097) |
 | 3 | `LeftistHeap` — the priority queue F-056 says is missing | correct, invariants checked at every node; **O(log n) confirmed** — 1.19× across three doublings (C-052) |
 | 5 | `BatchedQueue` — two lists, amortized O(1) | correct; bound **exact** when enum-carried (8755 ns/op flat), **destroyed** when record-carried (158808 at n=4000) — **F-098** |
+| 6 | `BankersQueue` — the bound that survives persistence | correct, and it **works**: one value / k futures falls as 1/k (508633 → 90185 ns/use, k = 10 → 100) where the eager queue is flat at ~3.0 ms — **C-055** |
 
 ## What chapter 2 settled, for the rest of the port
 
@@ -39,16 +40,37 @@ record *allocation* does not degrade with count, and removing the harness's own 
 made the curve worse. Native containers are unaffected: a `PersistentVector` field is O(1) either
 way, which is why nothing in wat's own stdlib has tripped over this.
 
+## The suspension stand-in
+
+`okasaki/lib/susp.wat` is a memoizing one-shot suspension — Okasaki's `$`/`force` — built on a
+`:wat::cache::Lru` at capacity 1. **It is a stand-in and the file says so**: an LRU is a bounded
+*evicting* cache standing in for a never-evicting cell, a cached `force` costs 2× a function call,
+capacity 0 panics, and `Lru` is thread-owned so the suspension cannot cross a thread. The real
+thing is one word of state with `delay` and `force` — filed as **P-027**.
+
+What it proved is worth the hack: chapter 6 restores the persistence bound that chapter 5 loses,
+and the improvement grows with reuse exactly as theory says. So P-027 is not a speculative ask —
+C-055 measures what it buys.
+
+It does **not** change `:wat::stream::`. F-100 records that streams not memoizing is deliberate
+(the Ruby `Enumerator` pattern: pull, process, discard, so a retained head cannot leak); this is
+the other need, and it wants its own type.
+
 ## Where the port stops, and why
 
-**Chapter 5.** Not an abandonment — a result. Chapters 2, 3 and 5 are the ones whose bounds are
+**Chapter 6 for the amortized structures; chapter 7 needs more.** Not an abandonment — a result. Chapters 2, 3 and 5 are the ones whose bounds are
 *structural*, and all three ported and held. Everything from chapter 6 on is Okasaki's Part II,
 which is built on one mechanism: a suspension forced **at most once** and shared thereafter.
 
 `probes/stream/memoization.wat` measures that mechanism directly: forcing one stream value three
-times runs the suspension **three times** (F-100). So the banker's queue, the physicist's queue,
-the real-time queue, the splay heap and the pairing heap would not merely have worse constants in
-wat — they would have no mechanism at all, and porting them would measure F-100 five more times.
+times runs the suspension **three times** (F-100). With `lib/susp.wat` supplying it explicitly,
+the **amortized** structures come back — chapter 6 is the proof.
+
+What is still out of reach is **worst-case** rather than amortized: chapter 7's real-time queue
+spreads the rotation across operations so that no single call is slow, which needs a lazy list
+whose *every cell* is a suspension, not one suspension over the whole list. That is buildable on
+`lib/susp.wat` too, at one LRU per cell — which is where the stand-in's cost stops being a
+constant factor and starts being the measurement.
 
 Chapter 7 is also where F-099 turned up: `stream::cons` is eager in its tail, so the natural
 spelling of a self-referential stream recurses at construction, and wat **segfaults silently**
