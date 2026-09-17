@@ -30,7 +30,7 @@ Every place wat fell short of what a chapter needs, and every place it didn't.
 | Semaphores (NEXT §11, started) | ch 1, 3 | **C-053:** wat's zero-mutex claim **holds**. 8 workers on a real thread pool, 200 increments each into one counter service whose `bump` is written as three deliberate steps: **1600/1600 on five consecutive runs**. The lost update — the hazard Downey's whole book removes — is unrepresentable, so his first chapters have no wat form. **F-101:** but handing the workers that one address required naming a three-parameter `Address` and two `defsurface`-generated types, none of which appears in any user-facing page; the naming rule came from the macro's internals. **F-102:** and wat cannot block a caller at all — `Outcome.NoReply` withholds a reply and **nothing can ever release that caller** (measured: hangs forever). Nothing sends to a held `conn-id`; `Alarm` fires back into the service. wat's own code never returns `NoReply` from an impl. **C-054:** so ch3's barrier is a **spin** — correct, 8/8 released, at a cost of **18 poll round-trips** (~4 ms at F-051's 224 µs/message), and 18 is a *lower* bound because F-094's thread pool barely parallelises |
 | Lazy streams (probes only) | 1 probe | **F-100:** a lazy stream **does not memoize** — three forces of one value ran the suspension three times. **Deliberate**: the Ruby `Enumerator` pattern (pull, process, discard), which keeps a retained head from leaking. The consequence: Okasaki's entire **Part II** (the banker's, physicist's and real-time queues, splay and pairing heaps) is built on a suspension being forced at most once and shared, so without memoization those structures have **no mechanism**, not merely worse constants. wat's laziness itself is correct — `seq.wat` builds `remove` and `take-while` on it — what is absent is *sharing*, and the ask is a **separate** `Susp<T>`, not a change to `Stream`. Also: the 1 TB path is unreachable today anyway — `:wat::io::` is three verbs, `read-file` returns the whole file as a String and `with-open-file` is write-only. `stream::lazy` takes a **body expression**, not a thunk, which nothing documents |
 | Recursion depth (probes only) | 1 probe | **F-099:** a non-tail recursion is fine to **100000** frames and **SIGSEGVs at 120000** — exit 139, **empty stderr**, no wat-level error where every other failure class emits structured EDN with a file and line. The same overflow inside `run-thread` aborts with *"has overflowed its stack"*, so the runtime sees it on a spawned thread but not the main one, and wat's only general catch (F-063) does not catch it. Reached by ordinary code: the textbook `len` over a 120000-element list, or a self-referential stream — the natural spelling, since `stream::cons` is eager in its tail. Tail recursion is unbounded (1,000,000 verified), which is the only mitigation |
-| EOPL (NEXT §9, 8 of 22 languages) | ch 3, 4, 5, 7 | **C-061:** Friedman & Wand's one language, two machines. Both agree on arithmetic, `let`, `proc`, `if` and `letrec`. **F-099 lands on the interpreted program**: a direct-style interpreter makes the *interpreted* depth wat's depth, so it segfaults between **40000 and 50000** while the CPS/trampolined machine reaches **300000**. Chapter 5's move is not stylistic in wat — if you write an interpreter here, write the trampolined one. Bonus, found by accident: **wat's TCO is preserved through the direct interpreter** — an interpreted tail call lands in tail position in `value-of`, so my first test could not tell the machines apart at all. **C-062:** ch4's three parameter-passing disciplines then price the suspension from the language side — by-name is **O(n²)** (~4× per doubling) where by-need is **O(n)**, so at depth 1200 an argument used twice costs 97 ms by-value, **44669 ms by-name**, 147 ms by-need. The case for P-027 is asymptotic, not a constant factor. **C-063:** ch7 then has wat **host a type system** — reconstruction by unification over the same unannotated syntax the interpreters run, so the checker and the evaluator cross-check. 5 inferred types the evaluator agrees with, and **5 rejections including the occurs check** (`proc(x) (x x)`), without which a checker loops instead of rejecting. **C-064:** and ch5's THREADS closes a loop — once a continuation is data, a thread *is* one, the scheduler is a queue, and **blocking is moving it to a blocked list**, so the interpreted language gets the mutex its host cannot express (F-102). The lost update returns on purpose **in the toy language** (not in wat — C-053 says wat cannot have it): 40/80 at slice 1–2, **80/80 at slice 1000**, the same interpreted program correct or broken by the scheduler alone. **C-065:** and ch5.4's exceptions do it a third time — a handler is a continuation frame, so **installing one costs 4 transitions** and only unwinding scales (27/47/87/167 for depth 5/10/20/40), against wat's `run-thread` at **1.44 ms flat**, because that is a thread spawn (F-063). A first draft compared wall clock and was confounded by the interpreter's own ~14 µs/transition — transitions are the machine-independent number. **C-066:** ch4's store then prices mutable state three ways — **threaded `PersistentMap` 10610 ns, `:wat::cache::Lru` 35034 ns (3.3× worse), a service ~448000 ns (42×)**. The pure option wins, which is the opposite of the systems instinct, and the store must be a map because F-104 leaves the vector without a positional update. **C-067:** and ch7's **CHECKED** closes a gap inside a chapter I had reported as done — a checker rejects `proc(x : bool) -(x,1)` where the inferencer accepts the same shape as `(int -> int)`, because inference has **no annotation to disagree with**. That is the model wat itself uses |
+| EOPL (NEXT §9, 10 of 22 languages) | ch 3, 4, 5, 7 | **C-061:** Friedman & Wand's one language, two machines. Both agree on arithmetic, `let`, `proc`, `if` and `letrec`. **F-099 lands on the interpreted program**: a direct-style interpreter makes the *interpreted* depth wat's depth, so it segfaults between **40000 and 50000** while the CPS/trampolined machine reaches **300000**. Chapter 5's move is not stylistic in wat — if you write an interpreter here, write the trampolined one. Bonus, found by accident: **wat's TCO is preserved through the direct interpreter** — an interpreted tail call lands in tail position in `value-of`, so my first test could not tell the machines apart at all. **C-062:** ch4's three parameter-passing disciplines then price the suspension from the language side — by-name is **O(n²)** (~4× per doubling) where by-need is **O(n)**, so at depth 1200 an argument used twice costs 97 ms by-value, **44669 ms by-name**, 147 ms by-need. The case for P-027 is asymptotic, not a constant factor. **C-063:** ch7 then has wat **host a type system** — reconstruction by unification over the same unannotated syntax the interpreters run, so the checker and the evaluator cross-check. 5 inferred types the evaluator agrees with, and **5 rejections including the occurs check** (`proc(x) (x x)`), without which a checker loops instead of rejecting. **C-064:** and ch5's THREADS closes a loop — once a continuation is data, a thread *is* one, the scheduler is a queue, and **blocking is moving it to a blocked list**, so the interpreted language gets the mutex its host cannot express (F-102). The lost update returns on purpose **in the toy language** (not in wat — C-053 says wat cannot have it): 40/80 at slice 1–2, **80/80 at slice 1000**, the same interpreted program correct or broken by the scheduler alone. **C-065:** and ch5.4's exceptions do it a third time — a handler is a continuation frame, so **installing one costs 4 transitions** and only unwinding scales (27/47/87/167 for depth 5/10/20/40), against wat's `run-thread` at **1.44 ms flat**, because that is a thread spawn (F-063). A first draft compared wall clock and was confounded by the interpreter's own ~14 µs/transition — transitions are the machine-independent number. **C-066:** ch4's store then prices mutable state three ways — **threaded `PersistentMap` 10610 ns, `:wat::cache::Lru` 35034 ns (3.3× worse), a service ~448000 ns (42×)**. The pure option wins, which is the opposite of the systems instinct, and the store must be a map because F-104 leaves the vector without a positional update. **C-067:** and ch7's **CHECKED** closes a gap inside a chapter I had reported as done — a checker rejects `proc(x : bool) -(x,1)` where the inferencer accepts the same shape as `(int -> int)`, because inference has **no annotation to disagree with**. That is the model wat itself uses. **C-068 / C-069:** and chapter 4 is now complete — IMPLICIT-REFS makes every variable a reference so `deref` is never written, and **call-by-reference turns out to be one predicate**: *is this argument a bare variable?* One program, `let x = 0 in let f = proc(y) set y = 99 in ((f x); x)`, answers **0 by value and 99 by reference**, while a non-variable argument answers 99 under both — because there is nothing to alias, which is the half of the definition the first row alone misses. MUTABLE-PAIRS then costs almost nothing: a pair is two adjacent store cells, so aliasing needs no new machinery, and the aliased/rebuilt pair (99 vs 1) is the same sharing-vs-copying distinction wat already draws between `PersistentMap` and `HashMap` (C-023). Three EOPL languages now have the shape the CEK work wants |
 | Okasaki (NEXT §10, **complete**) | ch 2, 3, 5–11 | **C-051:** chapter 2's `UnbalancedSet` is 40 lines of wat and correct — recursive parametric enums work, the in-order walk is sorted, and `ok::Set`, `PersistentMap`-to-`true` and `HashSet` agree on all 10000 membership probes over 2000 LCG values (depth 27 vs an optimum of ~11, reported not assumed). **F-097:** and it is **34x slower to build, 43x slower to query** than the workaround F-057 forces. `BASELINE.md` predicts why to within 5%: 1922 ns per node visited against a predicted 1830–2190 for one call + one match + a comparison. So F-057's gap needs a **native** persistent set; a library one cannot win, and `PersistentMap`-to-`true` is the right answer until there is one. **C-052:** ch3's leftist heap answers F-056's missing priority queue in 60 lines — leftist property and heap order checked at every node, drain sorted, and insert cost rises just **1.19x across three doublings** where O(n) predicts 8x. ch5's batched queue is FIFO-correct with its invariant held after every operation. **F-098:** and the queue exposed the biggest container finding yet — a `defrecord` field holding a **user enum value** is deep-copied on construction, so the same algorithm is flat at 8755 ns/op in an enum variant and 158808 (diverging) in a record. Four other hypotheses were measured and eliminated first. **C-055:** ch6's banker's queue then settles what a memoized suspension buys. One value, k futures: the eager queue is **flat at ~3.0 ms/use** (paying the rotation every time) while the banker's **falls as 1/k** — 508633 → 90185 ns/use for k = 10 → 100, **33.6× better at k=100 and widening**. Built on the P-027 LRU stand-in, whose 2×-a-call force tax inflates every absolute number; the shape is the result. **C-056:** ch7 then shows what an *average* cannot — the banker's queue pays its rotation all at once, a **3518 µs spike**, where the real-time queue's worst single operation is **114 µs**, 30× smaller. **C-057:** ch8's deque then generalises it — no cheap end, balance invariant held after **every** operation, and a worst single op of **84 µs** across both ends, below ch7's one-sided 114 µs. All four carriers (`BQ`, `LCell`, `RTQ`, `DQ`) are **Impure enums**: the one shape that may hold a suspension (containment rule) *and* shares its payload (F-098) — at four occurrences that is a rule the language should state. **C-058:** ch9's numerical representation then needs **no laziness at all** — every type a Pure enum, no stand-in — and both curves come out textbook: the random-access list rises a constant ~8600 ns per doubling (O(log n)) while the cons list doubles exactly (O(n)), **67× apart at n=3200**. **C-059:** ch10 then shows wat's type system takes **polymorphic recursion** — `Queue<A>` containing `Queue<List<A>>`, with mutually recursive functions over it at differing instantiations — which many type systems refuse and the rest cannot infer. **C-060:** ch11 then stacks all three techniques — numerical digits, polymorphic recursion, and a suspension in the recursive position — and `Susp<Queue<Pair<A>>>` inside `Queue<A>`, the hardest type in the book, type-checks and runs. Five structures now need the same undocumented Impure-enum carrier |
 | Performance baseline (bench + tools) | 2 bench programs, 7 figures | `BASELINE.md`, taken **before** the byte-code / jump-DAG work because a before/after cannot be captured afterwards. Minimum of 3 runs, each against an empty-loop control of the same shape, with every body repeating its operation 10x — the first version reported a *negative* cost for a builtin call because a 200 ns effect sits under a 3.6 µs iteration. builtin call **360 ns**, match-2 675, user `defn` 795, closure 853, `defstruct` accessor 1219, **`defrecord` accessor 6130**. **F-096:** that last one is 5.0x its `defstruct` twin for an identical one-field shape and 17x a builtin, with a control proving the cost is the accessor and not the passing |
 | Load order (probes only) | 1 probe, 5 cases | **C-050:** `:wat::deporder::` verifies that wat's `.wat` files declare their load order correctly, and does exactly that. The real baked order over **62 files reports 0 violations** — and the same 62 files **reversed report 457**, so the zero is a measurement rather than a silence (R59, *nisi frangas, nihil probas*). A two-file case reports exactly 1 with both positions and the symbol; swapped, 0; and the `defmacro` order-free exemption holds. Reading 62 files: 1 ms. `verify` over ~1.3 MB: **1291 ms, ~1 MB/s** — a hundred times the formatter's ~10 KB/s (F-075), so parsing and walking are not what makes the formatter slow |
@@ -2781,7 +2781,14 @@ name. Rows blocked are counted once per row.
     1 unresolved reference … :wat::bigint::to-string
     "call head — not a builtin, not a registered function"
     ```
-    Every other scalar has one: `:wat::i64::to-string`, `:wat::f64::to-string`.
+    **Corrected 2026-09-16** (`probes/scalar/to-string-coverage.wat`, wat-rs `a3218644d`): the
+    original wording here said "every other scalar has one". It does not. Registered
+    `to-string` verbs are exactly **four** — `:wat::i64::`, `:wat::f64::`, `:wat::keyword::`,
+    `:wat::uuid::` (`grep -r '::to-string' wat-rs/src wat-rs/wat`). The two **arbitrary-precision
+    numeric** types are precisely the two that lack one: `:wat::bigint::` (5 verbs) and
+    `:wat::rational::` (4 verbs: `+ - *`, `to-f64`). That is a sharper statement than the
+    original and a worse one — the types whose whole reason to exist is holding a number no
+    other type can hold are the two with no way to show it.
   - The whole registered bigint surface is six verbs (`src/intrinsic/bigint.rs`):
     `+`, `-`, `*`, `/`, `to-f64`, `to-rational`. There is no comparison (F-047) and no modulo.
   - `:wat::bigint::to-f64` reaches a String only by losing the number:
@@ -2789,6 +2796,12 @@ name. Rows blocked are counted once per row.
     followed by 285 zeroes.
   - `:wat::edn::write` does answer the digits — 2^1000 comes back in full — but as **303**
     characters whose last is `N`, so `length` is digits + 1 and a caller must strip the suffix.
+    **Corrected 2026-09-16:** the original said the digits come *only* from the EDN writer. They
+    do not. `:wat::core::str` and `:wat::core::show` both answer the same string — measured,
+    `(:wat::core::str (bigint 2^64))` is `"18446744073709551616N"`, full digits, no scientific
+    notation — and a rational likewise renders `"3/1"` through all three. The `N` suffix and the
+    strip-it workaround are unchanged, so the finding's substance stands; the route is simply
+    three doors wide rather than one, and `str` is the door a user would actually try first.
 - **The working route, measured** (`probes/euler/bigint-digits-route.wat`, every line matching
   Clojure): trim the `N`, and the digit count of 2^1000 is 302 and of 100! is 158; the digits sum
   with `:wat::string::to-i64` over one-character substrings to 1366 and 648; and the digit
@@ -5587,6 +5600,92 @@ name. Rows blocked are counted once per row.
   buys — not internal consistency, which inference also gives, but disagreement with the author.
 - **Class:** CLEAN.
 - **Repro:** `wat eopl/ch07-checked.wat`.
+
+
+### C-068: EOPL's IMPLICIT-REFS and CALL-BY-REFERENCE, and how small the calling convention actually is
+
+- **Where:** EOPL chapter 4, `eopl/lib/implicit.wat` + `eopl/ch04-implicit-refs.wat`.
+- **What the chapter is:** EXPLICIT-REFS (already built, `eopl/lib/refs.wat`) makes references a
+  *value* the programmer allocates with `newref` and reads with `deref`. IMPLICIT-REFS moves the
+  reference behind the curtain: **every variable is bound to a reference**, a bare `Var` is a
+  dereference, and `set x = e` assigns through the cell. The programmer never writes `deref`.
+  That is the calling convention of nearly every language anyone actually uses.
+- **The result that makes the chapter worth building** — one program, two conventions:
+
+  ```
+  let x = 0 in
+    let f = proc(y) set y = 99 in
+      ((f x); x)
+  ```
+
+  | | result |
+  |---|---|
+  | by value | **0** |
+  | by reference | **99** |
+
+  and, when the argument is an *expression* rather than a variable:
+
+  | | result |
+  |---|---|
+  | by value | 99 |
+  | by reference | 99 |
+
+  The second row is the interesting one. Call-by-reference can only differ when there is
+  something to alias; a non-variable argument has no cell of its own to share, so both
+  conventions must agree. The two rows together are the definition — not the first row alone.
+- **How much code the switch is:** the whole of the call-by-reference decision is one predicate —
+  *is this argument expression a bare variable?* If yes, pass its existing cell index; if no,
+  allocate a fresh cell. Everything else in the interpreter is shared between the two modes.
+
+  ```wat
+  (:wat::core::defenum :imp::Strategy :wat::enum::Pure
+    :ByValue [] :ByReference [])
+  ```
+
+  A calling convention reads, in the literature and in most people's heads, like a deep property
+  of a language. Written out it is a two-variant enum and one question asked at one call site.
+- **Nothing here is a defect in wat.** The interpreter implements assignment, aliasing and a
+  mutable store in a language that has no mutation — the same shape as the mutex in C-064. The
+  store is threaded as a value (`st`, `next`) through every evaluation arm and returned in the
+  answer; that is what a language without mutation forces, and it is also exactly the fourth
+  component a CEK machine carries. This is the third EOPL language whose implementation *already
+  has the shape* the long-term CEK work wants (with `eopl/lib/cps.wat` and `eopl/lib/threads.wat`).
+- **One wat friction re-hit, strengthening an existing row:** the store is a
+  `PersistentMap<i64,i64>` and not a vector, because **F-104** — neither vector type has a
+  positional update. A store indexed by a dense integer counter is the textbook vector use, and
+  it is the fourth workload in this repository to route around F-104 the same way.
+- **Class:** CLEAN.
+- **Repro:** `wat eopl/ch04-implicit-refs.wat`.
+
+### C-069: EOPL's MUTABLE-PAIRS — aliasing is free once a store exists
+
+- **Where:** EOPL chapter 4, `eopl/lib/mutpairs.wat` + `eopl/ch04-mutable-pairs.wat`.
+- **What the chapter is, and why it is short:** a mutable pair is **two adjacent cells** in the
+  store the previous language already had. `newpair` allocates `n` and `n+1` and the pair's
+  *value* is the index `n`. `left`/`right` fetch; `setleft`/`setright` assign. No new store
+  machinery, no new value kind. EOPL's point is deflationary and it survives the port intact.
+- **What the port demonstrates** (all five rows PASS):
+
+  | program | result |
+  |---|---|
+  | `left(newpair(3,4))` | 3 |
+  | `right(newpair(3,4))` | 4 |
+  | `let p = newpair(1,2) in let q = p in (setleft q 99; left p)` | **99** — aliased |
+  | same, but `q` is a *second* `newpair(1,2)` | **1** — not aliased |
+  | `let p = newpair(7,8) in (setright p 99; left p + right p)` | 106 — two real cells |
+
+  Rows 3 and 4 are the pair: identical-looking pairs alias when one *name* was copied and do not
+  when the *pair* was rebuilt. Row 5 rules out a one-cell implementation with a tag.
+- **The connection to wat's own containers:** this is precisely the distinction wat already draws
+  between `PersistentVector`/`PersistentMap`, which **share**, and `HashMap`/`HashSet`, which
+  **copy** (C-023, F-057). The interpreter has to reproduce sharing *on top of* a persistent
+  store, and it does it the way EOPL does — by passing around an **index**, not a value. A
+  language without mutation can express aliasing exactly when it is willing to make the
+  indirection explicit, which is the same trade the reader is being taught.
+- **Nothing here is a defect in wat.** Chapter 4 is now complete: EXPLICIT-REFS (`refs.wat`),
+  IMPLICIT-REFS and CALL-BY-REFERENCE (C-068), MUTABLE-PAIRS.
+- **Class:** CLEAN.
+- **Repro:** `wat eopl/ch04-mutable-pairs.wat`.
 
 
 ## Predicted, unverified

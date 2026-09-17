@@ -10,11 +10,14 @@ port.
 
 ## Scope
 
-**8 of the book's 22 languages and topics are done.** NEXT.md §9 carries the full table, including
-the items still outstanding inside chapters that were previously reported as complete. What is here is chapter 3's LETREC language, chapter 4's three parameter-passing disciplines,
-chapter 5's CPS interpreter and chapter 7's type reconstruction — one language, three machines and
-a type system. EOPL is nine chapters;
-see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the most valuable of it.
+**10 of the book's 22 languages and topics are done, and chapter 4 is complete.** NEXT.md §9
+carries the full table, including the items still outstanding inside chapters that were previously
+reported as complete. What is here is chapter 3's LETREC language, all of chapter 4 (EXPLICIT-REFS,
+IMPLICIT-REFS, call-by-reference, MUTABLE-PAIRS and the three parameter-passing disciplines),
+chapter 5's CPS interpreter, exceptions and threads, and chapter 7's checker and type
+reconstruction — one language, four machines, a store and a type system. EOPL is nine chapters;
+see NEXT.md §9 for the table of what is left. **No skipping** (builder's ruling, 2026-09-16):
+duplication is cheaper than an omission.
 
 ## Chapters (2026-09-16, wat-rs `a3218644d`)
 
@@ -23,6 +26,8 @@ see NEXT.md §9 for the table of what is left and why chapter 7 (types) is the m
 | 3 | direct recursion on the host stack | correct; **segfaults between interpreted depth 40000 and 50000** (F-099) |
 | 4 | EXPLICIT-REFS: a store | ports; and mutable state priced three ways — **threaded map 10610 ns, Lru cell 35034, service ~448000** (C-066) |
 | 4 | by-value / by-name / by-need | all three agree; by-name is **O(n²)** where by-need is **O(n)** — 460× at depth 1200 (C-062) |
+| 4 | IMPLICIT-REFS + call-by-reference | the same program answers **0 by value, 99 by reference**; a non-variable argument answers 99 under both (C-068) |
+| 4 | MUTABLE-PAIRS | a pair is two adjacent cells — aliased 99, rebuilt 1, no new store machinery (C-069) |
 | 5 | continuation defunctionalized + trampoline | correct; reaches **300000** and is bounded by the heap (C-061) |
 | 5 | exceptions: a handler as a continuation frame | installing one costs **4 transitions**; unwinding is O(depth); wat's own catch is a 1.44 ms thread spawn (C-065) |
 | 5 | threads: a scheduler on continuations | a real mutex, and the lost update on demand — 40/80 at slice 1, 80/80 at slice 1000 (C-064) |
@@ -53,3 +58,17 @@ recursive call moved inside a `Diff`) before the two machines could be distingui
 wat eopl/ch05-cps-interpreter.wat
 ./run.sh eopl
 ```
+
+## What chapter 4 settled
+
+A calling convention sounds like a deep property of a language. Written out, **call-by-reference
+is one predicate** — *is this argument expression a bare variable?* — and a two-variant enum.
+Everything else is shared with call-by-value.
+
+The other half of the definition is the row that is easy to leave out: when the argument is an
+expression rather than a variable, the two conventions **must agree**, because there is no cell to
+alias. `ch04-implicit-refs.wat` prints both rows for that reason.
+
+And all of it is built in a language with no mutation. The store is threaded as a value and
+returned in the answer — which is also, exactly, the fourth component a CEK machine carries. Three
+of these chapters (`cps.wat`, `threads.wat`, `implicit.wat`) now have the shape that work wants.
