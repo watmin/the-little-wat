@@ -489,3 +489,39 @@ reason, and neither constraint is documented.
 `:wat::cache::Lru` per cons cell** — a 300-element front is 300 bounded evicting caches whose
 eviction can never fire. At chapter 6 the stand-in was a 2× constant-factor tax; by chapter 7 it
 *is* the measurement.
+
+### P-028: a memo cell — an unbounded, non-evicting keyed table
+
+**What a user should not have to write.** PAIP chapter 9's `memoize` (C-084) takes any function
+and returns one with the same signature that remembers what it has computed. In wat that **is**
+writable — a closure can capture a `:wat::cache::Lru`, verified in
+`probes/paip/transparent-memoize.wat` — but the thing it captures is the wrong primitive, and in a
+way that is a **contract difference rather than a tuning parameter**:
+
+> **an LRU is allowed to forget.** At capacity 2 the probe shows the wrapper recomputing a value it
+> had already produced.
+
+For `fib` that is a performance difference. For anything memoized for **identity** — hash-consing,
+interning, a canonical-form table — it is *wrong*, because the invariant being bought is "the same
+input yields the very same result, always", and an evicting cache cannot promise that.
+
+**The surface:**
+
+| | |
+|---|---|
+| `memo : () -> Memo<K,V>` | a table that never evicts |
+| `memo-get : Memo<K,V> -> K -> Option<V>` | |
+| `memo-put! : Memo<K,V> -> K -> V -> ()` | |
+| `memoize : [K :-> V] -> [K :-> V]` | the transparent wrapper, built from the above |
+
+**Relationship to P-027.** P-027 asks for a one-shot suspension: force once *ever*, no key. This is
+its keyed relative: compute once *per key*, ever. They are the same requirement — *a cell that
+remembers and is not allowed to forget* — at two arities, and `:wat::cache::Lru` is the wrong
+vehicle for both for the same reason.
+
+**What the stand-in costs today**, beyond eviction: a cached read measures ~7251 ns against
+~3583 ns for a plain call, so the cell is about **2× a function call** and the saving must clear
+that bar before memoizing pays; `Lru` is `thread_owned`, so a memoized function cannot cross a
+thread boundary; and capacity 0 panics (F-084), so every wrapper must reject or clamp it.
+
+- **Evidence:** C-084, `probes/paip/transparent-memoize.wat`, P-027, F-084.

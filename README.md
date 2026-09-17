@@ -170,7 +170,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 - [FINDINGS.md](FINDINGS.md) is the ledger: every place wat fell short, or didn't.
   - F-001 to F-108 are gaps and defects.
   - R-001 to R-005 are deliberate refusals, with their doctrine.
-  - C-001 to C-083 are clean ports and acceptance results.
+  - C-001 to C-084 are clean ports and acceptance results.
 
   It opens with a status table and the list to relay to wat-rs, grouped by task: fix,
   correct, clean, improve, extend.
@@ -180,7 +180,7 @@ chapter from 43 s to 2 s. The book's Iris run takes 236 s in wat against malt's 
 - `./audit.sh ../wat-rs`: point it at any wat-rs build and read what changed. It runs the
   per-finding re-check (**OPEN / FIXED**), the documentation audit, the CLI surface and the
   benchmark. The FIXED lines are the findings to close.
-- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-027).
+- [PROVIDE.md](PROVIDE.md): what users shouldn't have to write themselves (P-001 to P-028).
 - [koans/README.md](koans/README.md): the Clojure Koans' topics, ported literally and judged
   in both of wat's spellings.
 - [mal/README.md](mal/README.md): Make-a-Lisp in wat, against mal's own tests.
