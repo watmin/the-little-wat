@@ -436,3 +436,32 @@ These are fixes, not additions, but each is something users currently write them
   implementation is not the right *delivery*.
 - **And mind F-098 if it is written in wat:** carry the payload in an enum variant, not a record.
 - **Evidence:** C-052, F-056, F-097, F-098.
+
+### P-027: a one-shot suspension cell (`Susp<T>` — `delay` / `force`)
+
+- **What we wrote:** twelve lines of wat that memoize correctly — three forces, one evaluation,
+  generic over `T` (verified at `i64` and `String`). The mutable cell underneath is
+  `:wat::cache::Lru` at capacity 1, keyed 0.
+- **It proves no deep substrate change is needed.** wat already exposes a mutable, thread-owned
+  cell reachable from ordinary code, so a suspension is expressible *today* — the language is not
+  missing a capability, only a name for one.
+- **But the LRU is the wrong vehicle, on four counts:**
+  1. **Semantics.** An LRU is a *bounded, evicting* cache; a suspension is a *one-shot,
+     never-evicting* cell. At capacity 1 the eviction can never fire, so the recency list, the
+     capacity bound and the eviction path are all dead weight carried on every access.
+  2. **Cost.** A cached `force` measures **7251 ns** against **3583 ns** for a plain function call
+     — **2× a call** for what should be a pointer read. Okasaki's amortization is exactly the
+     thing that budget has to fit inside.
+  3. **Failure modes that do not belong to a suspension.** Capacity 0 panics (F-084), the key `0`
+     is arbitrary, and nothing at the type level says the cell holds exactly one thing.
+  4. **Thread-owned.** `:wat::cache::Lru` is `scope = "thread_owned"`, so a suspension built this
+     way cannot cross a thread boundary — a restriction a suspension has no reason to inherit.
+- **What the real thing is:** one word of state, `delay` and `force`, no eviction policy, no key.
+  Small enough to be a substrate type rather than a library.
+- **And it does not touch `Stream`.** F-100 records that streams not memoizing is deliberate — the
+  Ruby `Enumerator` pattern, which makes a retained head unleakable. This is the *other* need
+  (force once **ever**, shared between accessors) and it wants its own type.
+- **The type system did catch the impurity**, which is a point in wat's favour: the containment
+  rule refused the `defrecord` — *"pure aggregate"* cannot hold a live handle — and forced a
+  `defstruct`, exactly as `:wat::cache::HolographicLru` is one.
+- **Evidence:** F-100, F-084, C-052.
