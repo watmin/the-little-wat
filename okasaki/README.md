@@ -17,6 +17,7 @@ a wrong structure and a right one is worth nothing.
 | 5 | `BatchedQueue` — two lists, amortized O(1) | correct; bound **exact** when enum-carried (8755 ns/op flat), **destroyed** when record-carried (158808 at n=4000) — **F-098** |
 | 6 | `BankersQueue` — the bound that survives persistence | correct, and it **works**: one value / k futures falls as 1/k (508633 → 90185 ns/use, k = 10 → 100) where the eager queue is flat at ~3.0 ms — **C-055** |
 | 7 | `RealTimeQueue` — **worst-case** O(1), not amortized | correct; worst single op **114 µs** against the banker's **3518 µs** spike — 30× (**C-056**) |
+| 8 | `BankersDeque` — lazy rebuilding, **no cheap end** | queue *and* stack behaviour, balance invariant after every op, worst single op **84 µs** across both ends (**C-057**) |
 
 ## What chapter 2 settled, for the rest of the port
 
@@ -68,9 +69,12 @@ three**:
 | 6 | amortized, **persistent** | ns/use as k futures branch from one value | **falls as 1/k** |
 | 7 | **worst-case** | the **max** single operation, not the average | **114 µs** vs 3518 µs |
 
+| 8 | **both ends** bounded | the max op while alternating *both* ends | **84 µs** |
+
 Chapter 7 is the one an average cannot show: the banker's queue pays its rotation all at once, a
 3.5 ms spike inside an otherwise fast run, and the real-time queue spreads that work so no single
-call is slow.
+call is slow. Chapter 8 removes the last asymmetry — chapters 5–7 all have an easy direction,
+because the rotation only ever moves rear into front, and a deque has none.
 
 ## Where the port stops, and why
 

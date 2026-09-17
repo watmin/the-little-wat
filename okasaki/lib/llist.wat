@@ -50,3 +50,44 @@
   (:wat::core::match (:ok::force s)
     [:ok::LCell.CNil {} 0]
     [:ok::LCell.CCons {:h h :t t} (:wat::core::+ 1 (:ok::llen t))]))
+
+;; ─── the lazy-list vocabulary chapter 8's rebalancing needs ───────────────────────────────────
+;; Each of these allocates a suspension per cell produced, so each is also a per-cell LRU under
+;; the P-027 stand-in. `take` and `drop` are the pair that makes lazy rebuilding work: a deque
+;; rebalances by splitting one end and reversing the remainder onto the other.
+
+(:wat::core::defn :ok::ltake [s <- (:ok::Susp :- [:ok::LCell]) n <- :wat::core::i64]
+  -> (:ok::Susp :- [:ok::LCell])
+  (:ok::delay (:wat::core::fn [] -> :ok::LCell
+    (:wat::core::if (:wat::core::<= n 0)
+      (:ok::LCell.CNil {})
+      (:wat::core::match (:ok::force s)
+        [:ok::LCell.CNil {} (:ok::LCell.CNil {})]
+        [:ok::LCell.CCons {:h h :t t}
+          (:ok::LCell.CCons {:h h :t (:ok::ltake t (:wat::core::- n 1))})])))))
+
+(:wat::core::defn :ok::ldrop [s <- (:ok::Susp :- [:ok::LCell]) n <- :wat::core::i64]
+  -> (:ok::Susp :- [:ok::LCell])
+  (:ok::delay (:wat::core::fn [] -> :ok::LCell
+    (:wat::core::if (:wat::core::<= n 0)
+      (:ok::force s)
+      (:wat::core::match (:ok::force s)
+        [:ok::LCell.CNil {} (:ok::LCell.CNil {})]
+        [:ok::LCell.CCons {:h h :t t} (:ok::force (:ok::ldrop t (:wat::core::- n 1)))])))))
+
+(:wat::core::defn :ok::lappend [a <- (:ok::Susp :- [:ok::LCell]) b <- (:ok::Susp :- [:ok::LCell])]
+  -> (:ok::Susp :- [:ok::LCell])
+  (:ok::delay (:wat::core::fn [] -> :ok::LCell
+    (:wat::core::match (:ok::force a)
+      [:ok::LCell.CNil {} (:ok::force b)]
+      [:ok::LCell.CCons {:h h :t t} (:ok::LCell.CCons {:h h :t (:ok::lappend t b)})]))))
+
+;; strict reverse: the rebalance reverses a finite prefix, and reversing lazily buys nothing
+(:wat::core::defn :ok::lrev-onto [s <- (:ok::Susp :- [:ok::LCell]) acc <- (:ok::Susp :- [:ok::LCell])]
+  -> (:ok::Susp :- [:ok::LCell])
+  (:wat::core::match (:ok::force s)
+    [:ok::LCell.CNil {} acc]
+    [:ok::LCell.CCons {:h h :t t} (:ok::lrev-onto t (:ok::lcons h acc))]))
+
+(:wat::core::defn :ok::lrev [s <- (:ok::Susp :- [:ok::LCell])] -> (:ok::Susp :- [:ok::LCell])
+  (:ok::lrev-onto s (:ok::lnil)))
