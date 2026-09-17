@@ -465,3 +465,27 @@ These are fixes, not additions, but each is something users currently write them
   rule refused the `defrecord` — *"pure aggregate"* cannot hold a live handle — and forced a
   `defstruct`, exactly as `:wat::cache::HolographicLru` is one.
 - **Evidence:** F-100, F-084, C-052.
+
+#### P-027, continued: the skeleton is the spec
+
+`okasaki/lib/susp.wat` + `llist.wat` now exercise the primitive hard enough to say exactly what it
+must do. Chapters 6 and 7 are built on it and both hold their bounds (C-055, C-056).
+
+**The surface, as used:**
+
+| | |
+|---|---|
+| `delay : [:-> T] -> Susp<T>` | deferred, not yet run |
+| `force : Susp<T> -> T` | run **at most once**, and **shared between accessors** — this is the whole point |
+| `forced? : Susp<T> -> bool` | observable, so a test can prove incrementality rather than assume it |
+
+**And one requirement that is not about the suspension at all:** it must be holdable in an
+aggregate that *also* shares its payload. Today that is an **Impure enum** and nothing else — a
+`defrecord`/`defstruct` deep-copies user-enum fields (F-098) and a Pure enum cannot hold a live
+handle (the containment rule). All three of `BQ`, `LCell` and `RTQ` are Impure enums for that
+reason, and neither constraint is documented.
+
+**Why the LRU must not ship as the implementation:** chapter 7's lazy list allocates **one
+`:wat::cache::Lru` per cons cell** — a 300-element front is 300 bounded evicting caches whose
+eviction can never fire. At chapter 6 the stand-in was a 2× constant-factor tax; by chapter 7 it
+*is* the measurement.

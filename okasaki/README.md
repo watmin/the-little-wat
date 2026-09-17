@@ -16,6 +16,7 @@ a wrong structure and a right one is worth nothing.
 | 3 | `LeftistHeap` — the priority queue F-056 says is missing | correct, invariants checked at every node; **O(log n) confirmed** — 1.19× across three doublings (C-052) |
 | 5 | `BatchedQueue` — two lists, amortized O(1) | correct; bound **exact** when enum-carried (8755 ns/op flat), **destroyed** when record-carried (158808 at n=4000) — **F-098** |
 | 6 | `BankersQueue` — the bound that survives persistence | correct, and it **works**: one value / k futures falls as 1/k (508633 → 90185 ns/use, k = 10 → 100) where the eager queue is flat at ~3.0 ms — **C-055** |
+| 7 | `RealTimeQueue` — **worst-case** O(1), not amortized | correct; worst single op **114 µs** against the banker's **3518 µs** spike — 30× (**C-056**) |
 
 ## What chapter 2 settled, for the rest of the port
 
@@ -56,6 +57,21 @@ It does **not** change `:wat::stream::`. F-100 records that streams not memoizin
 (the Ruby `Enumerator` pattern: pull, process, discard, so a retained head cannot leak); this is
 the other need, and it wants its own type.
 
+## The queue progression, and why each chapter needs its own measurement
+
+Okasaki's four queues each fix the previous one's weakness, and **no single metric sees all
+three**:
+
+| chapter | bound | what reveals it | result |
+|---|---|---|---|
+| 5 | amortized, **ephemeral only** | ns/op as n doubles | **flat**, 8755 ns/op |
+| 6 | amortized, **persistent** | ns/use as k futures branch from one value | **falls as 1/k** |
+| 7 | **worst-case** | the **max** single operation, not the average | **114 µs** vs 3518 µs |
+
+Chapter 7 is the one an average cannot show: the banker's queue pays its rotation all at once, a
+3.5 ms spike inside an otherwise fast run, and the real-time queue spreads that work so no single
+call is slow.
+
 ## Where the port stops, and why
 
 **Chapter 6 for the amortized structures; chapter 7 needs more.** Not an abandonment — a result. Chapters 2, 3 and 5 are the ones whose bounds are
@@ -66,11 +82,13 @@ which is built on one mechanism: a suspension forced **at most once** and shared
 times runs the suspension **three times** (F-100). With `lib/susp.wat` supplying it explicitly,
 the **amortized** structures come back — chapter 6 is the proof.
 
-What is still out of reach is **worst-case** rather than amortized: chapter 7's real-time queue
-spreads the rotation across operations so that no single call is slow, which needs a lazy list
-whose *every cell* is a suspension, not one suspension over the whole list. That is buildable on
-`lib/susp.wat` too, at one LRU per cell — which is where the stand-in's cost stops being a
-constant factor and starts being the measurement.
+Chapter 7 is now built too, on a lazy list whose *every cell* is a suspension (`lib/llist.wat`) —
+one LRU per cons cell, which is where the stand-in's cost stops being a constant factor and
+becomes the measurement. Its absolute numbers are mostly the hack; its **shape** — a bounded worst
+case against a spike — is what a real `Susp<T>` would preserve.
+
+The skeleton has therefore done its job: it is the spec for P-027, and PROVIDE.md now carries the
+exact surface it exercises.
 
 Chapter 7 is also where F-099 turned up: `stream::cons` is eager in its tail, so the natural
 spelling of a self-referential stream recurses at construction, and wat **segfaults silently**

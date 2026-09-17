@@ -145,7 +145,7 @@ Both ports stopped early, and for the same *kind* of reason — not "wat is slow
 
 | | stopped at | because |
 |---|---|---|
-| §10 Okasaki | ch 5 of 11 | **F-100** — lazy streams do not memoize, and Part II *is* memoized laziness |
+| §10 Okasaki | ~~ch 5 of 11~~ → **ch 7**, once a suspension was built | F-100 was the block; `lib/susp.wat` (P-027's stand-in) removed it |
 | §11 Downey | ch 3 of ~15 | **F-102** — a service cannot release a held caller, so every blocking primitive is a spin |
 
 That is a better outcome than finishing either book would have been. Both findings are single,
@@ -183,7 +183,7 @@ explicit-control evaluator — incremental, every chapter runnable, and it tests
 **language host**, which is what the rest of the roadmap sits on. Oracle: the book's own
 expected values, and Racket/guile for the reference implementations.
 
-## 10. Okasaki — *Purely Functional Data Structures* — **ch 2, 3, 5 DONE 2026-09-16; stops there (F-100)**
+## 10. Okasaki — *Purely Functional Data Structures* — **ch 2, 3, 5, 6, 7 DONE 2026-09-16**
 
 ~30 structures, each small and runnable, each with a stated amortized bound. Lands directly
 on the weak spot this repo has already measured: F-057 (copying vs sharing containers), F-055
