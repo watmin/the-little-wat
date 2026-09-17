@@ -176,7 +176,7 @@ wat that everything else here depends on. The execution order below still opens 
 Okasaki aims at defects that are already measured and so pays back fastest — EOPL is the largest
 investment, not the first one.
 
-## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand)
+## 9. EOPL — *Essentials of Programming Languages* (Friedman & Wand) — **ch 3 + ch 5 DONE 2026-09-16**
 
 The big uncovered Friedman. Interpreters, type checkers, continuations, stores, an
 explicit-control evaluator — incremental, every chapter runnable, and it tests wat as a
