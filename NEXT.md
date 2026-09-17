@@ -172,7 +172,7 @@ set** (a visited set has to be a `PersistentMap` to `true`). Laziness and amorti
 wat's `:wat::stream::` territory, which F-088 showed is documented as an API that does not
 exist. Oracle: the book's bounds, and timing curves rather than single points (C-050's method).
 
-## 11. Downey — *The Little Book of Semaphores*
+## 11. Downey — *The Little Book of Semaphores* — **ch 1, 3 DONE 2026-09-16; blocked past ch 3 by F-102**
 
 ~30 concurrency puzzles with known-correct answers **and** known failure modes — a rare
 **self-oracling** corpus, where a wrong implementation fails in a way the book already names. F-094 measured `bracket::map`'s thread pool at 29% of what the
