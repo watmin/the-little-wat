@@ -99,13 +99,13 @@ has nothing to port to wat, and saying so is a decision on the record.
 | ch | topic | status |
 |---|---|---|
 | 1 | Introduction to Lisp | **no portable content** — Common Lisp syntax and evaluation |
-| 2 | A Simple Lisp Program — random sentence generator | **not started** — hits F-036 (no random numbers) head-on |
+| 2 | **A Simple Lisp Program** | **done** (C-082) | hits F-036 head-on; threading the seed made it testable |
 | 3 | Overview of Lisp | **no portable content** — a tour of CL's own primitives |
-| 4 | GPS: the General Problem Solver | **not started** |
-| 5 | ELIZA: dialog with a machine | **not started** — pattern matching with segment variables |
-| 6 | Building software tools — pattern matcher, search, GPS revisited | **not started** |
+| 4 | **GPS** | **done** (C-082) | means-ends analysis; the bugs tested as carefully as the successes |
+| 5 | **ELIZA** | **done** (C-083) | segment variables, backtracking over splits |
+| 6 | **Building software tools — search** | **done** (C-083) | four searches, one program; depth-first is DEARER here (29 vs 19) |
 | 7 | STUDENT: algebra word problems | **not started** |
-| 8 | Symbolic mathematics: a simplification program | **not started** |
+| 8 | **Symbolic mathematics** | **done** (C-083) | a rule table is open to new rows and closed to new KINDS of question |
 | 9 | Efficiency issues — memoization, compilation, indexing | **not started** — memoization lands on P-027 |
 | 10 | Low-level efficiency | **no portable content** — CL declarations and open-coding |
 | 11 | **Logic programming** | **done** (C-033) |
@@ -124,7 +124,7 @@ has nothing to port to wat, and saying so is a decision on the record.
 | 24 | ANSI Common Lisp | **no portable content** |
 | 25 | Troubleshooting | **no portable content** |
 
-**2 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+**7 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
 (`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
