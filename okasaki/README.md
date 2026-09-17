@@ -20,6 +20,15 @@ a wrong structure and a right one is worth nothing.
 | 8 | `BankersDeque` — lazy rebuilding, **no cheap end** | queue *and* stack behaviour, balance invariant after every op, worst single op **84 µs** across both ends (**C-057**) |
 | 9 | `BinaryRandomAccessList` — the structure *is* a binary number | every index reads back; **O(log n)** confirmed (+8600 ns/doubling) against the cons list's O(n) — 67× at n=3200. **No laziness, so no stand-in** (**C-058**) |
 | 10 | `BootstrappedQueue` — a queue whose middle is a queue of lists | FIFO over 300; **wat takes polymorphic recursion**, datatype *and* mutually-recursive functions at differing instantiations (**C-059**) |
+| 11 | `ImplicitQueue` — digits + polymorphic recursion + laziness | FIFO over 300; `Susp<Queue<Pair<A>>>` inside `Queue<A>` — the hardest type in the book — type-checks (**C-060**) |
+
+## The carrier rule, found five times
+
+`BQ`, `LCell`, `RTQ`, `DQ` and `IQ` are all **Impure enums**, and each arrived there
+independently. A structure that holds a suspension cannot be a Pure enum (containment rule) and
+must not be a record or struct (F-098 deep-copies user-enum fields). The Impure enum is the only
+shape that satisfies both. Nothing documents this; it was derived here from two measurements and
+then needed five times.
 
 ## What chapter 2 settled, for the rest of the port
 
