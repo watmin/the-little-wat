@@ -82,10 +82,50 @@ encoding, if the item is ever revived.
 - **Stresses:** what the textbooks never touch: reading files, splitting strings,
   performance. `wat`'s startup (~350–450ms per run on the i7-1270P laptop) will show up.
 
-## 5. Norvig's PAIP chapters 11–12: unification and a Prolog
+## 5. Norvig's PAIP — **FULL COVERAGE (builder's ruling 2026-09-16); ch 11–12 done**
 
 - **Stresses:** heavy symbolic pattern-matching, which is where quoted data versus typed
   data gets decided. Pairs naturally with The Reasoned Schemer.
+
+**Builder's ruling, 2026-09-16:** *"i think we just get full coverage - prove we handled all of
+the books' various nuance, not just arguing 'meh, they're the same'"*. PAIP was probe-driven (two
+chapters chosen to press quoted data); it becomes a full port.
+
+**PAIP is 25 chapters, and several are about Common Lisp itself rather than about an algorithm.**
+Those are listed below as **no portable content** rather than dropped silently — the same
+treatment Okasaki ch 1 got (C-075). A chapter that teaches `loop`, `declare` or ANSI CL packages
+has nothing to port to wat, and saying so is a decision on the record.
+
+| ch | topic | status |
+|---|---|---|
+| 1 | Introduction to Lisp | **no portable content** — Common Lisp syntax and evaluation |
+| 2 | A Simple Lisp Program — random sentence generator | **not started** — hits F-036 (no random numbers) head-on |
+| 3 | Overview of Lisp | **no portable content** — a tour of CL's own primitives |
+| 4 | GPS: the General Problem Solver | **not started** |
+| 5 | ELIZA: dialog with a machine | **not started** — pattern matching with segment variables |
+| 6 | Building software tools — pattern matcher, search, GPS revisited | **not started** |
+| 7 | STUDENT: algebra word problems | **not started** |
+| 8 | Symbolic mathematics: a simplification program | **not started** |
+| 9 | Efficiency issues — memoization, compilation, indexing | **not started** — memoization lands on P-027 |
+| 10 | Low-level efficiency | **no portable content** — CL declarations and open-coding |
+| 11 | **Logic programming** | **done** (C-033) |
+| 12 | **Compiling logic programs** | **done** (C-033) |
+| 13 | Object-oriented programming | **not started** — compare with EOPL ch9 (C-072/C-073) |
+| 14 | Knowledge representation and reasoning | **not started** |
+| 15 | Symbolic mathematics with canonical forms | **not started** |
+| 16 | Expert systems | **not started** — compare with the rete engine (F-065) |
+| 17 | Line-diagram labeling by constraint satisfaction | **not started** |
+| 18 | Search and the game of Othello | **not started** |
+| 19 | Introduction to natural language | **not started** |
+| 20 | Unification grammars | **not started** |
+| 21 | A grammar of English | **not started** |
+| 22 | Scheme: an interpreter | **not started** — compare with SICP §4.1 (C-080) and EOPL (C-061) |
+| 23 | Compiling Lisp | **not started** — compare with SICP §5.5 (C-081) |
+| 24 | ANSI Common Lisp | **no portable content** |
+| 25 | Troubleshooting | **no portable content** |
+
+**2 of 20 portable chapters done.** Oracle: our own Scheme on each chapter's topic, run by guile
+(`tools/paip-oracle.sh`). Norvig's own code is never read or copied.
 
 ## 6. Capstone: a slice of the builder's own Shield packet detector
 
