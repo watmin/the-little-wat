@@ -344,7 +344,7 @@ ch 1 and PAIP's CL chapters got.
 |---|---|---|
 | 14 | **Chunks of bytecode** | **done** (C-098) | an opcode is an enum carrying its operand; offsets count instructions, not bytes |
 | 15 | **A virtual machine** | **done** (C-098) | **registerized costs ~2.3-2.5x; hoisting the chunk out of the loop saves ~30% more; they compound to 3-4x** |
-| 16 | Scanning on demand | **not started** |
+| 16 | **Scanning on demand** | **done** (C-099) | 38 token kinds, all asserted produced; on-demand pull works (8 tokens < a tenth of the file); **record-per-character vs record-per-token is ~2.5x**, and F-062 leaves no hoist available |
 | 17 | Compiling expressions | **not started** |
 | 18 | Types of values | **not started** |
 | 19 | Strings | **not started** |
