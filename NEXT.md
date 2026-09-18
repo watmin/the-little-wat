@@ -345,7 +345,7 @@ ch 1 and PAIP's CL chapters got.
 | 14 | **Chunks of bytecode** | **done** (C-098) | an opcode is an enum carrying its operand; offsets count instructions, not bytes |
 | 15 | **A virtual machine** | **done** (C-098) | **registerized costs ~2.3-2.5x; hoisting the chunk out of the loop saves ~30% more; they compound to 3-4x** |
 | 16 | **Scanning on demand** | **done** (C-099) | 38 token kinds, all asserted produced; on-demand pull works (8 tokens < a tenth of the file); **record-per-character vs record-per-token is ~2.5x**, and F-062 leaves no hoist available |
-| 17 | Compiling expressions | **not started** |
+| 17 | **Compiling expressions** | **done** (C-100) | the compiler reproduces ch14's hand-built chunk exactly and ch15's VM gives ch15's answer; the rule table of function pointers was built in a probe — `defstruct` row works, `defrecord` row refused (F-114) |
 | 18 | Types of values | **not started** |
 | 19 | Strings | **not started** |
 | 20 | Hash tables | **no portable content** — the chapter implements one; wat has `HashMap` and `PersistentMap`, and C-078 already measured what they cost |
