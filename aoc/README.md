@@ -31,6 +31,10 @@ print, in order (`lib/check.wat`).
 | day15 bingo | a draw order and 20 boards | the first board to win, and the last | 1.44 s | 1.39 s |
 | day16 assembly | a 12-instruction program | register a, and register a with c starting at 1 | 0.59 s | 1.08 s |
 | day17 intervals | 615 blocked ranges | the lowest value not blocked, and how many are not | 0.67 s | 1.07 s |
+| day18 snailfish | 20 nested-pair numbers | the magnitude of the sum, and the best pair sum | 13.0 s | 2.63 s |
+| day19 passports | 300 key:value records | how many are complete, and how many are valid | 0.69 s | 1.17 s |
+| day20 enhance | a 512-entry lookup and a 30×30 image | lit pixels after 2 steps, and after 12 | 10.1 s | 1.37 s |
+| day21 dice | two starting positions | the deterministic game's answer, and the quantum one's | 8.89 s | 1.17 s |
 
 All answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and the
 JVM's about 1.49 s of Clojure's.
@@ -110,6 +114,17 @@ JVM's about 1.49 s of Clojure's.
   a runtime error where a bad opcode in lox is unconstructible; the registers are a `defrecord`
   updated with `assoc` (F-113); and the ip is an ordinary loop argument, which is what C-098
   measured as the cheap shape.
+- **Where wat is slowest is where it rebuilds.** Three puzzles take ten seconds or more, and all
+  three do the same thing: day18 rebuilds a whole snailfish number on every explode and split
+  (F-104, F-116 — no positional update and no `subvec`), day20 rebuilds a growing image a
+  character at a time, and day21 walks 16172 memoised states. The Clojure references take one to
+  three seconds. day05's 20.6 s is still the slowest, and its cause was the same: a container
+  copying where one that shares was available (F-057).
+- **Memoisation needs a size nobody knows.** day06's recurrence needed a memo of capacity 3, so
+  P-028's ask was narrowed to "a cell whose size the caller does not have to know". day21 is the
+  case where the caller genuinely cannot: 16172 states is a property of the search, not of the
+  input. The capacity has to be a bound on the state space — 10 × 21 × 10 × 21 — and getting it
+  wrong fails silently, by recomputing.
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 

@@ -1,0 +1,1290 @@
+ecl:blu
+hcl:#891c55 hgt:170m byr:2003
+cid:123 pid:909211399 iyr:2021 eyr:2021
+
+eyr:2019
+hcl:#4450a7
+iyr:2019
+pid:347566608 cid:123 byr:1932
+hgt:178cm ecl:
+
+iyr:2010
+pid:12345678a byr:1931 hcl:#1234567 cid:123 eyr:2022 ecl:
+hgt:77in
+
+hgt:149cm pid:703001692
+hcl:#2b42d6
+byr:1923 ecl:xyz eyr:2027 iyr:2020
+cid:123
+
+pid:12345678
+eyr:2021 iyr:2011 cid:123 ecl:
+hgt:173cm byr:190
+
+pid:12345678 byr:190 hcl:#77dc90 hgt:194cm iyr:2015
+eyr:2019 ecl:blu
+
+byr:1950 ecl:gry pid:348981060 hgt:194cm iyr:2020 hcl:#1234567
+eyr:2031
+
+eyr:2030 iyr:2017
+hgt:62in
+byr:1981
+pid:319504983 ecl:hzl hcl:#03f7a2
+
+eyr:2021
+byr:1929
+hgt:67in pid:614105886
+ecl:grn
+hcl:#fad342 iyr:2015
+
+eyr:2022
+hgt:74in pid:539492868 hcl:#34797e byr:1919 cid:123
+ecl:hzl
+iyr:2020
+
+hcl:#1234567
+hgt:183cm iyr:2016 eyr:2031
+pid:959236994 byr:1921
+ecl:brn
+
+ecl:brn
+cid:123 iyr:2016
+hgt:191cm eyr:2019
+pid:12345678a hcl:#6a3087
+byr:190
+
+hgt:176cm pid:458980157
+ecl:amb
+hcl:#fc1e3f
+iyr:2012
+cid:123 eyr:2029
+
+pid:332594246 ecl:xyz eyr:2019
+hgt:168cm byr:1919 iyr:2016 cid:123 hcl:#133098
+
+iyr:2020 ecl:oth byr:1919 eyr:2020 hcl:#2dfa7e pid:12345678a
+hgt:184cm
+
+byr:2003
+ecl:
+pid:12345678
+hcl:#ea83ca
+hgt:170cm
+iyr:2010
+
+ecl:amb hgt:194cm pid:12345678 byr:1947 hcl:#71371e eyr:2024 iyr:2009
+
+hcl:#ea2d68 byr:1997 cid:123 eyr:2019
+pid:558813403
+hgt:194cm iyr:2019
+
+eyr:2031 hcl:#a73469
+byr:2002 pid:12345678a ecl:hzl
+hgt:58in
+
+eyr:2023
+pid:663884131 hgt:173cm
+cid:123
+hcl:#95053e iyr:2010 byr:1983
+
+hcl:#2f165c iyr:2016
+pid:0123456789
+eyr:2029
+hgt:71in byr:2002 ecl:gry
+
+pid:968897943 eyr:2020
+hcl:#442b27 byr:1959
+hgt:170cm iyr:2014
+
+iyr:2010 hcl:123456
+ecl:amb
+hgt:190cm
+byr:1967 eyr:2026
+pid:400494548
+
+hgt:65in eyr:2019 iyr:2011 hcl:#f2fb3a
+byr:2001 ecl:
+pid:633437017
+
+hcl:#3a613f
+pid:535618546 hgt:162cm eyr:2024 iyr:2020 ecl:
+
+hgt:153cm iyr:2021
+byr:1920
+eyr:2031
+ecl:gry
+cid:123
+pid:437433507 hcl:#1234567
+
+hgt:62in
+pid:122961228 iyr:2013
+ecl:blu
+eyr:2028
+byr:1956 hcl:#c5f2c9
+
+cid:123
+iyr:2014
+ecl:oth eyr:2023 pid:12345678
+hcl:#00b37c byr:2003
+hgt:58in
+
+byr:1997
+cid:123 pid:763246780 hgt:171cm
+eyr:2029 ecl:grn
+hcl:#1234567
+iyr:2021
+
+ecl:wat
+cid:123
+byr:1953
+eyr:2023 iyr:2009 hcl:#12345 hgt:181cm
+
+eyr:2031
+pid:690557005 hgt:77in
+byr:1926
+hcl:123456 ecl:blu iyr:2009
+
+cid:123 hcl:#a08296
+byr:1919 iyr:2012 ecl:amb
+hgt:170
+pid:460741568 eyr:2031
+
+hgt:173cm pid:877810842
+byr:190
+ecl:gry iyr:2012
+eyr:2023
+
+pid:992535744 ecl:xyz iyr:2016 hgt:67in byr:1969
+eyr:2029 hcl:#72f187
+
+hcl:123456
+ecl:gry eyr:2031 pid:740699958 hgt:170m byr:1991 iyr:2018
+
+pid:850567560 eyr:2029
+byr:1992 hgt:75in
+hcl:#3ff6d9 iyr:2009
+ecl:xyz
+
+hcl:#fbc2e9 iyr:2013 pid:785134123 byr:1920
+hgt:155cm
+ecl:xyz
+
+byr:1938 pid:785181231 iyr:2017 hgt:170 ecl:blu hcl:#dace18 eyr:2030
+
+ecl:wat iyr:2020
+hgt:58in hcl:#1234567
+eyr:2030 pid:12345678a cid:123
+byr:1919
+
+hcl:#734b2b hgt:173cm
+iyr:2021 ecl:amb eyr:2019 pid:12345678
+
+eyr:2027 iyr:2016
+ecl:gry hcl:#b6debc
+byr:190 hgt:170 pid:293096342
+
+byr:1993
+cid:123 ecl:oth pid:536354543 eyr:2021 hcl:#c2eda0 iyr:2010
+
+byr:1998
+hgt:163cm pid:286182437
+ecl:grn
+eyr:2019 cid:123
+hcl:#12345g iyr:2017
+
+hcl:123456
+iyr:2018 pid:704850480 ecl:oth eyr:2026 hgt:68in byr:1985
+cid:123
+
+hcl:#36c4a7 cid:123 eyr:2019 iyr:2019 pid:587956148
+ecl:oth hgt:75in byr:1924
+
+eyr:2022
+pid:835228300
+hcl:#b0e155
+iyr:2021 ecl:oth
+byr:1961
+cid:123 hgt:61in
+
+byr:1919
+iyr:2016 hcl:#12345
+pid:132141000 ecl:hzl hgt:170m
+
+iyr:2018 ecl:blu
+hcl:#0c83cf
+hgt:174cm pid:979203324 byr:1976 eyr:2027
+
+pid:954333733 iyr:2021
+eyr:2019 hcl:#f7210c hgt:173cm byr:1939
+ecl:
+
+byr:1985 pid:669210283 ecl:amb hgt:64in hcl:#ce4bde
+eyr:2019
+
+iyr:2012 ecl:wat pid:174665250
+cid:123 hcl:#cf4125 hgt:68in byr:1949 eyr:2031
+
+eyr:2029
+iyr:2020 cid:123 byr:1952 hcl:#a45588 ecl:
+pid:0123456789
+
+pid:654729127 ecl:hzl
+hgt:170
+byr:1935 eyr:2019 hcl:#3f855f
+
+byr:1928 eyr:2026 hgt:194cm hcl:#1234567
+iyr:2009
+pid:335573066
+
+iyr:2011
+pid:173354588 hcl:#12345
+hgt:72in byr:1927 cid:123
+ecl:amb eyr:2031
+
+pid:530953312 iyr:2010 ecl: hgt:67in eyr:2021 byr:1990 hcl:123456
+
+cid:123 pid:0123456789 ecl:wat hcl:#7e275f
+hgt:73in eyr:2022 iyr:2021
+
+ecl:wat pid:775547891 byr:190 eyr:2020
+hcl:#12345
+iyr:2019
+hgt:155cm
+cid:123
+
+hcl:#311277 byr:1924 hgt:74in pid:716155053 eyr:2027 ecl:hzl iyr:2019
+
+iyr:2014
+hcl:#839c6d
+pid:913581667 byr:2003 hgt:77in ecl:hzl
+
+eyr:2027 ecl:brn hgt:67in
+iyr:2013 hcl:#d1363c byr:1983
+
+eyr:2026
+ecl:hzl
+iyr:2015 byr:190 hgt:187cm hcl:#1b935e
+
+byr:190 cid:123
+pid:0123456789
+eyr:2021 iyr:2021 ecl:brn
+hcl:#3ae8f2
+hgt:194cm
+
+hgt:58in byr:1952 hcl:#fa0690
+ecl:hzl iyr:2013 eyr:2031 pid:295434482
+
+ecl:xyz
+byr:190 iyr:2015
+cid:123 eyr:2029 hgt:170 hcl:#ee1062
+pid:551946097
+
+hcl:#ea499e byr:1931 iyr:2009 eyr:2029
+hgt:158cm
+ecl:blu pid:12345678 cid:123
+
+hgt:77in
+pid:836091874
+iyr:2020 eyr:2025 byr:1944 hcl:#bc8a1d ecl:xyz
+
+hcl:#12345
+byr:2002 iyr:2011
+hgt:189cm
+eyr:2019 pid:407356587
+
+ecl:xyz pid:947036236 hcl:#1234567 byr:1967 iyr:2015 eyr:2021 hgt:170m
+
+pid:415147856 hgt:167cm eyr:2028 iyr:2015
+hcl:#12345
+ecl:hzl byr:190 cid:123
+
+eyr:2023 iyr:2009 hgt:161cm byr:1919 hcl:#ba1ca8
+ecl:wat pid:907339461
+
+byr:1967
+hcl:123456 pid:12345678
+hgt:75in
+ecl:xyz
+iyr:2019 eyr:2024
+
+pid:464062295
+ecl:amb
+hgt:168cm byr:1957 iyr:2021 eyr:2021 hcl:#c8912e
+
+hcl:#23305a ecl:xyz
+hgt:168cm
+byr:1976 iyr:2021 cid:123
+eyr:2022 pid:803949530
+
+byr:1982 hcl:#3d3362 iyr:2016 hgt:156cm ecl:wat pid:396481193 eyr:2027
+
+ecl:hzl eyr:2021 pid:119635200 hcl:#9a0f57 cid:123 iyr:2009 byr:1962
+hgt:177cm
+
+eyr:2019
+ecl:blu byr:1956
+pid:660698403 hgt:149cm hcl:#475763 iyr:2009
+
+cid:123 pid:354940357
+iyr:2019 hgt:160cm hcl:#03a4b4
+ecl:wat eyr:2022 byr:1998
+
+iyr:2012 ecl:wat
+hcl:#3f266d hgt:194cm
+eyr:2031
+byr:2003 pid:979754936
+
+pid:900702983
+ecl:xyz eyr:2029
+hcl:#d02287 hgt:186cm byr:1988
+iyr:2015
+
+hcl:123456 ecl:grn hgt:185cm eyr:2025 iyr:2009 pid:311324281
+
+hgt:71in
+ecl:gry pid:824528682 byr:1976
+hcl:#09ae2d iyr:2011 eyr:2023
+
+hcl:#f0927c
+byr:1937
+hgt:170m eyr:2027 cid:123
+pid:034547742 iyr:2019 ecl:gry
+
+pid:329071045
+hcl:#bcba3b
+eyr:2031
+hgt:180cm cid:123 iyr:2021 ecl: byr:1977
+
+byr:1941
+iyr:2009 ecl:amb hgt:178cm cid:123 eyr:2019 hcl:#0446b2 pid:12345678a
+
+iyr:2009
+eyr:2028 byr:1961 hcl:#1234567 ecl:brn hgt:64in
+pid:0123456789
+
+eyr:2031
+iyr:2014 hgt:160cm hcl:#9a3e69 pid:12345678a byr:1919
+ecl:blu
+
+eyr:2022 pid:361673813
+byr:1919 hcl:#9c5152 ecl:oth
+hgt:178cm
+iyr:2019
+
+hgt:67in
+iyr:2013
+byr:1972
+eyr:2027
+hcl:#12345g pid:074597179
+
+pid:015310434 ecl:blu
+iyr:2010
+hcl:#c585a7 hgt:59in
+eyr:2025 byr:1970
+
+pid:858912031
+hcl:#1234567
+ecl:blu
+byr:1937 hgt:194cm
+eyr:2029
+
+pid:129173813
+hgt:194cm
+iyr:2009
+byr:190 ecl:amb hcl:#12345
+eyr:2020
+
+pid:123990168 ecl:xyz
+byr:2003 eyr:2029 iyr:2009 hcl:#52ff6e hgt:174cm
+
+hcl:#d6bebd cid:123
+eyr:2019 iyr:2010 pid:540127212 ecl:xyz hgt:77in byr:1970
+
+hgt:159cm
+byr:1993 eyr:2026
+ecl:
+pid:750079811 cid:123 hcl:#7870f2 iyr:2017
+
+eyr:2024
+pid:087930900 byr:1964 ecl:xyz iyr:2021 hgt:64in hcl:#e7579a
+
+byr:1974
+iyr:2012
+eyr:2026 hcl:#72e1fc hgt:184cm pid:468198501
+
+eyr:2021
+ecl:wat byr:1926
+hcl:#ec8344 pid:12345678
+cid:123 iyr:2012
+
+cid:123 byr:1920 ecl:grn
+pid:477840115 hcl:#4984ca iyr:2016
+hgt:170
+
+pid:024298310
+eyr:2029 ecl:brn iyr:2011 hcl:#0b0675 byr:1982 hgt:191cm
+
+iyr:2016
+ecl:blu eyr:2029 byr:1941
+pid:12345678
+hcl:#364e5b hgt:190cm
+
+hgt:155cm iyr:2013 ecl:amb byr:2002
+eyr:2030
+pid:085624089 hcl:#48b019
+
+pid:942750729 byr:1924 hgt:62in
+eyr:2025 ecl:oth hcl:#781c88 iyr:2010
+
+hgt:194cm hcl:#369b0b iyr:2021
+byr:1935 pid:12345678
+ecl:
+eyr:2026
+
+ecl: iyr:2021
+eyr:2024 pid:095894303
+byr:1995 hgt:155cm
+
+hcl:#12345g eyr:2024
+ecl:amb iyr:2010 hgt:173cm byr:1932
+
+pid:582729910
+hcl:#0249ed hgt:194cm ecl:xyz
+byr:1983 iyr:2018
+eyr:2029
+
+byr:1943
+pid:528504365 ecl:wat hgt:74in iyr:2011
+hcl:#913dbe eyr:2031
+
+eyr:2027
+hgt:58in
+pid:457203704
+byr:1995 ecl:blu hcl:#1234567
+
+ecl:blu hcl:#12345 byr:2003 eyr:2020
+iyr:2015 cid:123 hgt:63in pid:883475194
+
+pid:848914293
+ecl:wat byr:2003 eyr:2026
+hgt:181cm hcl:#c4407f
+iyr:2009 cid:123
+
+eyr:2026 byr:1919
+hcl:123456 iyr:2016 hgt:154cm ecl:xyz
+
+eyr:2028
+ecl:hzl pid:803846986 hcl:#1234567 byr:1989 hgt:63in
+iyr:2012
+
+pid:117140253 cid:123 byr:1970 iyr:2018
+eyr:2027
+hcl:#42c5c5
+ecl:amb hgt:170
+
+byr:1943
+ecl:
+cid:123 hcl:#12345 pid:415184937 hgt:169cm iyr:2015 eyr:2019
+
+byr:1946 hcl:#12345g ecl: eyr:2025 hgt:65in
+pid:713237468 iyr:2018
+
+iyr:2020 pid:0123456789 ecl:xyz
+hgt:163cm
+cid:123
+eyr:2023
+byr:1922 hcl:#b3791e
+
+iyr:2018 pid:357779348 hcl:#12345
+byr:1936
+ecl:wat
+hgt:170m
+
+hcl:#6fcf6c byr:1956 hgt:194cm
+iyr:2020
+cid:123 eyr:2031 pid:714835356 ecl:
+
+ecl:xyz cid:123
+byr:1938 hgt:186cm pid:380511247 iyr:2019
+eyr:2024
+
+iyr:2021 pid:12345678 byr:1995 cid:123
+eyr:2026 hgt:175cm hcl:#994855
+ecl:hzl
+
+hgt:77in pid:885424922
+byr:1943 eyr:2029
+iyr:2021 hcl:#5161d2 cid:123 ecl:brn
+
+eyr:2029 hcl:#1234567
+byr:1980
+iyr:2020 pid:135961494
+ecl:grn
+
+cid:123
+pid:134891500 hcl:123456
+iyr:2011 hgt:170m ecl:oth eyr:2019 byr:1993
+
+hcl:#1ef4e3 ecl:
+hgt:76in eyr:2025 iyr:2011 byr:1936 cid:123
+
+pid:076615377 hcl:#5047b9
+hgt:155cm
+iyr:2019 eyr:2022 ecl:oth byr:1919 cid:123
+
+hcl:#12345 hgt:77in
+iyr:2009
+ecl:brn eyr:2031
+pid:183491336 byr:2003
+
+pid:661502702
+iyr:2012
+byr:1949
+hgt:77in
+hcl:#5e9fbf eyr:2024 ecl:brn
+
+hgt:61in iyr:2013 hcl:#187b9e eyr:2023 pid:087046149
+ecl:xyz byr:1950
+
+cid:123
+iyr:2021 eyr:2029 pid:605302713 hgt:71in
+byr:1989
+ecl:oth hcl:#53f857
+
+pid:327278503
+eyr:2026 hcl:#8ec62c
+hgt:153cm byr:1966 ecl:hzl iyr:2011
+
+hgt:170
+hcl:#1234567
+cid:123
+pid:674102913 iyr:2010 ecl:grn eyr:2025
+byr:1924
+
+ecl:oth
+iyr:2020 pid:976532309
+hcl:#12345g cid:123
+hgt:69in byr:1981 eyr:2029
+
+byr:1965 cid:123 eyr:2031 hcl:#c826e0
+iyr:2021 hgt:69in
+ecl:blu pid:807420155
+
+hcl:#ca9ce9 eyr:2023
+iyr:2019
+ecl:gry byr:1922
+pid:457959420 hgt:155cm
+
+pid:535133850
+byr:1972 ecl:gry eyr:2029 iyr:2017
+hcl:#fcb6c9 hgt:65in
+
+hgt:167cm iyr:2013 eyr:2023 pid:12345678a ecl:grn
+byr:1988
+
+hgt:163cm
+iyr:2015 byr:1965 pid:443377177
+ecl:amb
+hcl:#851835 eyr:2027
+
+iyr:2018 hcl:#c29a1a eyr:2021 pid:397321788 ecl:blu hgt:64in
+byr:2000
+
+byr:2003
+ecl: iyr:2016 cid:123
+pid:462501541 hgt:164cm
+eyr:2022
+
+pid:12345678a eyr:2022 ecl: hgt:77in
+hcl:#f65986 byr:1968
+
+pid:126208121
+ecl:gry hgt:63in byr:2003
+iyr:2021 hcl:#12345 eyr:2027
+
+eyr:2029 hgt:172cm hcl:#53ce56 iyr:2009 ecl:grn byr:1975 pid:942787356
+
+ecl:blu pid:529953767 iyr:2009 hcl:#b7eb5d eyr:2023
+hgt:171cm
+cid:123
+
+hgt:77in pid:798716442
+iyr:2018 byr:1993
+ecl:grn hcl:#9c6d3b
+eyr:2029
+
+pid:911071191
+eyr:2025 hgt:58in
+hcl:#f46323
+iyr:2021 byr:1967 ecl:gry cid:123
+
+hgt:170 cid:123
+pid:067351329 eyr:2031 ecl:amb hcl:#5d0fb2
+byr:1931
+iyr:2018
+
+eyr:2031 hgt:170 byr:190
+iyr:2012
+pid:642707114 hcl:#e46974 ecl:xyz
+
+hcl:#066de9
+byr:1959
+eyr:2026
+ecl:hzl iyr:2016 hgt:194cm pid:12345678
+
+pid:617909310 hcl:#12345g
+iyr:2019
+ecl:blu
+eyr:2028 byr:1920 hgt:191cm
+
+pid:12345678a
+eyr:2024 iyr:2021 hcl:#12345g
+ecl:hzl byr:1961
+hgt:64in
+
+pid:445939409 hcl:#1ba3fd hgt:184cm byr:1967
+ecl:oth
+cid:123 eyr:2027
+iyr:2018
+
+hgt:177cm cid:123 iyr:2010
+eyr:2023
+hcl:#320f87
+byr:1966 pid:0123456789
+ecl:hzl
+
+byr:1989 eyr:2022
+hcl:#55fed5 hgt:170
+pid:0123456789
+ecl:oth cid:123
+
+hcl:#33d83a byr:190
+hgt:150cm iyr:2020 pid:12345678a eyr:2019 ecl:blu
+cid:123
+
+byr:1978
+eyr:2027 hgt:75in ecl:hzl iyr:2013 hcl:#7cab84 pid:013524170
+
+hgt:155cm
+ecl:
+iyr:2016 hcl:#b97031
+pid:827045926
+eyr:2029 byr:2003
+
+hcl:#1234567 hgt:67in
+iyr:2013 pid:12345678 ecl:wat byr:1964
+
+pid:151416626 hgt:172cm ecl:brn
+byr:1977
+hcl:#1a5f88 iyr:2013
+
+ecl:grn hcl:#12345g eyr:2027
+pid:0123456789 byr:1958
+iyr:2016
+
+hgt:182cm
+cid:123 hcl:#812bb2
+byr:1919
+ecl:amb
+iyr:2013 pid:12345678
+eyr:2026
+
+pid:032914597 iyr:2013 hgt:69in
+eyr:2025
+byr:1919
+ecl:hzl hcl:123456
+
+iyr:2019 ecl:brn hcl:#2c5851
+eyr:2021 pid:0123456789 byr:190
+
+iyr:2021 ecl:amb byr:1980
+pid:366971502
+hgt:77in hcl:#12345g
+
+hcl:#c15572 pid:126747126
+cid:123
+hgt:159cm eyr:2025 byr:1985 ecl:brn
+
+hgt:163cm iyr:2009 eyr:2028 ecl:grn
+hcl:#3fbc19
+pid:752951639
+byr:1919
+
+byr:1940
+hcl:#f40cf5 iyr:2016 ecl:grn pid:118382723 hgt:170m eyr:2019
+
+eyr:2027
+iyr:2013 pid:729065349 hcl:#1234567 byr:1930 hgt:171cm ecl:brn
+
+iyr:2021
+hgt:170m pid:0123456789 ecl:gry
+byr:1935 eyr:2021
+
+pid:545986864 hgt:77in ecl:brn
+eyr:2026 cid:123 iyr:2009 hcl:#697583 byr:1979
+
+eyr:2024
+cid:123 ecl:wat
+hcl:#436f27
+hgt:184cm byr:1939 pid:065687885
+iyr:2020
+
+hgt:162cm iyr:2013 ecl:oth
+pid:803439196 byr:2003
+eyr:2019 hcl:#d0cbf3
+
+iyr:2020
+eyr:2029 ecl:grn
+pid:642735487
+hgt:173cm hcl:123456
+
+iyr:2009 ecl:
+hgt:63in
+hcl:#9b7a33
+pid:12345678a cid:123 eyr:2028
+
+eyr:2027 byr:1984 iyr:2013
+hcl:#12345g
+ecl:xyz hgt:157cm pid:236515660
+
+eyr:2020
+hgt:167cm hcl:#1234567 iyr:2011 ecl:hzl byr:1983
+
+ecl:amb
+iyr:2018 hcl:#c55047 byr:2003 hgt:188cm pid:0123456789
+cid:123 eyr:2031
+
+hgt:170m pid:277178087 byr:1919 ecl:xyz iyr:2017
+eyr:2019 hcl:#dbbc23
+
+ecl:gry pid:058222867 hcl:#ca9cd0 iyr:2012 eyr:2028 hgt:160cm
+byr:1962
+
+pid:12345678a
+ecl:grn iyr:2010 eyr:2030 byr:1934
+hcl:#74290a hgt:174cm
+
+hgt:184cm
+eyr:2019 hcl:#12345g byr:1924
+ecl:brn
+iyr:2011
+cid:123 pid:501849776
+
+iyr:2012 ecl:grn pid:0123456789 eyr:2020 byr:1919
+hcl:#0c74cf hgt:171cm
+
+eyr:2030 iyr:2017
+hgt:62in
+cid:123
+ecl:gry
+pid:324505231
+byr:1961
+hcl:#bd896e
+
+hcl:#77459a iyr:2018
+pid:12345678 byr:190
+ecl:wat hgt:191cm
+
+pid:947510974 byr:1949 hgt:170 eyr:2019 hcl:#4d2929 iyr:2019
+ecl:grn
+
+iyr:2009 eyr:2019 pid:12345678 hgt:69in hcl:#12345g ecl:brn byr:1929
+
+ecl:gry
+hgt:170 pid:459549078
+iyr:2014 cid:123
+eyr:2031
+hcl:123456
+byr:1920
+
+hgt:61in
+pid:235281763
+ecl:hzl
+byr:1965
+iyr:2018 eyr:2021
+
+eyr:2027 hgt:156cm byr:1919 iyr:2009 pid:102404843
+ecl: hcl:#12345g
+
+byr:1988
+hgt:164cm hcl:#9bb8e3 ecl:gry
+pid:577576203 iyr:2020 eyr:2019
+
+iyr:2009 pid:12345678 byr:1986
+eyr:2031 cid:123 hgt:154cm hcl:#12345g
+ecl:brn
+
+hcl:#1234567
+eyr:2030
+byr:1970 iyr:2012
+ecl:xyz
+pid:407614915 hgt:73in
+
+hcl:123456
+eyr:2027
+pid:823341622 byr:1932
+ecl:oth
+hgt:162cm iyr:2010
+
+ecl:gry pid:460653179 eyr:2028
+iyr:2016 hcl:#12345
+hgt:63in cid:123 byr:1987
+
+byr:1959
+ecl:wat
+iyr:2021
+hcl:#1234567
+pid:12345678a eyr:2024
+hgt:66in
+
+ecl: iyr:2021 byr:190 eyr:2031
+pid:958342276
+hgt:77in
+
+iyr:2009 byr:1959 pid:203307236 eyr:2022 hgt:169cm hcl:#dad91e ecl:brn
+
+ecl:amb eyr:2025 hgt:170m iyr:2021
+hcl:#4b6480 pid:743125637
+byr:1983
+
+pid:400072517 ecl:grn
+iyr:2012 byr:1939 cid:123 hcl:#902591 hgt:170
+eyr:2021
+
+ecl:gry eyr:2027 pid:0123456789
+hgt:67in iyr:2009 byr:1962
+
+pid:642265471
+cid:123
+byr:2001 ecl:grn
+hcl:#5ea770 iyr:2019
+eyr:2031
+hgt:179cm
+
+hgt:175cm ecl:blu
+hcl:#b9bc98
+cid:123
+iyr:2013 eyr:2025
+byr:2003 pid:965203641
+
+eyr:2026
+hgt:59in hcl:#73a645 iyr:2009 pid:12345678a ecl:wat
+byr:1969
+
+ecl:xyz
+hcl:#92bdf9 pid:370855657 eyr:2022 iyr:2009 hgt:157cm
+
+byr:1923
+iyr:2018 eyr:2029 hcl:#679bc1 pid:345204017 hgt:60in
+ecl:gry
+
+cid:123 hcl:#12345 eyr:2031
+pid:12345678a byr:1980
+iyr:2009 ecl:gry hgt:173cm
+
+ecl:xyz hcl:123456
+eyr:2020 pid:643075666
+byr:1975
+hgt:58in
+iyr:2015
+
+pid:941436652 iyr:2021
+ecl:brn hcl:#d443f6 cid:123 byr:1958 eyr:2022 hgt:72in
+
+eyr:2021 hgt:184cm
+cid:123 hcl:#e3c693 byr:1942 pid:234968364 ecl:amb iyr:2013
+
+pid:131294997 hgt:58in
+eyr:2029
+iyr:2018
+ecl:oth
+hcl:#4fa720
+byr:1936
+
+byr:1977 iyr:2014
+hgt:170 ecl:grn
+pid:919834827
+hcl:123456 eyr:2022
+
+iyr:2010 pid:090614876 eyr:2025 byr:1946 hgt:183cm hcl:#cd0067 ecl:blu
+
+eyr:2019 iyr:2021
+hgt:58in pid:224921407
+hcl:#55a343
+byr:1999
+ecl:brn
+
+pid:973095157 hcl:#659017
+hgt:77in
+iyr:2015 eyr:2026
+byr:1941 ecl:
+
+eyr:2024 iyr:2020 hgt:188cm byr:1942 pid:232682626 hcl:#b3151d
+ecl:blu
+
+hgt:180cm
+pid:12345678
+ecl:xyz eyr:2019
+iyr:2009 cid:123
+byr:1948 hcl:#c4133e
+
+hgt:191cm
+iyr:2017
+eyr:2025
+pid:113358026 hcl:#a397db ecl:amb byr:1966
+cid:123
+
+hcl:#178e53
+ecl:oth
+iyr:2010 byr:190 hgt:170m pid:481657626 eyr:2019
+
+eyr:2025 hgt:76in byr:1980 ecl:xyz pid:12345678
+iyr:2016 hcl:#e0e2c1
+
+ecl:xyz eyr:2019 byr:1919
+iyr:2014 hgt:166cm
+hcl:#bfa7fd
+
+byr:1952 hcl:#4b1e02 iyr:2014 eyr:2030 pid:793230681
+ecl:blu hgt:184cm
+
+ecl:grn iyr:2015
+eyr:2019
+hgt:168cm pid:12345678
+byr:1989 hcl:#46834c
+
+pid:12345678 ecl:blu
+hgt:170m iyr:2016
+byr:190 cid:123 eyr:2031
+
+hgt:73in pid:0123456789
+hcl:#12345 ecl:amb eyr:2029 iyr:2021 byr:1919
+
+hgt:74in pid:165001820
+byr:1919 cid:123
+ecl:gry
+iyr:2014
+eyr:2025 hcl:#85fdb0
+
+hcl:#09996b iyr:2009 ecl:amb
+cid:123 byr:1921
+pid:355593449
+hgt:69in eyr:2019
+
+ecl:wat
+hcl:123456 pid:12345678a
+hgt:77in byr:1964
+eyr:2029 iyr:2021
+
+eyr:2026 pid:392430344
+iyr:2019 byr:1919
+ecl:blu
+hcl:#f1c09b
+
+ecl:blu byr:1998 cid:123
+hcl:#a98b02 iyr:2009 hgt:154cm eyr:2022
+
+ecl:blu eyr:2021 hcl:#22fd7d
+iyr:2013
+pid:105254635
+hgt:67in byr:1919
+
+hcl:#b86ef2 eyr:2029 pid:12345678a iyr:2014 byr:1940 hgt:156cm ecl:wat
+
+cid:123
+hgt:184cm iyr:2020 byr:1921
+hcl:#626972
+pid:12345678 ecl:hzl
+
+byr:1965 pid:771713583 eyr:2025
+hgt:77in iyr:2013 hcl:#8982a6
+ecl:oth
+
+eyr:2026 pid:299819360 byr:1919 ecl:hzl hgt:58in iyr:2012
+
+pid:927983670 hgt:66in
+byr:2001
+eyr:2020
+hcl:#8e98ba iyr:2009
+
+pid:775005693
+ecl:gry eyr:2027 hcl:#7aa869 byr:1986
+hgt:173cm
+iyr:2009
+
+eyr:2029 pid:208644460 cid:123
+hgt:77in byr:1988
+iyr:2021 ecl:brn hcl:#1234567
+
+eyr:2021 pid:0123456789
+iyr:2017 hgt:67in
+byr:1919 ecl:wat
+hcl:#12345g
+
+byr:1930 ecl:grn
+hgt:170 pid:12345678a eyr:2019
+iyr:2011 hcl:#1234567
+
+hcl:#1234567
+byr:1947 ecl:brn
+eyr:2022
+pid:12345678 iyr:2014
+
+ecl:grn hcl:#12345
+byr:1947
+hgt:167cm
+iyr:2021
+cid:123
+pid:878000148 eyr:2019
+
+hgt:173cm hcl:#16fbad byr:2003
+eyr:2029 iyr:2018 pid:020142650
+ecl:hzl
+
+hcl:#0c652a
+byr:1982 hgt:74in ecl: pid:990211113 eyr:2029
+iyr:2018
+
+byr:1922 hcl:#12345g
+eyr:2019 ecl:gry iyr:2015 hgt:149cm cid:123
+pid:571488874
+
+hgt:62in cid:123 ecl:blu pid:802012794 hcl:#8baf84 byr:1919
+eyr:2026
+iyr:2009
+
+pid:171949584 byr:1952 hcl:123456
+eyr:2031 iyr:2018
+hgt:170m
+ecl:amb
+
+hgt:180cm
+ecl:hzl hcl:#4d676a byr:2003
+eyr:2028 cid:123
+pid:085043368
+
+hcl:#100392 byr:1919 hgt:62in ecl:grn eyr:2031
+iyr:2009
+
+hgt:149cm
+iyr:2020 pid:983775687 cid:123
+hcl:#fb7fe4
+ecl:brn eyr:2026
+byr:190
+
+pid:971344082
+hcl:123456
+iyr:2009 eyr:2027 cid:123
+hgt:67in byr:1962
+ecl:xyz
+
+eyr:2030 iyr:2018 pid:12345678a byr:1919
+ecl:brn
+hgt:186cm hcl:#94905a
+
+pid:12345678
+eyr:2023
+byr:1960
+iyr:2019 hgt:60in hcl:#12345g ecl:grn
+
+eyr:2027 cid:123 hgt:194cm pid:531923194 iyr:2013
+ecl:gry byr:1919
+hcl:#1234567
+
+iyr:2009
+hgt:170
+eyr:2026
+ecl: hcl:#657059 pid:133753557 byr:1980
+
+byr:190 ecl:gry pid:536790409 hcl:#1d36fa
+eyr:2022 iyr:2013
+hgt:60in
+
+hgt:62in eyr:2029
+iyr:2016 cid:123 pid:12345678 hcl:#73010b
+byr:1931
+
+pid:12345678 ecl:hzl
+eyr:2023
+hgt:64in
+byr:1987 hcl:#186a3d iyr:2016
+
+hgt:58in
+ecl:hzl hcl:#1234567
+cid:123 iyr:2019 eyr:2023
+byr:1919 pid:344365203
+
+pid:820499897
+eyr:2020 ecl:hzl iyr:2011
+hcl:#8e4109 hgt:77in byr:1931
+
+iyr:2012 byr:1983 hgt:75in cid:123
+hcl:#5166bb ecl:oth pid:891935776
+eyr:2023
+
+iyr:2009
+ecl:blu hgt:194cm hcl:#12345
+eyr:2022 pid:327588855 cid:123
+byr:1996
+
+hcl:#2100d3 ecl:brn byr:1975 hgt:66in eyr:2026 pid:251661794 iyr:2013
+
+ecl:blu eyr:2019
+hgt:75in iyr:2019 byr:2001 cid:123
+pid:512244527 hcl:#df4183
+
+hgt:158cm byr:1919 pid:951960680 hcl:#e2c96c ecl:grn iyr:2017 eyr:2024
+
+eyr:2021
+byr:1934
+iyr:2020
+ecl:brn pid:851183612 hcl:#e4bf22
+hgt:74in
+
+eyr:2027 hgt:154cm iyr:2019 ecl:grn
+byr:1952 hcl:#1234567 pid:197329340
+
+ecl:blu byr:2003
+eyr:2025 hcl:123456 iyr:2010
+hgt:175cm
+pid:278448897
+
+hcl:#c064c9 pid:511260532 byr:1991 iyr:2021 eyr:2021 hgt:60in
+
+pid:695300646
+eyr:2022 cid:123 hgt:60in hcl:123456
+byr:1919
+iyr:2020 ecl:wat
+
+iyr:2021 cid:123
+hgt:59in
+hcl:#e80d45 eyr:2023 ecl:brn
+byr:1983 pid:880115637
+
+hcl:123456 byr:2003 ecl:grn
+iyr:2017 hgt:72in pid:388863195
+eyr:2023
+
+eyr:2029
+cid:123 hcl:#9d5c3c byr:1973
+hgt:69in pid:503389649 iyr:2019
+
+hgt:68in
+iyr:2014 pid:872063128 byr:1963
+eyr:2019 hcl:#1234567 ecl:wat
+
+pid:12345678a hcl:#12345 iyr:2018 eyr:2030
+ecl:grn hgt:194cm byr:1976
+
+byr:1945
+hcl:#cc0b5f hgt:160cm eyr:2031
+ecl:oth iyr:2010 pid:304421816
+
+eyr:2025 byr:1985 hgt:71in
+ecl:grn iyr:2014 hcl:#05cd36
+pid:12345678
+
+ecl:oth
+eyr:2031 iyr:2018
+cid:123 hgt:172cm
+hcl:123456 pid:688153572 byr:1993
+
+hgt:59in byr:1949 cid:123
+pid:885402077 hcl:#05593c iyr:2013 ecl: eyr:2031
+
+byr:1932 hgt:190cm iyr:2014
+eyr:2019 ecl:gry
+hcl:#1234567
+pid:540542738
+
+hcl:#5033b7 byr:1919 eyr:2023
+ecl:gry
+iyr:2020 pid:001183744
+
+pid:013939620 iyr:2013
+eyr:2030 hcl:#6452f8 ecl:hzl cid:123
+hgt:58in byr:1923
+
+hgt:77in
+cid:123
+iyr:2009 pid:684913644 hcl:#12345g eyr:2023 byr:1993
+
+eyr:2023 pid:407223013
+cid:123 hcl:#e8d640 byr:2001
+hgt:167cm iyr:2020
+ecl:blu
+
+cid:123 hgt:65in
+hcl:#1234567 iyr:2009 ecl: pid:942063126
+byr:1919
+eyr:2027
+
+hcl:#12345g eyr:2021 hgt:74in byr:1958 iyr:2018 cid:123
+pid:178542142
+ecl:wat
+
+iyr:2021
+byr:2003
+eyr:2019
+hcl:#1278d0 hgt:194cm ecl:gry pid:511010810
+
+hcl:#12345g pid:0123456789 byr:1943 eyr:2019 iyr:2021 hgt:149cm ecl:
+
+hgt:58in hcl:#4944d4
+pid:483514340
+eyr:2019 byr:1991 ecl:brn iyr:2019
+
+byr:2003 cid:123 hcl:#5a9917 hgt:64in iyr:2011 pid:599721829 ecl:wat
+eyr:2022
+
+iyr:2017
+hgt:77in
+ecl:wat pid:355325228 byr:1919 hcl:#e720de eyr:2030
+
+iyr:2021
+hgt:69in
+pid:625207463 ecl:oth hcl:#1debcd byr:1926
+eyr:2023
+
+hgt:170m pid:12345678 cid:123 iyr:2021 byr:1934
+ecl:hzl
+eyr:2026
+
+hgt:68in
+cid:123 byr:1960 hcl:#de5217 ecl:hzl pid:262810676 iyr:2012
+
+pid:544086057
+ecl:amb
+hgt:63in eyr:2029 cid:123 hcl:#c4dff3
+byr:190
+iyr:2012
+
+eyr:2025 pid:12345678a byr:1919
+iyr:2021
+hgt:165cm
+ecl:oth
+hcl:#05b26f
+
+hcl:123456 pid:035517739
+ecl: iyr:2016
+eyr:2019 hgt:58in byr:190 cid:123
+
+cid:123
+iyr:2017 byr:1919
+hcl:#3538c0 ecl:grn pid:812050167
+hgt:64in eyr:2023
+
+eyr:2025
+hcl:#cd9fe7
+ecl:brn
+pid:603065154 byr:190
+iyr:2014 hgt:179cm
+
+eyr:2024 byr:1968 ecl:wat
+hcl:#12345 hgt:69in
+iyr:2018
+pid:12345678a
+
+hcl:#1234567 byr:190 eyr:2019 pid:447552134
+ecl:amb hgt:188cm iyr:2009
