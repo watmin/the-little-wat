@@ -100,7 +100,14 @@
   :Nil [] :True [] :False []
   :Equal [] :Greater [] :Less []
   :Add [] :Subtract [] :Multiply [] :Divide []
-  :Not [] :Negate [] :Return [])
+  :Not [] :Negate []
+  ;; chapter 21: statements, and globals. `slot` indexes the constant pool, where the variable's
+  ;; NAME is stored as a string -- Nystrom's identifierConstant().
+  :Print [] :Pop []
+  :DefineGlobal [slot <- :wat::core::i64]
+  :GetGlobal [slot <- :wat::core::i64]
+  :SetGlobal [slot <- :wat::core::i64]
+  :Return [])
 
 (:wat::core::typealias :loxv::Code (:wat::core::Vector :- [:loxv::Op]))
 (:wat::core::typealias :loxv::Lines (:wat::core::Vector :- [:wat::core::i64]))
@@ -134,7 +141,12 @@
     [:loxv::Op.Equal {} "OP_EQUAL"] [:loxv::Op.Greater {} "OP_GREATER"] [:loxv::Op.Less {} "OP_LESS"]
     [:loxv::Op.Add {} "OP_ADD"] [:loxv::Op.Subtract {} "OP_SUBTRACT"]
     [:loxv::Op.Multiply {} "OP_MULTIPLY"] [:loxv::Op.Divide {} "OP_DIVIDE"]
-    [:loxv::Op.Not {} "OP_NOT"] [:loxv::Op.Negate {} "OP_NEGATE"] [:loxv::Op.Return {} "OP_RETURN"]))
+    [:loxv::Op.Not {} "OP_NOT"] [:loxv::Op.Negate {} "OP_NEGATE"]
+    [:loxv::Op.Print {} "OP_PRINT"] [:loxv::Op.Pop {} "OP_POP"]
+    [:loxv::Op.DefineGlobal {:slot s} "OP_DEFINE_GLOBAL"]
+    [:loxv::Op.GetGlobal {:slot s} "OP_GET_GLOBAL"]
+    [:loxv::Op.SetGlobal {:slot s} "OP_SET_GLOBAL"]
+    [:loxv::Op.Return {} "OP_RETURN"]))
 
 (:wat::core::defn :loxv::op-key [op <- :loxv::Op] -> :wat::core::String
   (:wat::core::match op
@@ -143,7 +155,12 @@
     [:loxv::Op.Equal {} "EQ"] [:loxv::Op.Greater {} "GT"] [:loxv::Op.Less {} "LT"]
     [:loxv::Op.Add {} "ADD"] [:loxv::Op.Subtract {} "SUB"]
     [:loxv::Op.Multiply {} "MUL"] [:loxv::Op.Divide {} "DIV"]
-    [:loxv::Op.Not {} "NOT"] [:loxv::Op.Negate {} "NEG"] [:loxv::Op.Return {} "RET"]))
+    [:loxv::Op.Not {} "NOT"] [:loxv::Op.Negate {} "NEG"]
+    [:loxv::Op.Print {} "PRINT"] [:loxv::Op.Pop {} "POP"]
+    [:loxv::Op.DefineGlobal {:slot s} (:wat::string::concat "DEFG/" (:wat::i64::to-string s))]
+    [:loxv::Op.GetGlobal {:slot s} (:wat::string::concat "GETG/" (:wat::i64::to-string s))]
+    [:loxv::Op.SetGlobal {:slot s} (:wat::string::concat "SETG/" (:wat::i64::to-string s))]
+    [:loxv::Op.Return {} "RET"]))
 
 (:wat::core::defn :loxv::code-sig [c <- :loxv::Chunk] -> :wat::core::String
   (:wat::string::trim

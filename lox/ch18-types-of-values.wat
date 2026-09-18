@@ -33,9 +33,12 @@
   (:loxv::code-sig (:loxv::C/chunk (:loxv::compile src))))
 
 (:wat::core::defn :c18::steps [src <- :wat::core::String] -> :wat::core::String
+  ;; `:globals` and `:out` are chapter 21's, and this function wants neither. A variant pattern
+  ;; must name EVERY field (FINDINGS: "a variant pattern must name every field"), so extending
+  ;; the VM's state in chapter 21 edited this line, which is about chapter 18's step count.
   (:wat::core::match (:loxv::run (:loxv::C/chunk (:loxv::compile src)))
-    [:loxv::Out.Ok {:stack s :steps k} (:wat::i64::to-string k)]
-    [:loxv::Out.Err {:msg m :line l :steps k} (:wat::i64::to-string k)]))
+    [:loxv::Out.Ok {:stack s :globals g :out o :steps k} (:wat::i64::to-string k)]
+    [:loxv::Out.Err {:msg m :line l :out o :steps k} (:wat::i64::to-string k)]))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil
   (:wat::core::let

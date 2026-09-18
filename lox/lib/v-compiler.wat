@@ -69,15 +69,24 @@
 (:wat::core::defn :loxv::expression [p <- :loxv::C] -> :loxv::C
   (:loxv::parse-prec p (:lox::PREC-ASSIGNMENT)))
 
+;; chapter 21's `canAssign`. A prefix rule may only consume a following `=` when it was reached
+;; at or below assignment precedence -- which is what makes `a * b = c` a compile error instead
+;; of silently parsing as `a * (b = c)`. Nystrom calls this out as the subtlest bug in the
+;; chapter; ch21 checks it.
 (:wat::core::defn :loxv::parse-prec [p <- :loxv::C prec <- :wat::core::i64] -> :loxv::C
-  (:loxv::infix-loop (:loxv::c-prefix (:loxv::c-advance p)) prec))
+  (:wat::core::let [can-assign (:wat::core::<= prec (:lox::PREC-ASSIGNMENT))
+                    p1 (:loxv::infix-loop (:loxv::c-prefix (:loxv::c-advance p) can-assign) prec)]
+    ;; if an `=` is still sitting there, nothing was allowed to take it
+    (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p1) "EQUAL"))
+      (:loxv::c-error p1 "Invalid assignment target.")
+      p1)))
 
 (:wat::core::defn :loxv::infix-loop [p <- :loxv::C prec <- :wat::core::i64] -> :loxv::C
   (:wat::core::if (:wat::core::<= prec (:loxv::infix-prec (:lox::tok-name (:lox::Token/kind (:loxv::C/cur p)))))
     (:loxv::infix-loop (:loxv::c-infix (:loxv::c-advance p)) prec)
     p))
 
-(:wat::core::defn :loxv::c-prefix [p <- :loxv::C] -> :loxv::C
+(:wat::core::defn :loxv::c-prefix [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
   (:wat::core::let [k (:lox::tok-name (:lox::Token/kind (:loxv::C/prev p)))]
     (:wat::core::cond
       ((:wat::core::= k "NUMBER")
@@ -93,6 +102,7 @@
         (:wat::core::let [lex (:lox::Token/text (:loxv::C/prev p))]
           (:loxv::c-constant p
             (:loxv::str (:wat::string::subs lex 1 (:wat::core::- (:wat::string::length lex) 1))))))
+      ((:wat::core::= k "IDENTIFIER") (:loxv::named-variable p can-assign))
       ((:wat::core::= k "NIL") (:loxv::c-emit p (:loxv::Op.Nil {})))
       ((:wat::core::= k "TRUE") (:loxv::c-emit p (:loxv::Op.True {})))
       ((:wat::core::= k "FALSE") (:loxv::c-emit p (:loxv::Op.False {})))
@@ -121,6 +131,108 @@
       ((:wat::core::= k "LESS_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Greater {}) (:loxv::Op.Not {})))
       (:else (:loxv::c-error p1 "Expect an operator.")))))
 
+;; ---- chapter 21: names, statements and declarations
+;; identifierConstant(): the variable's NAME goes in the constant pool, and the instruction
+;; carries its slot. Two calls rather than one, because a wat function answers one value.
+(:wat::core::defn :loxv::add-name [p <- :loxv::C name <- :wat::core::String] -> :loxv::C
+  (:wat::core::assoc p :chunk (:loxv::add-constant (:loxv::C/chunk p) (:loxv::str name))))
+
+(:wat::core::defn :loxv::last-slot [p <- :loxv::C] -> :wat::core::i64
+  (:loxv::constant-slot (:loxv::C/chunk p)))
+
+(:wat::core::defn :loxv::named-variable [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::let [name (:lox::Token/text (:loxv::C/prev p))
+                    p1 (:loxv::add-name p name)
+                    slot (:loxv::last-slot p1)]
+    (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p1) "EQUAL"))
+      (:loxv::c-emit (:loxv::expression (:loxv::c-advance p1)) (:loxv::Op.SetGlobal {:slot slot}))
+      (:loxv::c-emit p1 (:loxv::Op.GetGlobal {:slot slot})))))
+
+(:wat::core::defn :loxv::print-stmt [p <- :loxv::C] -> :loxv::C
+  (:loxv::c-emit
+    (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after value.")
+    (:loxv::Op.Print {})))
+
+;; an expression statement evaluates and DISCARDS -- the Pop is the whole difference between it
+;; and a print, and it is why `1 + 2;` leaves the stack as it found it
+(:wat::core::defn :loxv::expr-stmt [p <- :loxv::C] -> :loxv::C
+  (:loxv::c-emit
+    (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after expression.")
+    (:loxv::Op.Pop {})))
+
+(:wat::core::defn :loxv::statement [p <- :loxv::C] -> :loxv::C
+  (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "PRINT")
+    (:loxv::print-stmt (:loxv::c-advance p))
+    (:loxv::expr-stmt p)))
+
+(:wat::core::defn :loxv::var-decl [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::c-consume p "IDENTIFIER" "Expect variable name.")
+                    p2 (:loxv::add-name p1 (:lox::Token/text (:loxv::C/prev p1)))
+                    slot (:loxv::last-slot p2)
+                    ;; `var a;` is `var a = nil;` -- the initializer is optional and defaults
+                    p3 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p2) "EQUAL")
+                         (:loxv::expression (:loxv::c-advance p2))
+                         (:loxv::c-emit p2 (:loxv::Op.Nil {})))
+                    p4 (:loxv::c-consume p3 "SEMICOLON" "Expect ';' after variable declaration.")]
+    (:loxv::c-emit p4 (:loxv::Op.DefineGlobal {:slot slot}))))
+
+(:wat::core::defn :loxv::sync-start? [k <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= k "CLASS")
+    (:wat::core::or (:wat::core::= k "FUN")
+      (:wat::core::or (:wat::core::= k "VAR")
+        (:wat::core::or (:wat::core::= k "FOR")
+          (:wat::core::or (:wat::core::= k "IF")
+            (:wat::core::or (:wat::core::= k "WHILE")
+              (:wat::core::or (:wat::core::= k "PRINT") (:wat::core::= k "RETURN")))))))))
+
+;; synchronize(): after an error, skip to something that looks like a statement boundary, so one
+;; mistake reports once instead of cascading. This is what makes panic mode survivable.
+(:wat::core::defn :loxv::sync-loop [p <- :loxv::C] -> :loxv::C
+  (:wat::core::cond
+    ((:lox::kind-is? (:loxv::C/cur p) "EOF") p)
+    ((:lox::kind-is? (:loxv::C/prev p) "SEMICOLON") p)
+    ((:loxv::sync-start? (:lox::tok-name (:lox::Token/kind (:loxv::C/cur p)))) p)
+    (:else (:loxv::sync-loop (:loxv::c-advance p)))))
+
+(:wat::core::defn :loxv::synchronize [p <- :loxv::C] -> :loxv::C
+  (:loxv::sync-loop (:wat::core::assoc p :panic false)))
+
+(:wat::core::defn :loxv::declaration [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [p1 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "VAR")
+                         (:loxv::var-decl (:loxv::c-advance p))
+                         (:loxv::statement p))]
+    (:wat::core::if (:loxv::C/panic p1) (:loxv::synchronize p1) p1)))
+
+(:wat::core::defn :loxv::decl-loop [p <- :loxv::C] -> :loxv::C
+  (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "EOF") p
+    (:loxv::decl-loop (:loxv::declaration p))))
+
+;; chapter 21 replaces the top level: a source is a sequence of declarations, not one expression.
+;; `:loxv::compile` -- the expression grammar chapters 17 to 20 are written against -- is kept
+;; beside it rather than replaced, so those chapters keep testing the thing they were written for.
+(:wat::core::defn :loxv::compile-program [src <- :wat::core::String] -> :loxv::C
+  (:wat::core::let
+    [p0 (:loxv::C :src src :n (:wat::string::length src) :i 0 :line 1
+                  :cur (:lox::blank-token) :prev (:lox::blank-token)
+                  :chunk (:loxv::new-chunk)
+                  :errs (:wat::core::Vector :- [:wat::core::String]) :panic false)
+     p1 (:loxv::c-advance p0)
+     p2 (:loxv::decl-loop p1)]
+    (:loxv::c-emit p2 (:loxv::Op.Return {}))))
+
+;; run a program and answer what it PRINTED, one line per print, or the first error
+(:wat::core::defn :loxv::run-program [src <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [p (:loxv::compile-program src)
+                    es (:loxv::C/errs p)]
+    (:wat::core::if (:wat::core::> (:wat::core::length es) 0) (:wat::core::nth es 0)
+      (:wat::core::match (:loxv::run (:loxv::C/chunk p))
+        [:loxv::Out.Err {:msg m :line l :out o :steps k}
+          (:wat::string::concat "[line " (:wat::i64::to-string l) "] Runtime error: " m)]
+        [:loxv::Out.Ok {:stack s :globals g :out o :steps k} (:wat::string::join "|" o)]))))
+
+(:wat::core::defn :loxv::program-errors [src <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::length (:loxv::C/errs (:loxv::compile-program src))))
+
 (:wat::core::defn :loxv::compile [src <- :wat::core::String] -> :loxv::C
   (:wat::core::let
     [p0 (:loxv::C :src src :n (:wat::string::length src) :i 0 :line 1
@@ -138,8 +250,8 @@
                     es (:loxv::C/errs p)]
     (:wat::core::if (:wat::core::> (:wat::core::length es) 0) (:wat::core::nth es 0)
       (:wat::core::match (:loxv::run (:loxv::C/chunk p))
-        [:loxv::Out.Err {:msg m :line l :steps k}
+        [:loxv::Out.Err {:msg m :line l :out o :steps k}
           (:wat::string::concat "[line " (:wat::i64::to-string l) "] Runtime error: " m)]
-        [:loxv::Out.Ok {:stack s :steps k}
+        [:loxv::Out.Ok {:stack s :globals g :out o :steps k}
           (:wat::core::if (:wat::core::= (:wat::core::length s) 0) "(empty stack)"
             (:loxv::show (:wat::core::nth s (:wat::core::- (:wat::core::length s) 1))))]))))

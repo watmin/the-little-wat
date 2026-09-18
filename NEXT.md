@@ -349,7 +349,7 @@ ch 1 and PAIP's CL chapters got.
 | 18 | **Types of values** | **done** (C-101) | a tagged union is a `defenum`; `valuesEqual` is `(= a b)` (F-019 clarified); Nystrom's NaN bug in `<=` reproduced; runtime errors are a `Step.Fail` value, one match per instruction. Runs on `:loxv::` so ch15's measurements keep their code |
 | 19 | **Strings** | **done** (C-102) | one enum variant and one `string::concat`; `Obj`/`ObjString`/`freeObjects` are C's memory management. Debt: ch26's collector must build its own heap |
 | 20 | **Hash tables** | **done** (C-103) — **the earlier ruling was half wrong** | the table itself is not worth rewriting (C-078 priced wat's two), but the chapter's **interning** is a language decision, and its cost claim is about a C program: measured, it buys **nothing at 10 characters** and about a quarter at 100 000 |
-| 21 | Global variables | **not started** |
+| 21 | **Global variables** | **done** (C-104) | statements, a globals table, assignment as an expression, `synchronize()` counted rather than assumed; `canAssign` checked on five invalid targets. Cost: **F-115** |
 | 22 | Local variables | **not started** |
 | 23 | Jumping back and forth | **not started** |
 | 24 | Calls and functions | **not started** |
