@@ -152,3 +152,18 @@
 (:wat::core::defn :sem::wait [c <- :sem::Conn name <- :wat::core::String polls <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:sem::try-once c name) polls
     (:sem::wait c name (:wat::core::+ polls 1))))
+
+;; A BOUNDED wait, which a language with real blocking would not need and which this port cannot
+;; do without. Downey's classical problems include deadlocks he names on purpose — the dining
+;; philosophers who each take their left fork are his worked example — and a deadlock here is not
+;; a stuck thread but an INFINITE SPIN, which would hang the run instead of reporting.
+;;
+;; So `wait-upto` gives up after `limit` polls and answers -1. That turns "this design deadlocks"
+;; from a hang into a measurement, which is the only way the failure can be shown at all.
+;; It is also, quietly, the one thing the spin buys back: a blocking wait cannot time out without
+;; extra machinery, and this one gets it for free.
+(:wat::core::defn :sem::wait-upto
+  [c <- :sem::Conn name <- :wat::core::String limit <- :wat::core::i64 polls <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:sem::try-once c name) polls
+    (:wat::core::if (:wat::core::>= polls limit) -1
+      (:sem::wait-upto c name limit (:wat::core::+ polls 1)))))
