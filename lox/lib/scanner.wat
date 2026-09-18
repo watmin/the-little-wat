@@ -21,12 +21,16 @@
 ;; O(start) (it counts chars, then skips) but the interpreted loop around it costs more.
 ;;
 ;; **And the number that matters is what a scanner then costs.** Both shapes here are interpreted
-;; per-character loops: the record-per-character one (Nystrom's, translated) runs at about 220
-;; microseconds per character, the record-per-token one at about 80, and a bare walk that does
+;; per-character loops: the record-per-character one (Nystrom's, translated) runs at about 140
+;; microseconds per character, the record-per-token one at about 75, and a bare walk that does
 ;; nothing but look at each character -- `probes/lox/char-access-cost.wat` -- at about 10. So the
-;; floor is the loop, and the shape multiplies it. Chapter 15 (C-098) found a 30% win by hoisting
-;; a chunk's arrays out of the dispatch loop; there is no equivalent hoist here, because there is
-;; no indexable form of a String to hoist INTO.
+;; floor is the loop, and the shape roughly doubles it. That is AFTER the record update was made
+;; as cheap as wat allows: restating the five fields instead of `assoc`ing one puts the
+;; record-per-character shape at about 190 us/char and the ratio at 2.5x rather than 1.9x.
+;;
+;; Chapter 15 (C-098) found a 30% win by hoisting a chunk's arrays out of the dispatch loop;
+;; there is no equivalent hoist here, because there is no indexable form of a String to hoist
+;; INTO.
 ;;
 ;; **A Token here copies its lexeme; Nystrom's does not.** His is `{type, start, length, line}`
 ;; with `start` pointing into the source that outlives it. The wat choices are a copied substring
@@ -77,21 +81,19 @@
 (:wat::core::defn :lox::peek-next [sc <- :lox::Scanner] -> :wat::core::String
   (:lox::chr sc (:wat::core::+ (:lox::Scanner/current sc) 1)))
 
+;; `:wat::core::assoc` takes a record and answers the same nominal type, changing one field
+;; without restating the others. It is not in the user guide's container table and the reference
+;; line calls `assoc` "polymorphic over HashMap/Vec"; `probes/lox/record-update.wat` measures what
+;; it is worth on a 5-field record like this one -- about 3x, and 5.8x at nine fields, because
+;; restating reads every field at F-096's 6130 ns apiece while `assoc` reads one.
 (:wat::core::defn :lox::advance [sc <- :lox::Scanner] -> :lox::Scanner
-  (:lox::Scanner :src (:lox::Scanner/src sc) :n (:lox::Scanner/n sc)
-                 :start (:lox::Scanner/start sc)
-                 :current (:wat::core::+ (:lox::Scanner/current sc) 1)
-                 :line (:lox::Scanner/line sc)))
+  (:wat::core::assoc sc :current (:wat::core::+ (:lox::Scanner/current sc) 1)))
 
 (:wat::core::defn :lox::bump-line [sc <- :lox::Scanner] -> :lox::Scanner
-  (:lox::Scanner :src (:lox::Scanner/src sc) :n (:lox::Scanner/n sc)
-                 :start (:lox::Scanner/start sc) :current (:lox::Scanner/current sc)
-                 :line (:wat::core::+ (:lox::Scanner/line sc) 1)))
+  (:wat::core::assoc sc :line (:wat::core::+ (:lox::Scanner/line sc) 1)))
 
 (:wat::core::defn :lox::mark [sc <- :lox::Scanner] -> :lox::Scanner
-  (:lox::Scanner :src (:lox::Scanner/src sc) :n (:lox::Scanner/n sc)
-                 :start (:lox::Scanner/current sc) :current (:lox::Scanner/current sc)
-                 :line (:lox::Scanner/line sc)))
+  (:wat::core::assoc sc :start (:lox::Scanner/current sc)))
 
 (:wat::core::defn :lox::lexeme [sc <- :lox::Scanner] -> :wat::core::String
   (:wat::string::subs (:lox::Scanner/src sc) (:lox::Scanner/start sc) (:lox::Scanner/current sc)))
