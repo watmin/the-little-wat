@@ -29,7 +29,16 @@
   ;; to be: wat owns the heap, so `Obj`, `ObjString`, `allocateObject`, the `vm.objects` list and
   ;; `freeObjects` are the chapter's C-memory half, and what is left is that a value can be a
   ;; string. See lox/ch19-strings.wat for what that costs and what it buys.
-  :Str  [s <- :wat::core::String])
+  :Str  [s <- :wat::core::String]
+  ;; chapter 24. Nystrom's ObjFunction: a chunk, an arity and a name. The enum is recursive
+  ;; through a `defrecord` here -- a `Val` holds a `Chunk`, and a `Chunk`'s constant pool holds
+  ;; `Val`s -- which wat accepts (probes/lox/rule-table.wat's sibling question, checked before it
+  ;; was relied on).
+  :Fn   [chunk <- :loxv::Chunk  name <- :wat::core::String  arity <- :wat::core::i64]
+  ;; a native is named rather than carried: a closure cannot live in a `:wat::enum::Pure` (the
+  ;; containment rule, F-114), and Nystrom's C function pointer has no wat spelling that a value
+  ;; can hold. So the VM dispatches on the name, which is what a table of function pointers is.
+  :Native [name <- :wat::core::String  arity <- :wat::core::i64])
 
 (:wat::core::typealias :loxv::Stack (:wat::core::Vector :- [:loxv::Val]))
 (:wat::core::typealias :loxv::Consts (:wat::core::Vector :- [:loxv::Val]))
@@ -41,34 +50,47 @@
     [:loxv::Val.Bool {:b b} (:wat::core::if b "true" "false")]
     ;; printValue prints a string's characters, not its quotes
     [:loxv::Val.Str {:s x} x]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a}
+      (:wat::core::if (:wat::core::= nm "") "<script>" (:wat::string::concat "<fn " nm ">"))]
+    [:loxv::Val.Native {:name nm :arity a} "<native fn>"]
     [:loxv::Val.Num {:n n} (:wat::f64::to-string n)]))
 
 (:wat::core::defn :loxv::type-name [v <- :loxv::Val] -> :wat::core::String
   (:wat::core::match v
     [:loxv::Val.Nil {} "nil"] [:loxv::Val.Bool {:b b} "bool"] [:loxv::Val.Num {:n n} "number"]
-    [:loxv::Val.Str {:s x} "string"]))
+    [:loxv::Val.Str {:s x} "string"]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} "function"]
+    [:loxv::Val.Native {:name nm :arity a} "function"]))
 
 (:wat::core::defn :loxv::num? [v <- :loxv::Val] -> :wat::core::bool
   (:wat::core::match v
     [:loxv::Val.Num {:n n} true] [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]
-    [:loxv::Val.Str {:s x} false]))
+    [:loxv::Val.Str {:s x} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Native {:name nm :arity a} false]))
 
 (:wat::core::defn :loxv::str? [v <- :loxv::Val] -> :wat::core::bool
   (:wat::core::match v
     [:loxv::Val.Str {:s x} true] [:loxv::Val.Num {:n n} false]
-    [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]))
+    [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Native {:name nm :arity a} false]))
 
 (:wat::core::defn :loxv::as-str [v <- :loxv::Val] -> :wat::core::String
   (:wat::core::match v
     [:loxv::Val.Str {:s x} x] [:loxv::Val.Num {:n n} ""]
-    [:loxv::Val.Nil {} ""] [:loxv::Val.Bool {:b b} ""]))
+    [:loxv::Val.Nil {} ""] [:loxv::Val.Bool {:b b} ""]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} ""]
+    [:loxv::Val.Native {:name nm :arity a} ""]))
 
 ;; AS_NUMBER, with the guard the C macro does not have. Callers check `num?` first; this answers
 ;; 0.0 for the case the checker cannot see is impossible.
 (:wat::core::defn :loxv::as-num [v <- :loxv::Val] -> :wat::core::f64
   (:wat::core::match v
     [:loxv::Val.Num {:n n} n] [:loxv::Val.Nil {} 0.0] [:loxv::Val.Bool {:b b} 0.0]
-    [:loxv::Val.Str {:s x} 0.0]))
+    [:loxv::Val.Str {:s x} 0.0]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} 0.0]
+    [:loxv::Val.Native {:name nm :arity a} 0.0]))
 
 ;; Lox's truthiness: nil and false are falsey, EVERYTHING else is truthy -- including 0 and "",
 ;; which is Ruby's rule, not C's or Python's.
@@ -78,7 +100,9 @@
     [:loxv::Val.Bool {:b b} (:wat::core::not b)]
     [:loxv::Val.Num {:n n} false]
     ;; a string is truthy, INCLUDING the empty one -- Ruby's rule again, not Python's
-    [:loxv::Val.Str {:s x} false]))
+    [:loxv::Val.Str {:s x} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Native {:name nm :arity a} false]))
 
 ;; valuesEqual. Nystrom compares the tags first and returns false when they differ -- so `1` and
 ;; `true` are not equal, which is the choice Lox makes and JavaScript does not.
@@ -117,6 +141,8 @@
   :Jump [offset <- :wat::core::i64]
   :JumpIfFalse [offset <- :wat::core::i64]
   :Loop [offset <- :wat::core::i64]
+  ;; chapter 24
+  :Call [argc <- :wat::core::i64]
   :Return [])
 
 (:wat::core::typealias :loxv::Code (:wat::core::Vector :- [:loxv::Op]))
@@ -158,7 +184,7 @@
     [:loxv::Op.SetGlobal {:slot s} "OP_SET_GLOBAL"]
     [:loxv::Op.GetLocal {:slot s} "OP_GET_LOCAL"] [:loxv::Op.SetLocal {:slot s} "OP_SET_LOCAL"]
     [:loxv::Op.Jump {:offset o} "OP_JUMP"] [:loxv::Op.JumpIfFalse {:offset o} "OP_JUMP_IF_FALSE"]
-    [:loxv::Op.Loop {:offset o} "OP_LOOP"]
+    [:loxv::Op.Loop {:offset o} "OP_LOOP"] [:loxv::Op.Call {:argc a} "OP_CALL"]
     [:loxv::Op.Return {} "OP_RETURN"]))
 
 (:wat::core::defn :loxv::op-key [op <- :loxv::Op] -> :wat::core::String
@@ -178,6 +204,7 @@
     [:loxv::Op.Jump {:offset o} (:wat::string::concat "JMP/" (:wat::i64::to-string o))]
     [:loxv::Op.JumpIfFalse {:offset o} (:wat::string::concat "JIF/" (:wat::i64::to-string o))]
     [:loxv::Op.Loop {:offset o} (:wat::string::concat "LOOP/" (:wat::i64::to-string o))]
+    [:loxv::Op.Call {:argc a} (:wat::string::concat "CALL/" (:wat::i64::to-string a))]
     [:loxv::Op.Return {} "RET"]))
 
 (:wat::core::defn :loxv::code-sig [c <- :loxv::Chunk] -> :wat::core::String

@@ -17,6 +17,13 @@
 ;; yet initialized", which is what makes `var a = a;` an error rather than a read of nil.
 (:wat::core::defrecord :loxv::Local [name <- :wat::core::String  depth <- :wat::core::i64])
 
+(:wat::core::defrecord :loxv::CFrame
+  [chunk <- :loxv::Chunk  locals <- (:wat::core::Vector :- [:loxv::Local])  depth <- :wat::core::i64])
+
+;; a function's parser answers two things -- the compiler and the arity -- and a wat function
+;; answers one, so they travel together
+(:wat::core::defrecord :loxv::Params [p <- :loxv::C  arity <- :wat::core::i64])
+
 (:wat::core::defrecord :loxv::C
   [src <- :wat::core::String  n <- :wat::core::i64  i <- :wat::core::i64  line <- :wat::core::i64
    cur <- :lox::Token  prev <- :lox::Token
@@ -24,7 +31,10 @@
    errs <- (:wat::core::Vector :- [:wat::core::String])
    panic <- :wat::core::bool
    locals <- (:wat::core::Vector :- [:loxv::Local])
-   depth <- :wat::core::i64])
+   depth <- :wat::core::i64
+   ;; chapter 24: the compilers a function declaration suspends. Nystrom links them with an
+   ;; `enclosing` pointer; a vector of saved frames is the same thing without the pointer.
+   cframes <- (:wat::core::Vector :- [:loxv::CFrame])])
 
 ;; F-104 again, this time in the COMPILER: marking a local initialized changes the depth of the
 ;; LAST element of a vector, and there is no positional update, so the vector is rebuilt.
@@ -92,6 +102,7 @@
     ((:wat::core::= name "LESS_EQUAL") (:lox::PREC-COMPARISON))
     ((:wat::core::= name "AND") (:lox::PREC-AND))
     ((:wat::core::= name "OR") (:lox::PREC-OR))
+    ((:wat::core::= name "LEFT_PAREN") (:lox::PREC-CALL))
     (:else (:lox::PREC-NONE))))
 
 (:wat::core::defn :loxv::expression [p <- :loxv::C] -> :loxv::C
@@ -166,6 +177,7 @@
     (:wat::core::cond
       ((:wat::core::= k0 "AND") (:loxv::and-op p))
       ((:wat::core::= k0 "OR") (:loxv::or-op p))
+      ((:wat::core::= k0 "LEFT_PAREN") (:loxv::call-op p))
       (:else (:loxv::c-infix-binary p)))))
 
 (:wat::core::defn :loxv::c-infix-binary [p <- :loxv::C] -> :loxv::C
@@ -184,6 +196,48 @@
       ((:wat::core::= k "GREATER_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Less {}) (:loxv::Op.Not {})))
       ((:wat::core::= k "LESS_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Greater {}) (:loxv::Op.Not {})))
       (:else (:loxv::c-error p1 "Expect an operator.")))))
+
+;; ---- chapter 24: functions
+(:wat::core::defn :loxv::cframes-take [v <- (:wat::core::Vector :- [:loxv::CFrame]) k <- :wat::core::i64
+                                       j <- :wat::core::i64
+                                       acc <- (:wat::core::Vector :- [:loxv::CFrame])]
+  -> (:wat::core::Vector :- [:loxv::CFrame])
+  (:wat::core::if (:wat::core::>= j k) acc
+    (:loxv::cframes-take v k (:wat::core::+ j 1) (:wat::core::conj acc (:wat::core::nth v j)))))
+
+;; F-019 again: a bare `(:loxv::Val.Fn {…})` has the VARIANT's type, and the constant pool wants
+;; the enum's. A helper whose declared return type is the enum widens it (P-006).
+(:wat::core::defn :loxv::fnval [c <- :loxv::Chunk name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::Val
+  (:loxv::Val.Fn {:chunk c :name name :arity arity}))
+
+(:wat::core::defn :loxv::begin-function [p <- :loxv::C] -> :loxv::C
+  (:wat::core::assoc
+    (:wat::core::assoc
+      (:wat::core::assoc
+        (:wat::core::assoc p :cframes
+          (:wat::core::conj (:loxv::C/cframes p)
+            (:loxv::CFrame :chunk (:loxv::C/chunk p) :locals (:loxv::C/locals p) :depth (:loxv::C/depth p))))
+        :chunk (:loxv::new-chunk))
+      :locals (:wat::core::Vector :- [:loxv::Local]))
+    :depth 0))
+
+;; endCompiler: finish the function's chunk with an implicit `return nil`, restore the enclosing
+;; compiler, and emit the finished function as a CONSTANT of the enclosing chunk
+(:wat::core::defn :loxv::end-function [p <- :loxv::C name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::C
+  (:wat::core::let
+    [p1 (:loxv::c-emit (:loxv::c-emit p (:loxv::Op.Nil {})) (:loxv::Op.Return {}))
+     fn (:loxv::fnval (:loxv::C/chunk p1) name arity)
+     n (:wat::core::length (:loxv::C/cframes p1))
+     f (:wat::core::nth (:loxv::C/cframes p1) (:wat::core::- n 1))
+     p2 (:wat::core::assoc
+          (:wat::core::assoc
+            (:wat::core::assoc
+              (:wat::core::assoc p1 :chunk (:loxv::CFrame/chunk f))
+              :locals (:loxv::CFrame/locals f))
+            :depth (:loxv::CFrame/depth f))
+          :cframes (:loxv::cframes-take (:loxv::C/cframes p1) (:wat::core::- n 1) 0
+                     (:wat::core::Vector :- [:loxv::CFrame])))]
+    (:loxv::c-constant p2 fn)))
 
 ;; ---- chapter 23: jumps, and the patch F-104 has been waiting for
 ;;
@@ -399,9 +453,75 @@
           (:loxv::c-emit (:loxv::patch-jif p8 exit) (:loxv::Op.Pop {})) p8)]
     (:loxv::end-scope p9)))
 
+;; ---- chapter 24: parameters, arguments, function declarations and `return`
+(:wat::core::defn :loxv::param-loop [p <- :loxv::C arity <- :wat::core::i64] -> :loxv::Params
+  (:wat::core::let [p0 (:wat::core::if (:wat::core::> arity 254)
+                         (:loxv::c-error p "Can't have more than 255 parameters.") p)
+                    p1 (:loxv::c-consume p0 "IDENTIFIER" "Expect parameter name.")
+                    name (:lox::Token/text (:loxv::C/prev p1))
+                    ;; a parameter is declared AND initialized at once: its value arrives on the
+                    ;; stack from the caller, so there is no initializer to wait for
+                    p2 (:loxv::mark-initialized (:loxv::declare-variable p1 name))
+                    a (:wat::core::+ arity 1)]
+    (:wat::core::if (:lox::kind-is? (:loxv::C/cur p2) "COMMA")
+      (:loxv::param-loop (:loxv::c-advance p2) a)
+      (:loxv::Params :p p2 :arity a))))
+
+(:wat::core::defn :loxv::arg-loop [p <- :loxv::C n <- :wat::core::i64] -> :loxv::Params
+  (:wat::core::let [p1 (:loxv::expression p)
+                    p2 (:wat::core::if (:wat::core::> n 254)
+                         (:loxv::c-error p1 "Can't have more than 255 arguments.") p1)
+                    n1 (:wat::core::+ n 1)]
+    (:wat::core::if (:lox::kind-is? (:loxv::C/cur p2) "COMMA")
+      (:loxv::arg-loop (:loxv::c-advance p2) n1)
+      (:loxv::Params :p p2 :arity n1))))
+
+;; `(` as an INFIX operator, at the tightest precedence there is -- which is what makes
+;; `f(1)(2)` and `a.b(c)` parse without a special case
+(:wat::core::defn :loxv::call-op [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [r (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "RIGHT_PAREN")
+                        (:loxv::Params :p p :arity 0)
+                        (:loxv::arg-loop p 0))
+                    p1 (:loxv::c-consume (:loxv::Params/p r) "RIGHT_PAREN" "Expect ')' after arguments.")]
+    (:loxv::c-emit p1 (:loxv::Op.Call {:argc (:loxv::Params/arity r)}))))
+
+(:wat::core::defn :loxv::compile-function [p <- :loxv::C name <- :wat::core::String] -> :loxv::C
+  (:wat::core::let
+    [q0 (:loxv::begin-scope (:loxv::begin-function p))
+     q1 (:loxv::c-consume q0 "LEFT_PAREN" "Expect '(' after function name.")
+     r (:wat::core::if (:lox::kind-is? (:loxv::C/cur q1) "RIGHT_PAREN")
+         (:loxv::Params :p q1 :arity 0)
+         (:loxv::param-loop q1 0))
+     q2 (:loxv::c-consume (:loxv::Params/p r) "RIGHT_PAREN" "Expect ')' after parameters.")
+     q3 (:loxv::c-consume q2 "LEFT_BRACE" "Expect '{' before function body.")
+     q4 (:loxv::block q3)]
+    (:loxv::end-function q4 name (:loxv::Params/arity r))))
+
+(:wat::core::defn :loxv::fun-decl [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let
+    [p1 (:loxv::c-consume p "IDENTIFIER" "Expect function name.")
+     name (:lox::Token/text (:loxv::C/prev p1))
+     p2 (:loxv::declare-variable p1 name)
+     p3 (:wat::core::if (:wat::core::= (:loxv::C/depth p2) 0) (:loxv::add-name p2 name) p2)
+     slot (:wat::core::if (:wat::core::= (:loxv::C/depth p2) 0) (:loxv::last-slot p3) 0)
+     ;; marked initialized BEFORE the body, so a local function can refer to itself
+     p4 (:wat::core::if (:wat::core::> (:loxv::C/depth p3) 0) (:loxv::mark-initialized p3) p3)
+     p5 (:loxv::compile-function p4 name)]
+    (:loxv::define-variable p5 slot)))
+
+(:wat::core::defn :loxv::return-stmt [p <- :loxv::C] -> :loxv::C
+  (:wat::core::if (:wat::core::= (:wat::core::length (:loxv::C/cframes p)) 0)
+    (:loxv::c-error p "Can't return from top-level code.")
+    (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "SEMICOLON")
+      (:loxv::c-emit (:loxv::c-emit (:loxv::c-advance p) (:loxv::Op.Nil {})) (:loxv::Op.Return {}))
+      (:loxv::c-emit
+        (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after return value.")
+        (:loxv::Op.Return {})))))
+
 (:wat::core::defn :loxv::statement [p <- :loxv::C] -> :loxv::C
   (:wat::core::cond
     ((:lox::kind-is? (:loxv::C/cur p) "PRINT") (:loxv::print-stmt (:loxv::c-advance p)))
+    ((:lox::kind-is? (:loxv::C/cur p) "RETURN") (:loxv::return-stmt (:loxv::c-advance p)))
     ((:lox::kind-is? (:loxv::C/cur p) "IF") (:loxv::if-stmt (:loxv::c-advance p)))
     ((:lox::kind-is? (:loxv::C/cur p) "WHILE") (:loxv::while-stmt (:loxv::c-advance p)))
     ((:lox::kind-is? (:loxv::C/cur p) "FOR") (:loxv::for-stmt (:loxv::c-advance p)))
@@ -452,9 +572,10 @@
   (:loxv::sync-loop (:wat::core::assoc p :panic false)))
 
 (:wat::core::defn :loxv::declaration [p <- :loxv::C] -> :loxv::C
-  (:wat::core::let [p1 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "VAR")
-                         (:loxv::var-decl (:loxv::c-advance p))
-                         (:loxv::statement p))]
+  (:wat::core::let [p1 (:wat::core::cond
+                         ((:lox::kind-is? (:loxv::C/cur p) "VAR") (:loxv::var-decl (:loxv::c-advance p)))
+                         ((:lox::kind-is? (:loxv::C/cur p) "FUN") (:loxv::fun-decl (:loxv::c-advance p)))
+                         (:else (:loxv::statement p)))]
     (:wat::core::if (:loxv::C/panic p1) (:loxv::synchronize p1) p1)))
 
 (:wat::core::defn :loxv::decl-loop [p <- :loxv::C] -> :loxv::C
@@ -470,7 +591,8 @@
                   :cur (:lox::blank-token) :prev (:lox::blank-token)
                   :chunk (:loxv::new-chunk)
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
-                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0)
+                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
+                  :cframes (:wat::core::Vector :- [:loxv::CFrame]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::decl-loop p1)]
     (:loxv::c-emit p2 (:loxv::Op.Return {}))))
@@ -494,7 +616,8 @@
                   :cur (:lox::blank-token) :prev (:lox::blank-token)
                   :chunk (:loxv::new-chunk)
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
-                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0)
+                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
+                  :cframes (:wat::core::Vector :- [:loxv::CFrame]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::expression p1)
      p3 (:loxv::c-consume p2 "EOF" "Expect end of expression.")]
