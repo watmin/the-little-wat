@@ -84,8 +84,16 @@
           (:c18::expect "3 >= 4                     " (:c18::run "3 >= 4") "false")
           (:c18::expect "1 < nil is a runtime error " (:c18::run "1 < nil")
             "[line 1] Runtime error: Operands must be numbers.")
-          (:c18::expect "true + 1 too               " (:c18::run "true + 1")
+          (:c18::expect "true - 1 too               " (:c18::run "true - 1")
             "[line 1] Runtime error: Operands must be numbers.")
+          ;; `+` said the same thing when this chapter was written. Chapter 19 overloads it for
+          ;; strings and lengthens the message, and there is ONE codebase, so this line records
+          ;; what the code says now rather than what chapter 18 alone would have said. Nystrom
+          ;; keeps a snapshot per chapter; a suite that runs every chapter against the current
+          ;; code does not have that option, and pretending otherwise would mean freezing a
+          ;; chapter's library the moment the next chapter touches it.
+          (:c18::expect "and true + 1, after ch19   " (:c18::run "true + 1")
+            "[line 1] Runtime error: Operands must be two numbers or two strings.")
           (:c18::expect "-true is the unary message " (:c18::run "-true")
             "[line 1] Runtime error: Operand must be a number.")
           (:c18::expect "-nil too                   " (:c18::run "-nil")

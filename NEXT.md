@@ -347,8 +347,8 @@ ch 1 and PAIP's CL chapters got.
 | 16 | **Scanning on demand** | **done** (C-099) | 38 token kinds, all asserted produced; on-demand pull works (8 tokens < a tenth of the file); **record-per-character vs record-per-token is ~2.5x**, and F-062 leaves no hoist available |
 | 17 | **Compiling expressions** | **done** (C-100) | the compiler reproduces ch14's hand-built chunk exactly and ch15's VM gives ch15's answer; the rule table of function pointers was built in a probe — `defstruct` row works, `defrecord` row refused (F-114) |
 | 18 | **Types of values** | **done** (C-101) | a tagged union is a `defenum`; `valuesEqual` is `(= a b)` (F-019 clarified); Nystrom's NaN bug in `<=` reproduced; runtime errors are a `Step.Fail` value, one match per instruction. Runs on `:loxv::` so ch15's measurements keep their code |
-| 19 | Strings | **not started** |
-| 20 | Hash tables | **no portable content** — the chapter implements one; wat has `HashMap` and `PersistentMap`, and C-078 already measured what they cost |
+| 19 | **Strings** | **done** (C-102) | one enum variant and one `string::concat`; `Obj`/`ObjString`/`freeObjects` are C's memory management. Debt: ch26's collector must build its own heap |
+| 20 | **Hash tables** | **done** (C-103) — **the earlier ruling was half wrong** | the table itself is not worth rewriting (C-078 priced wat's two), but the chapter's **interning** is a language decision, and its cost claim is about a C program: measured, it buys **nothing at 10 characters** and about a quarter at 100 000 |
 | 21 | Global variables | **not started** |
 | 22 | Local variables | **not started** |
 | 23 | Jumping back and forth | **not started** |

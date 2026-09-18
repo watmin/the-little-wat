@@ -86,6 +86,13 @@
           [:wat::core::Option.None {} (:loxv::c-error p "Not a number.")]))
       ;; the literals do not go in the constant pool -- they get their own opcodes, which is
       ;; Nystrom's point about why a tagged union earns dedicated instructions
+      ;; chapter 19: the scanner's lexeme still has its quotes, so the literal drops them --
+      ;; Nystrom's `copyString(start + 1, length - 2)`. Lox has no escape sequences, which he
+      ;; notes as a deliberate omission, so there is nothing else to do.
+      ((:wat::core::= k "STRING")
+        (:wat::core::let [lex (:lox::Token/text (:loxv::C/prev p))]
+          (:loxv::c-constant p
+            (:loxv::str (:wat::string::subs lex 1 (:wat::core::- (:wat::string::length lex) 1))))))
       ((:wat::core::= k "NIL") (:loxv::c-emit p (:loxv::Op.Nil {})))
       ((:wat::core::= k "TRUE") (:loxv::c-emit p (:loxv::Op.True {})))
       ((:wat::core::= k "FALSE") (:loxv::c-emit p (:loxv::Op.False {})))

@@ -22,7 +22,14 @@
 (:wat::core::defenum :loxv::Val :wat::enum::Pure
   :Nil  []
   :Bool [b <- :wat::core::bool]
-  :Num  [n <- :wat::core::f64])
+  :Num  [n <- :wat::core::f64]
+  ;; chapter 19. In C this is a POINTER to a heap-allocated `ObjString` with its own type tag,
+  ;; its length, its characters and a `next` link threading every object the VM has ever made so
+  ;; that `freeObjects()` can walk them. None of that is representable here and none of it needs
+  ;; to be: wat owns the heap, so `Obj`, `ObjString`, `allocateObject`, the `vm.objects` list and
+  ;; `freeObjects` are the chapter's C-memory half, and what is left is that a value can be a
+  ;; string. See lox/ch19-strings.wat for what that costs and what it buys.
+  :Str  [s <- :wat::core::String])
 
 (:wat::core::typealias :loxv::Stack (:wat::core::Vector :- [:loxv::Val]))
 (:wat::core::typealias :loxv::Consts (:wat::core::Vector :- [:loxv::Val]))
@@ -32,21 +39,36 @@
   (:wat::core::match v
     [:loxv::Val.Nil {} "nil"]
     [:loxv::Val.Bool {:b b} (:wat::core::if b "true" "false")]
+    ;; printValue prints a string's characters, not its quotes
+    [:loxv::Val.Str {:s x} x]
     [:loxv::Val.Num {:n n} (:wat::f64::to-string n)]))
 
 (:wat::core::defn :loxv::type-name [v <- :loxv::Val] -> :wat::core::String
   (:wat::core::match v
-    [:loxv::Val.Nil {} "nil"] [:loxv::Val.Bool {:b b} "bool"] [:loxv::Val.Num {:n n} "number"]))
+    [:loxv::Val.Nil {} "nil"] [:loxv::Val.Bool {:b b} "bool"] [:loxv::Val.Num {:n n} "number"]
+    [:loxv::Val.Str {:s x} "string"]))
 
 (:wat::core::defn :loxv::num? [v <- :loxv::Val] -> :wat::core::bool
   (:wat::core::match v
-    [:loxv::Val.Num {:n n} true] [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]))
+    [:loxv::Val.Num {:n n} true] [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]
+    [:loxv::Val.Str {:s x} false]))
+
+(:wat::core::defn :loxv::str? [v <- :loxv::Val] -> :wat::core::bool
+  (:wat::core::match v
+    [:loxv::Val.Str {:s x} true] [:loxv::Val.Num {:n n} false]
+    [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]))
+
+(:wat::core::defn :loxv::as-str [v <- :loxv::Val] -> :wat::core::String
+  (:wat::core::match v
+    [:loxv::Val.Str {:s x} x] [:loxv::Val.Num {:n n} ""]
+    [:loxv::Val.Nil {} ""] [:loxv::Val.Bool {:b b} ""]))
 
 ;; AS_NUMBER, with the guard the C macro does not have. Callers check `num?` first; this answers
 ;; 0.0 for the case the checker cannot see is impossible.
 (:wat::core::defn :loxv::as-num [v <- :loxv::Val] -> :wat::core::f64
   (:wat::core::match v
-    [:loxv::Val.Num {:n n} n] [:loxv::Val.Nil {} 0.0] [:loxv::Val.Bool {:b b} 0.0]))
+    [:loxv::Val.Num {:n n} n] [:loxv::Val.Nil {} 0.0] [:loxv::Val.Bool {:b b} 0.0]
+    [:loxv::Val.Str {:s x} 0.0]))
 
 ;; Lox's truthiness: nil and false are falsey, EVERYTHING else is truthy -- including 0 and "",
 ;; which is Ruby's rule, not C's or Python's.
@@ -54,7 +76,9 @@
   (:wat::core::match v
     [:loxv::Val.Nil {} true]
     [:loxv::Val.Bool {:b b} (:wat::core::not b)]
-    [:loxv::Val.Num {:n n} false]))
+    [:loxv::Val.Num {:n n} false]
+    ;; a string is truthy, INCLUDING the empty one -- Ruby's rule again, not Python's
+    [:loxv::Val.Str {:s x} false]))
 
 ;; valuesEqual. Nystrom compares the tags first and returns false when they differ -- so `1` and
 ;; `true` are not equal, which is the choice Lox makes and JavaScript does not.

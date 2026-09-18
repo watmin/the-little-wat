@@ -33,6 +33,7 @@
   (:wat::core::nth s (:wat::core::- (:wat::core::length s) (:wat::core::+ n 1))))
 
 (:wat::core::defn :loxv::num [x <- :wat::core::f64] -> :loxv::Val (:loxv::Val.Num {:n x}))
+(:wat::core::defn :loxv::str [x <- :wat::core::String] -> :loxv::Val (:loxv::Val.Str {:s x}))
 (:wat::core::defn :loxv::bool [x <- :wat::core::bool] -> :loxv::Val (:loxv::Val.Bool {:b x}))
 
 ;; a binary operator over two numbers, or Nystrom's "Operands must be numbers."
@@ -53,6 +54,22 @@
               ((:wat::core::= which ">") (:loxv::bool (:wat::core::> x y)))
               (:else (:loxv::bool (:wat::core::< x y)))))})))))) 
 
+(:wat::core::defn :loxv::op-add [s <- :loxv::Stack] -> :loxv::Step
+  (:wat::core::if (:wat::core::< (:wat::core::length s) 2) (:loxv::Step.Fail {:msg "Stack underflow."})
+    (:wat::core::let [b (:loxv::peek-n s 0)
+                      a (:loxv::peek-n s 1)
+                      rest (:loxv::pop-n s 2)]
+      (:wat::core::cond
+        ((:wat::core::and (:loxv::num? a) (:loxv::num? b))
+          (:loxv::Step.Next {:s (:wat::core::conj rest
+            (:loxv::num (:wat::core::+ (:loxv::as-num a) (:loxv::as-num b))))}))
+        ;; concatenate(). In C this allocates, copies both halves and takes ownership; here it is
+        ;; `:wat::string::concat` and the result is just another value.
+        ((:wat::core::and (:loxv::str? a) (:loxv::str? b))
+          (:loxv::Step.Next {:s (:wat::core::conj rest
+            (:loxv::str (:wat::string::concat (:loxv::as-str a) (:loxv::as-str b))))}))
+        (:else (:loxv::Step.Fail {:msg "Operands must be two numbers or two strings."}))))))
+
 (:wat::core::defn :loxv::exec [op <- :loxv::Op c <- :loxv::Chunk s <- :loxv::Stack] -> :loxv::Step
   (:wat::core::match op
     [:loxv::Op.Constant {:slot i}
@@ -67,7 +84,9 @@
           (:loxv::bool (:loxv::equal? (:loxv::peek-n s 1) (:loxv::peek-n s 0))))}))]
     [:loxv::Op.Greater {} (:loxv::binary-num s ">")]
     [:loxv::Op.Less {} (:loxv::binary-num s "<")]
-    [:loxv::Op.Add {} (:loxv::binary-num s "+")]
+    ;; chapter 19: `+` is the one operator that is overloaded, so it does its own operand check.
+    ;; Nystrom's message changes here too, from "Operands must be numbers." to the longer one.
+    [:loxv::Op.Add {} (:loxv::op-add s)]
     [:loxv::Op.Subtract {} (:loxv::binary-num s "-")]
     [:loxv::Op.Multiply {} (:loxv::binary-num s "*")]
     [:loxv::Op.Divide {} (:loxv::binary-num s "/")]
