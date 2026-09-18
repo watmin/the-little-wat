@@ -43,7 +43,7 @@ fi
 # The trees to search: what was asked for, or every suite.
 roots=("$@")
 if [ "${#roots[@]}" -eq 0 ]; then
-  roots=(books koans/idiom sicp aoc paip euler rete sqlite store okasaki semaphores eopl)
+  roots=(books koans/idiom sicp aoc paip euler rete sqlite store okasaki semaphores eopl lox)
 fi
 for r in "${roots[@]}"; do
   if [ ! -e "$r" ]; then

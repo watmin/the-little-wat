@@ -321,11 +321,49 @@ builder's call, 2026-09-16: networking is simulated via IPC anyway (processes ov
 Unix domain sockets, threads over crossbeam-style channels), so the puzzles run against
 `:wat::spawn::`/`:wat::bracket::`/`:wat::service::` directly.
 
-## 12. *Crafting Interpreters*, Part II — the bytecode VM
+## 12. *Crafting Interpreters*, Part II — the bytecode VM — **STARTED 2026-09-17**
 
 A flat instruction array, a dispatch loop, a value stack, jump patching. Not for the book's
 sake: it rehearses the exact machinery §7's baseline is being taken for, and it tests whether
 wat can host the shape of its own next phase.
+
+**Three numbers this section already has, before a line is written.** They are the reason to do
+it in this order rather than first:
+
+| | |
+|---|---|
+| **C-081** (SICP §5.5) | the same expression costs **11** machine steps interpreted and **8** compiled, from 3 top-level instructions. The payoff of compiling, as a count |
+| **F-105** (EOPL ch6.5) | `step : State -> State` is **~1.9×** slower than mutually tail-calling procedures, because `step` must allocate the state it returns. The registerized shape is the slower one |
+| **BASELINE.md** | builtin 360 ns, match-2 675, user-fn 795, closure 853, defstruct accessor 1219, **defrecord accessor 6130** — so the dispatch loop's own arithmetic has a floor |
+
+**Chapter table.** Nystrom's Part II is chapters 14–30. Several are about C rather than about a
+VM, and are listed as **no portable content** rather than dropped silently — the treatment Okasaki
+ch 1 and PAIP's CL chapters got.
+
+| ch | topic | status |
+|---|---|---|
+| 14 | **Chunks of bytecode** | **done** (C-098) | an opcode is an enum carrying its operand; offsets count instructions, not bytes |
+| 15 | **A virtual machine** | **done** (C-098) | **registerized costs ~2.3-2.5x; hoisting the chunk out of the loop saves ~30% more; they compound to 3-4x** |
+| 16 | Scanning on demand | **not started** |
+| 17 | Compiling expressions | **not started** |
+| 18 | Types of values | **not started** |
+| 19 | Strings | **not started** |
+| 20 | Hash tables | **no portable content** — the chapter implements one; wat has `HashMap` and `PersistentMap`, and C-078 already measured what they cost |
+| 21 | Global variables | **not started** |
+| 22 | Local variables | **not started** |
+| 23 | Jumping back and forth | **not started** |
+| 24 | Calls and functions | **not started** |
+| 25 | Closures | **not started** |
+| 26 | Garbage collection | **partly covered** — SICP §5.3 (C-081) already built stop-and-copy with broken hearts; Nystrom's mark-sweep is a different algorithm and is worth building |
+| 27 | Classes and instances | **not started** |
+| 28 | Methods and initializers | **not started** |
+| 29 | Superclasses | **not started** |
+| 30 | Optimization | **no portable content** — NaN boxing and cache-line layout are about C's memory model |
+
+**Oracle.** Unlike the other suites there is no second implementation to compare against: the VM
+IS the thing being tested. So each chapter checks its own invariants — a program's value, the
+instruction count, the stack's high-water mark — and where a result can be cross-checked against
+an existing port (SICP §5.5's compiler, C-081) it is.
 
 ## Suggested order
 
