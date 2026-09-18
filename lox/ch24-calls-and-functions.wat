@@ -54,7 +54,12 @@
     [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} (:loxv::code-sig c)]
     [:loxv::Val.Nil {} "(not a function)"] [:loxv::Val.Bool {:b b} "(not a function)"]
     [:loxv::Val.Num {:n n} "(not a function)"] [:loxv::Val.Str {:s x} "(not a function)"]
-    [:loxv::Val.Native {:name nm :arity a} "(not a function)"]))
+    [:loxv::Val.Native {:name nm :arity a} "(not a function)"]
+    ;; F-115, the SEVENTH chapter file to pay it: chapter 27 added Class, Instance and Bound to
+    ;; `Val`, and this helper -- which only ever wanted a chunk -- had to name all three.
+    [:loxv::Val.Class {:name nm :methods ms} "(not a function)"]
+    [:loxv::Val.Instance {:id i} "(not a function)"]
+    [:loxv::Val.Bound {:id i :method m} "(not a function)"]))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil
   (:wat::core::do

@@ -47,7 +47,9 @@
     [:loxv::Val.Fn {:chunk fc :name nm :arity a :updescs u} fc]
     [:loxv::Val.Closure {:chunk fc :name nm :arity a :cells u} fc]
     [:loxv::Val.Nil {} c] [:loxv::Val.Bool {:b b} c] [:loxv::Val.Num {:n n} c]
-    [:loxv::Val.Str {:s x} c] [:loxv::Val.Native {:name nm :arity a} c]))
+    [:loxv::Val.Str {:s x} c] [:loxv::Val.Native {:name nm :arity a} c]
+    [:loxv::Val.Class {:name nm :methods ms} c] [:loxv::Val.Instance {:id i} c]
+    [:loxv::Val.Bound {:id i :method m} c]))
 
 ;; what the function value in constant slot `i` of `c` captures, and from where
 (:wat::core::defn :c25::ups-of [c <- :loxv::Chunk i <- :wat::core::i64] -> :wat::core::String
@@ -63,7 +65,10 @@
     [:loxv::Val.Closure {:chunk fc :name nm :arity a :cells u} "(already a closure)"]
     [:loxv::Val.Nil {} "(not a function)"] [:loxv::Val.Bool {:b b} "(not a function)"]
     [:loxv::Val.Num {:n n} "(not a function)"] [:loxv::Val.Str {:s x} "(not a function)"]
-    [:loxv::Val.Native {:name nm :arity a} "(not a function)"]))
+    [:loxv::Val.Native {:name nm :arity a} "(not a function)"]
+    [:loxv::Val.Class {:name nm :methods ms} "(not a function)"]
+    [:loxv::Val.Instance {:id i} "(not a function)"]
+    [:loxv::Val.Bound {:id i :method m} "(not a function)"]))
 
 ;; the first constant of `c` that is a function. Slot numbers move as literals are added, and a
 ;; test that has to count them is a test about the wrong thing.
@@ -72,7 +77,9 @@
     [:loxv::Val.Fn {:chunk fc :name nm :arity a :updescs u} true]
     [:loxv::Val.Closure {:chunk fc :name nm :arity a :cells u} true]
     [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false] [:loxv::Val.Num {:n n} false]
-    [:loxv::Val.Str {:s x} false] [:loxv::Val.Native {:name nm :arity a} false]))
+    [:loxv::Val.Str {:s x} false] [:loxv::Val.Native {:name nm :arity a} false]
+    [:loxv::Val.Class {:name nm :methods ms} false] [:loxv::Val.Instance {:id i} false]
+    [:loxv::Val.Bound {:id i :method m} false]))
 
 (:wat::core::defn :c25::fn-slot [c <- :loxv::Chunk i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::cond

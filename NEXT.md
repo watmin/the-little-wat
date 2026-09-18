@@ -321,7 +321,7 @@ builder's call, 2026-09-16: networking is simulated via IPC anyway (processes ov
 Unix domain sockets, threads over crossbeam-style channels), so the puzzles run against
 `:wat::spawn::`/`:wat::bracket::`/`:wat::service::` directly.
 
-## 12. *Crafting Interpreters*, Part II — the bytecode VM — **STARTED 2026-09-17**
+## 12. *Crafting Interpreters*, Part II — the bytecode VM — **COMPLETE 2026-09-18** (ch 14-29; ch 30 is the only chapter left, and C-103 is a reason to re-read that ruling)
 
 A flat instruction array, a dispatch loop, a value stack, jump patching. Not for the book's
 sake: it rehearses the exact machinery §7's baseline is being taken for, and it tests whether
@@ -355,9 +355,9 @@ ch 1 and PAIP's CL chapters got.
 | 24 | **Calls and functions** | **done** (C-107) | functions as values with their own chunks, a stack of compilers, call frames. A frame is allocated per **call**, not per instruction, so it cost less than ch22-23. A native is a name, not a closure (F-114). Two checks pin the ch24/ch25 boundary |
 | 25 | **Closures** | **done** (C-108) | the one chapter whose DESIGN had to change: an upvalue is a `Value*` into the stack, and wat cannot share a mutable location, so the pointer became an index into a VM-owned cell table. Sharing, non-sharing and closing all checked |
 | 26 | **Garbage collection** | **done** (C-109) — and it was more than "partly covered" | chapter 25's cell table was a **real leak**, so this is mark-sweep over something that actually needed collecting: 30 cells with the collector off, 8 with it on. Every root checked, marking transitive |
-| 27 | Classes and instances | **not started** |
-| 28 | Methods and initializers | **not started** |
-| 29 | Superclasses | **not started** |
+| 27 | **Classes and instances** | **done** (C-110) | `var a = f; a.x = 2; print f.x;` forced the **second** VM-owned index table in three chapters — **F-117**. A class needed none of it: immutable once declared |
+| 28 | **Methods and initializers** | **done** (C-111) | cost **nothing** — `this` is local slot 0, so a closure inside a method captures it like any other local. `init` differs in exactly two compiled details |
+| 29 | **Superclasses** | **done** (C-112) | `super` checked to be **lexical** through a three-level hierarchy: `CBA` with a C receiver. `OP_INHERIT` is `OP_METHOD`'s move again |
 | 30 | Optimization | **no portable content** — NaN boxing and cache-line layout are about C's memory model |
 
 **One piece of work this section found and did not do.** `probes/lox/stack-ops.wat` (F-116) shows

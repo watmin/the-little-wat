@@ -23,7 +23,7 @@
 
 (:wat::core::defrecord :loxv::CFrame
   [chunk <- :loxv::Chunk  locals <- (:wat::core::Vector :- [:loxv::Local])  depth <- :wat::core::i64
-   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])])
+   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])  ftype <- :wat::core::String])
 
 ;; a resolution answers both the (possibly edited) compiler and an index
 (:wat::core::defrecord :loxv::UpR [p <- :loxv::C  index <- :wat::core::i64])
@@ -44,7 +44,13 @@
    ;; `enclosing` pointer; a vector of saved frames is the same thing without the pointer.
    cframes <- (:wat::core::Vector :- [:loxv::CFrame])
    ;; chapter 25: what the function being compiled captures
-   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])])
+   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])
+   ;; chapters 24-28: "script", "function", "method" or "initializer". It decides whether local
+   ;; slot 0 is reserved for `this`, and what a bare `return` means.
+   ftype <- :wat::core::String
+   ;; chapters 27-29: one entry per class being declared, true when it has a superclass. Nystrom
+   ;; uses a linked list of ClassCompilers for exactly this.
+   classes <- (:wat::core::Vector :- [:wat::core::bool])])
 
 ;; F-104 again, this time in the COMPILER: marking a local initialized changes the depth of the
 ;; LAST element of a vector, and there is no positional update, so the vector is rebuilt.
@@ -113,6 +119,7 @@
     ((:wat::core::= name "AND") (:lox::PREC-AND))
     ((:wat::core::= name "OR") (:lox::PREC-OR))
     ((:wat::core::= name "LEFT_PAREN") (:lox::PREC-CALL))
+    ((:wat::core::= name "DOT") (:lox::PREC-CALL))
     (:else (:lox::PREC-NONE))))
 
 (:wat::core::defn :loxv::expression [p <- :loxv::C] -> :loxv::C
@@ -124,15 +131,16 @@
 ;; chapter; ch21 checks it.
 (:wat::core::defn :loxv::parse-prec [p <- :loxv::C prec <- :wat::core::i64] -> :loxv::C
   (:wat::core::let [can-assign (:wat::core::<= prec (:lox::PREC-ASSIGNMENT))
-                    p1 (:loxv::infix-loop (:loxv::c-prefix (:loxv::c-advance p) can-assign) prec)]
+                    p1 (:loxv::infix-loop (:loxv::c-prefix (:loxv::c-advance p) can-assign) prec can-assign)]
     ;; if an `=` is still sitting there, nothing was allowed to take it
     (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p1) "EQUAL"))
       (:loxv::c-error p1 "Invalid assignment target.")
       p1)))
 
-(:wat::core::defn :loxv::infix-loop [p <- :loxv::C prec <- :wat::core::i64] -> :loxv::C
+(:wat::core::defn :loxv::infix-loop [p <- :loxv::C prec <- :wat::core::i64
+                                     can-assign <- :wat::core::bool] -> :loxv::C
   (:wat::core::if (:wat::core::<= prec (:loxv::infix-prec (:lox::tok-name (:lox::Token/kind (:loxv::C/cur p)))))
-    (:loxv::infix-loop (:loxv::c-infix (:loxv::c-advance p)) prec)
+    (:loxv::infix-loop (:loxv::c-infix (:loxv::c-advance p) can-assign) prec can-assign)
     p))
 
 (:wat::core::defn :loxv::c-prefix [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
@@ -152,6 +160,13 @@
           (:loxv::c-constant p
             (:loxv::str (:wat::string::subs lex 1 (:wat::core::- (:wat::string::length lex) 1))))))
       ((:wat::core::= k "IDENTIFIER") (:loxv::named-variable p can-assign))
+      ;; `this` is local slot 0 of a method, or an upvalue in a function nested inside one --
+      ;; which is why it needs no machinery of its own beyond refusing to exist outside a class
+      ((:wat::core::= k "THIS")
+        (:wat::core::if (:wat::core::= (:wat::core::length (:loxv::C/classes p)) 0)
+          (:loxv::c-error p "Can't use 'this' outside of a class.")
+          (:loxv::variable-named p "this" false)))
+      ((:wat::core::= k "SUPER") (:loxv::super-expr p))
       ((:wat::core::= k "NIL") (:loxv::c-emit p (:loxv::Op.Nil {})))
       ((:wat::core::= k "TRUE") (:loxv::c-emit p (:loxv::Op.True {})))
       ((:wat::core::= k "FALSE") (:loxv::c-emit p (:loxv::Op.False {})))
@@ -182,13 +197,45 @@
                     p4 (:loxv::parse-prec p3 (:lox::PREC-OR))]
     (:loxv::patch-jmp p4 end-j)))
 
-(:wat::core::defn :loxv::c-infix [p <- :loxv::C] -> :loxv::C
+(:wat::core::defn :loxv::c-infix [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
   (:wat::core::let [k0 (:lox::tok-name (:lox::Token/kind (:loxv::C/prev p)))]
     (:wat::core::cond
       ((:wat::core::= k0 "AND") (:loxv::and-op p))
       ((:wat::core::= k0 "OR") (:loxv::or-op p))
       ((:wat::core::= k0 "LEFT_PAREN") (:loxv::call-op p))
+      ((:wat::core::= k0 "DOT") (:loxv::dot-op p can-assign))
       (:else (:loxv::c-infix-binary p)))))
+
+;; `.` is an infix operator at the tightest precedence, which is what makes `a.b.c` and
+;; `a.b(c).d` parse with no special case -- and `canAssign` is what makes `a.b = c` work while
+;; `a.b + 1 = c` does not
+(:wat::core::defn :loxv::dot-op [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::c-consume p "IDENTIFIER" "Expect property name after '.'.")
+                    p2 (:loxv::add-name p1 (:lox::Token/text (:loxv::C/prev p1)))
+                    nslot (:loxv::last-slot p2)]
+    (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p2) "EQUAL"))
+      (:loxv::c-emit (:loxv::expression (:loxv::c-advance p2)) (:loxv::Op.SetProperty {:slot nslot}))
+      (:loxv::c-emit p2 (:loxv::Op.GetProperty {:slot nslot})))))
+
+;; `super.m` is two variable reads and one instruction: the receiver (`this`), the superclass
+;; (a hidden local the class declaration created), and OP_GET_SUPER to bind one to the other.
+;; Nystrom's point is that `super` is LEXICAL -- it is the enclosing class's superclass, not the
+;; receiver's -- and the hidden local is what makes that true.
+(:wat::core::defn :loxv::super-expr [p <- :loxv::C] -> :loxv::C
+  (:wat::core::cond
+    ((:wat::core::= (:wat::core::length (:loxv::C/classes p)) 0)
+      (:loxv::c-error p "Can't use 'super' outside of a class."))
+    ((:wat::core::not (:wat::core::nth (:loxv::C/classes p)
+                        (:wat::core::- (:wat::core::length (:loxv::C/classes p)) 1)))
+      (:loxv::c-error p "Can't use 'super' in a class with no superclass."))
+    (:else
+      (:wat::core::let [p1 (:loxv::c-consume p "DOT" "Expect '.' after 'super'.")
+                        p2 (:loxv::c-consume p1 "IDENTIFIER" "Expect superclass method name.")
+                        p3 (:loxv::add-name p2 (:lox::Token/text (:loxv::C/prev p2)))
+                        nslot (:loxv::last-slot p3)
+                        p4 (:loxv::variable-named p3 "this" false)
+                        p5 (:loxv::variable-named p4 "super" false)]
+        (:loxv::c-emit p5 (:loxv::Op.GetSuper {:slot nslot}))))))
 
 (:wat::core::defn :loxv::c-infix-binary [p <- :loxv::C] -> :loxv::C
   (:wat::core::let [k (:lox::tok-name (:lox::Token/kind (:loxv::C/prev p)))
@@ -304,7 +351,8 @@
         (:wat::core::assoc p :cframes
           (:wat::core::conj (:loxv::C/cframes p)
             (:loxv::CFrame :chunk (:loxv::C/chunk p) :locals (:loxv::C/locals p)
-                           :depth (:loxv::C/depth p) :upvals (:loxv::C/upvals p))))
+                           :depth (:loxv::C/depth p) :upvals (:loxv::C/upvals p)
+                           :ftype (:loxv::C/ftype p))))
         :chunk (:loxv::new-chunk))
       :locals (:wat::core::Vector :- [:loxv::Local]))
     :depth 0) :upvals (:wat::core::Vector :- [:loxv::UpDesc])))
@@ -313,7 +361,11 @@
 ;; compiler, and emit the finished function as a CONSTANT of the enclosing chunk
 (:wat::core::defn :loxv::end-function [p <- :loxv::C name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::C
   (:wat::core::let
-    [p1 (:loxv::c-emit (:loxv::c-emit p (:loxv::Op.Nil {})) (:loxv::Op.Return {}))
+    ;; an initializer returns `this` implicitly, which is what makes `Foo()` answer the instance
+     ;; rather than nil even when the body says nothing
+     [p1 (:wat::core::if (:wat::core::= (:loxv::C/ftype p) "initializer")
+           (:loxv::c-emit (:loxv::c-emit p (:loxv::Op.GetLocal {:slot 0})) (:loxv::Op.Return {}))
+           (:loxv::c-emit (:loxv::c-emit p (:loxv::Op.Nil {})) (:loxv::Op.Return {})))
      fn (:loxv::fnval (:loxv::C/chunk p1) name arity (:loxv::C/upvals p1))
      n (:wat::core::length (:loxv::C/cframes p1))
      f (:wat::core::nth (:loxv::C/cframes p1) (:wat::core::- n 1))
@@ -326,11 +378,12 @@
               :upvals (:loxv::CFrame/upvals f))
             :depth (:loxv::CFrame/depth f))
           :cframes (:loxv::cframes-take (:loxv::C/cframes p1) (:wat::core::- n 1) 0
-                     (:wat::core::Vector :- [:loxv::CFrame])))]
+                     (:wat::core::Vector :- [:loxv::CFrame])))
+     p2b (:wat::core::assoc p2 :ftype (:loxv::CFrame/ftype f))]
     ;; OP_CLOSURE rather than OP_CONSTANT: the function is built at RUNTIME, out of the constant
     ;; and whatever its `updescs` say it captures
-    (:wat::core::let [ch (:loxv::add-constant (:loxv::C/chunk p2) fn)
-                      p3 (:wat::core::assoc p2 :chunk ch)]
+    (:wat::core::let [ch (:loxv::add-constant (:loxv::C/chunk p2b) fn)
+                      p3 (:wat::core::assoc p2b :chunk ch)]
       (:loxv::c-emit p3 (:loxv::Op.Closure {:slot (:loxv::constant-slot ch)})))))
 
 ;; ---- chapter 23: jumps, and the patch F-104 has been waiting for
@@ -470,8 +523,11 @@
 
 ;; a local shadows a global of the same name, and the compiler -- not the VM -- decides which
 (:wat::core::defn :loxv::named-variable [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
-  (:wat::core::let [name (:lox::Token/text (:loxv::C/prev p))
-                    slot (:loxv::resolve-local (:loxv::C/locals p) name
+  (:loxv::variable-named p (:lox::Token/text (:loxv::C/prev p)) can-assign))
+
+(:wat::core::defn :loxv::variable-named [p <- :loxv::C name <- :wat::core::String
+                                         can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::let [slot (:loxv::resolve-local (:loxv::C/locals p) name
                            (:wat::core::- (:wat::core::length (:loxv::C/locals p)) 1))]
     (:wat::core::cond
       ((:wat::core::= slot -1)
@@ -595,8 +651,16 @@
     (:loxv::c-emit p1 (:loxv::Op.Call {:argc (:loxv::Params/arity r)}))))
 
 (:wat::core::defn :loxv::compile-function [p <- :loxv::C name <- :wat::core::String] -> :loxv::C
+  (:loxv::compile-function-typed p name "function"))
+
+;; a METHOD reserves local slot 0 for the receiver, which is how `this` becomes an ordinary
+;; local -- and why a closure inside a method can capture it like any other
+(:wat::core::defn :loxv::compile-function-typed [p <- :loxv::C name <- :wat::core::String
+                                                 ftype <- :wat::core::String] -> :loxv::C
   (:wat::core::let
-    [q0 (:loxv::begin-scope (:loxv::begin-function p))
+    [q00 (:loxv::begin-scope (:wat::core::assoc (:loxv::begin-function p) :ftype ftype))
+     q0 (:wat::core::if (:wat::core::= ftype "function") q00
+          (:loxv::mark-initialized (:loxv::declare-variable q00 "this")))
      q1 (:loxv::c-consume q0 "LEFT_PAREN" "Expect '(' after function name.")
      r (:wat::core::if (:lox::kind-is? (:loxv::C/cur q1) "RIGHT_PAREN")
          (:loxv::Params :p q1 :arity 0)
@@ -618,14 +682,90 @@
      p5 (:loxv::compile-function p4 name)]
     (:loxv::define-variable p5 slot)))
 
+;; ---- chapters 27-29: class declarations
+(:wat::core::defn :loxv::add-local [p <- :loxv::C name <- :wat::core::String] -> :loxv::C
+  (:loxv::mark-initialized (:loxv::declare-variable p name)))
+
+(:wat::core::defn :loxv::method [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::c-consume p "IDENTIFIER" "Expect method name.")
+                    name (:lox::Token/text (:loxv::C/prev p1))
+                    p2 (:loxv::add-name p1 name)
+                    nslot (:loxv::last-slot p2)
+                    ;; `init` is not a keyword; it is a method name the compiler knows about
+                    ftype (:wat::core::if (:wat::core::= name "init") "initializer" "method")
+                    p3 (:loxv::compile-function-typed p2 name ftype)]
+    (:loxv::c-emit p3 (:loxv::Op.Method {:slot nslot}))))
+
+(:wat::core::defn :loxv::method-loop [p <- :loxv::C] -> :loxv::C
+  (:wat::core::if (:wat::core::or (:lox::kind-is? (:loxv::C/cur p) "RIGHT_BRACE")
+                                  (:lox::kind-is? (:loxv::C/cur p) "EOF")) p
+    (:loxv::method-loop (:loxv::method p))))
+
+;; the class value is IMMUTABLE, so every method rebuilds it on the stack and the finished value
+;; is stored back into its binding at the end. Nystrom mutates the object in place; the visible
+;; behaviour is the same because nothing can observe the class until the declaration finishes.
+(:wat::core::defn :loxv::store-class [p <- :loxv::C global? <- :wat::core::bool
+                                      nslot <- :wat::core::i64 lslot <- :wat::core::i64] -> :loxv::C
+  (:wat::core::if global? (:loxv::c-emit p (:loxv::Op.SetGlobal {:slot nslot}))
+    (:loxv::c-emit p (:loxv::Op.SetLocal {:slot lslot}))))
+
+(:wat::core::defn :loxv::class-decl [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let
+    [p1 (:loxv::c-consume p "IDENTIFIER" "Expect class name.")
+     name (:lox::Token/text (:loxv::C/prev p1))
+     global? (:wat::core::= (:loxv::C/depth p1) 0)
+     p2 (:loxv::declare-variable p1 name)
+     lslot (:wat::core::- (:wat::core::length (:loxv::C/locals p2)) 1)
+     p3 (:loxv::add-name p2 name)
+     nslot (:loxv::last-slot p3)
+     p4 (:loxv::c-emit p3 (:loxv::Op.Class {:slot nslot}))
+     p5 (:wat::core::if global? (:loxv::c-emit p4 (:loxv::Op.DefineGlobal {:slot nslot}))
+          (:loxv::mark-initialized p4))
+     has-super (:lox::kind-is? (:loxv::C/cur p5) "LESS")
+     p6 (:wat::core::assoc p5 :classes (:wat::core::conj (:loxv::C/classes p5) has-super))
+     ;; a superclass: push it, give it a hidden local called `super` that methods can capture,
+     ;; then merge its methods into the subclass
+     p7 (:wat::core::if (:wat::core::not has-super) (:loxv::variable-named p6 name false)
+          (:wat::core::let
+            [a (:loxv::c-consume (:loxv::c-advance p6) "IDENTIFIER" "Expect superclass name.")
+             supname (:lox::Token/text (:loxv::C/prev a))
+             b (:wat::core::if (:wat::core::= supname name)
+                 (:loxv::c-error a "A class can't inherit from itself.") a)
+             c (:loxv::variable-named b supname false)
+             d (:loxv::add-local (:loxv::begin-scope c) "super")
+             e (:loxv::variable-named d name false)
+             f (:loxv::c-emit e (:loxv::Op.Inherit {}))]
+            (:loxv::store-class f global? nslot lslot)))
+     p8 (:loxv::c-consume p7 "LEFT_BRACE" "Expect '{' before class body.")
+     p9 (:loxv::method-loop p8)
+     p10 (:loxv::c-consume p9 "RIGHT_BRACE" "Expect '}' after class body.")
+     p11 (:loxv::c-emit (:loxv::store-class p10 global? nslot lslot) (:loxv::Op.Pop {}))
+     p12 (:wat::core::if has-super (:loxv::end-scope p11) p11)]
+    (:wat::core::assoc p12 :classes
+      (:loxv::bools-take (:loxv::C/classes p12)
+        (:wat::core::- (:wat::core::length (:loxv::C/classes p12)) 1) 0
+        (:wat::core::Vector :- [:wat::core::bool])))))
+
+(:wat::core::defn :loxv::bools-take [v <- (:wat::core::Vector :- [:wat::core::bool]) k <- :wat::core::i64
+                                     j <- :wat::core::i64 acc <- (:wat::core::Vector :- [:wat::core::bool])]
+  -> (:wat::core::Vector :- [:wat::core::bool])
+  (:wat::core::if (:wat::core::>= j k) acc
+    (:loxv::bools-take v k (:wat::core::+ j 1) (:wat::core::conj acc (:wat::core::nth v j)))))
+
 (:wat::core::defn :loxv::return-stmt [p <- :loxv::C] -> :loxv::C
   (:wat::core::if (:wat::core::= (:wat::core::length (:loxv::C/cframes p)) 0)
     (:loxv::c-error p "Can't return from top-level code.")
     (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "SEMICOLON")
-      (:loxv::c-emit (:loxv::c-emit (:loxv::c-advance p) (:loxv::Op.Nil {})) (:loxv::Op.Return {}))
-      (:loxv::c-emit
-        (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after return value.")
-        (:loxv::Op.Return {})))))
+      ;; a bare `return` in an initializer returns `this`, not nil
+      (:wat::core::if (:wat::core::= (:loxv::C/ftype p) "initializer")
+        (:loxv::c-emit (:loxv::c-emit (:loxv::c-advance p) (:loxv::Op.GetLocal {:slot 0}))
+          (:loxv::Op.Return {}))
+        (:loxv::c-emit (:loxv::c-emit (:loxv::c-advance p) (:loxv::Op.Nil {})) (:loxv::Op.Return {})))
+      (:wat::core::if (:wat::core::= (:loxv::C/ftype p) "initializer")
+        (:loxv::c-error p "Can't return a value from an initializer.")
+        (:loxv::c-emit
+          (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after return value.")
+          (:loxv::Op.Return {}))))))
 
 (:wat::core::defn :loxv::statement [p <- :loxv::C] -> :loxv::C
   (:wat::core::cond
@@ -684,6 +824,7 @@
   (:wat::core::let [p1 (:wat::core::cond
                          ((:lox::kind-is? (:loxv::C/cur p) "VAR") (:loxv::var-decl (:loxv::c-advance p)))
                          ((:lox::kind-is? (:loxv::C/cur p) "FUN") (:loxv::fun-decl (:loxv::c-advance p)))
+                         ((:lox::kind-is? (:loxv::C/cur p) "CLASS") (:loxv::class-decl (:loxv::c-advance p)))
                          (:else (:loxv::statement p)))]
     (:wat::core::if (:loxv::C/panic p1) (:loxv::synchronize p1) p1)))
 
@@ -702,7 +843,8 @@
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
                   :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
                   :cframes (:wat::core::Vector :- [:loxv::CFrame])
-                  :upvals (:wat::core::Vector :- [:loxv::UpDesc]))
+                  :upvals (:wat::core::Vector :- [:loxv::UpDesc])
+                  :ftype "script" :classes (:wat::core::Vector :- [:wat::core::bool]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::decl-loop p1)]
     (:loxv::c-emit p2 (:loxv::Op.Return {}))))
@@ -728,7 +870,8 @@
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
                   :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
                   :cframes (:wat::core::Vector :- [:loxv::CFrame])
-                  :upvals (:wat::core::Vector :- [:loxv::UpDesc]))
+                  :upvals (:wat::core::Vector :- [:loxv::UpDesc])
+                  :ftype "script" :classes (:wat::core::Vector :- [:wat::core::bool]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::expression p1)
      p3 (:loxv::c-consume p2 "EOF" "Expect end of expression.")]
