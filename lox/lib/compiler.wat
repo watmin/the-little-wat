@@ -29,22 +29,8 @@
 ;; `:wat::core::assoc` (F-113), which is flat in the field count where restating is linear.
 
 (:wat::load-file! "vm.wat")
+(:wat::load-file! "prec.wat")
 (:wat::load-file! "scanner.wat")
-
-;; Nystrom's Precedence enum, as the integers a Pratt parser actually compares. Chapter 17 only
-;; reaches TERM, FACTOR and UNARY; the rest are here because the ladder is the thing being
-;; ported, and chapters 21-23 fill them in.
-(:wat::core::defn :lox::PREC-NONE [] -> :wat::core::i64 0)
-(:wat::core::defn :lox::PREC-ASSIGNMENT [] -> :wat::core::i64 1)
-(:wat::core::defn :lox::PREC-OR [] -> :wat::core::i64 2)
-(:wat::core::defn :lox::PREC-AND [] -> :wat::core::i64 3)
-(:wat::core::defn :lox::PREC-EQUALITY [] -> :wat::core::i64 4)
-(:wat::core::defn :lox::PREC-COMPARISON [] -> :wat::core::i64 5)
-(:wat::core::defn :lox::PREC-TERM [] -> :wat::core::i64 6)
-(:wat::core::defn :lox::PREC-FACTOR [] -> :wat::core::i64 7)
-(:wat::core::defn :lox::PREC-UNARY [] -> :wat::core::i64 8)
-(:wat::core::defn :lox::PREC-CALL [] -> :wat::core::i64 9)
-(:wat::core::defn :lox::PREC-PRIMARY [] -> :wat::core::i64 10)
 
 ;; the parser. `src`/`n`/`i`/`line` are the scanner's whole state -- the flat shape, so scanning
 ;; a character does not allocate.
@@ -54,12 +40,6 @@
    chunk <- :lox::Chunk
    errs <- (:wat::core::Vector :- [:wat::core::String])
    panic <- :wat::core::bool])
-
-;; `:lox::eof?` is written as a 38-arm match because it answers a question about ONE variant.
-;; Asking about a kind by name is the same question with one line, and a compiler asks it of
-;; twenty different kinds; the name is the honest key here.
-(:wat::core::defn :lox::kind-is? [t <- :lox::Token name <- :wat::core::String] -> :wat::core::bool
-  (:wat::core::= (:lox::tok-name (:lox::Token/kind t)) name))
 
 (:wat::core::defn :lox::c-error [p <- :lox::C msg <- :wat::core::String] -> :lox::C
   ;; Nystrom's panic mode: after the first error, further ones are suppressed until the parser
@@ -147,9 +127,6 @@
       ((:wat::core::= k "STAR") (:lox::c-emit p1 (:lox::Op.Multiply {})))
       ((:wat::core::= k "SLASH") (:lox::c-emit p1 (:lox::Op.Divide {})))
       (:else (:lox::c-error p1 "Expect an operator.")))))
-
-(:wat::core::defn :lox::blank-token [] -> :lox::Token
-  (:lox::Token :kind (:lox::Tok.Eof {}) :text "" :line 0))
 
 (:wat::core::defn :lox::compile [src <- :wat::core::String] -> :lox::C
   (:wat::core::let
