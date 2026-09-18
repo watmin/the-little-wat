@@ -19,6 +19,10 @@
 ;; boxing -- the same union packed into the unused bits of a quiet NaN -- has nothing to say here
 ;; either, which is why NEXT.md lists it as "no portable content".
 
+;; where an upvalue comes from: a local of the immediately enclosing function, or an upvalue the
+;; enclosing function itself captured
+(:wat::core::defrecord :loxv::UpDesc [index <- :wat::core::i64  is-local <- :wat::core::bool])
+
 (:wat::core::defenum :loxv::Val :wat::enum::Pure
   :Nil  []
   :Bool [b <- :wat::core::bool]
@@ -34,7 +38,16 @@
   ;; through a `defrecord` here -- a `Val` holds a `Chunk`, and a `Chunk`'s constant pool holds
   ;; `Val`s -- which wat accepts (probes/lox/rule-table.wat's sibling question, checked before it
   ;; was relied on).
-  :Fn   [chunk <- :loxv::Chunk  name <- :wat::core::String  arity <- :wat::core::i64]
+  ;; `updescs` is chapter 25's: what this function captures, worked out at COMPILE time.
+  :Fn   [chunk <- :loxv::Chunk  name <- :wat::core::String  arity <- :wat::core::i64
+         updescs <- (:wat::core::Vector :- [:loxv::UpDesc])]
+  ;; chapter 25. A closure is a function plus the CELLS it captured. Nystrom's upvalue is a
+  ;; `Value*` into the stack that is later "closed" by copying the value into the upvalue object;
+  ;; wat has no way to share a mutable location, so the pointer becomes an INDEX into a VM-side
+  ;; table of cells. That is the same indirection with the pointer named instead of dereferenced,
+  ;; and sharing works for the same reason: two closures over one variable hold the same id.
+  :Closure [chunk <- :loxv::Chunk  name <- :wat::core::String  arity <- :wat::core::i64
+            cells <- (:wat::core::Vector :- [:wat::core::i64])]
   ;; a native is named rather than carried: a closure cannot live in a `:wat::enum::Pure` (the
   ;; containment rule, F-114), and Nystrom's C function pointer has no wat spelling that a value
   ;; can hold. So the VM dispatches on the name, which is what a table of function pointers is.
@@ -50,7 +63,9 @@
     [:loxv::Val.Bool {:b b} (:wat::core::if b "true" "false")]
     ;; printValue prints a string's characters, not its quotes
     [:loxv::Val.Str {:s x} x]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a}
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u}
+      (:wat::core::if (:wat::core::= nm "") "<script>" (:wat::string::concat "<fn " nm ">"))]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u}
       (:wat::core::if (:wat::core::= nm "") "<script>" (:wat::string::concat "<fn " nm ">"))]
     [:loxv::Val.Native {:name nm :arity a} "<native fn>"]
     [:loxv::Val.Num {:n n} (:wat::f64::to-string n)]))
@@ -59,28 +74,32 @@
   (:wat::core::match v
     [:loxv::Val.Nil {} "nil"] [:loxv::Val.Bool {:b b} "bool"] [:loxv::Val.Num {:n n} "number"]
     [:loxv::Val.Str {:s x} "string"]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} "function"]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} "function"]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} "function"]
     [:loxv::Val.Native {:name nm :arity a} "function"]))
 
 (:wat::core::defn :loxv::num? [v <- :loxv::Val] -> :wat::core::bool
   (:wat::core::match v
     [:loxv::Val.Num {:n n} true] [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]
     [:loxv::Val.Str {:s x} false]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} false]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} false]
     [:loxv::Val.Native {:name nm :arity a} false]))
 
 (:wat::core::defn :loxv::str? [v <- :loxv::Val] -> :wat::core::bool
   (:wat::core::match v
     [:loxv::Val.Str {:s x} true] [:loxv::Val.Num {:n n} false]
     [:loxv::Val.Nil {} false] [:loxv::Val.Bool {:b b} false]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} false]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} false]
     [:loxv::Val.Native {:name nm :arity a} false]))
 
 (:wat::core::defn :loxv::as-str [v <- :loxv::Val] -> :wat::core::String
   (:wat::core::match v
     [:loxv::Val.Str {:s x} x] [:loxv::Val.Num {:n n} ""]
     [:loxv::Val.Nil {} ""] [:loxv::Val.Bool {:b b} ""]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} ""]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} ""]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} ""]
     [:loxv::Val.Native {:name nm :arity a} ""]))
 
 ;; AS_NUMBER, with the guard the C macro does not have. Callers check `num?` first; this answers
@@ -89,7 +108,8 @@
   (:wat::core::match v
     [:loxv::Val.Num {:n n} n] [:loxv::Val.Nil {} 0.0] [:loxv::Val.Bool {:b b} 0.0]
     [:loxv::Val.Str {:s x} 0.0]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} 0.0]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} 0.0]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} 0.0]
     [:loxv::Val.Native {:name nm :arity a} 0.0]))
 
 ;; Lox's truthiness: nil and false are falsey, EVERYTHING else is truthy -- including 0 and "",
@@ -101,7 +121,8 @@
     [:loxv::Val.Num {:n n} false]
     ;; a string is truthy, INCLUDING the empty one -- Ruby's rule again, not Python's
     [:loxv::Val.Str {:s x} false]
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} false]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} false]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} false]
     [:loxv::Val.Native {:name nm :arity a} false]))
 
 ;; valuesEqual. Nystrom compares the tags first and returns false when they differ -- so `1` and
@@ -143,6 +164,11 @@
   :Loop [offset <- :wat::core::i64]
   ;; chapter 24
   :Call [argc <- :wat::core::i64]
+  ;; chapter 25
+  :Closure [slot <- :wat::core::i64]
+  :GetUpvalue [slot <- :wat::core::i64]
+  :SetUpvalue [slot <- :wat::core::i64]
+  :CloseUpvalue []
   :Return [])
 
 (:wat::core::typealias :loxv::Code (:wat::core::Vector :- [:loxv::Op]))
@@ -185,6 +211,8 @@
     [:loxv::Op.GetLocal {:slot s} "OP_GET_LOCAL"] [:loxv::Op.SetLocal {:slot s} "OP_SET_LOCAL"]
     [:loxv::Op.Jump {:offset o} "OP_JUMP"] [:loxv::Op.JumpIfFalse {:offset o} "OP_JUMP_IF_FALSE"]
     [:loxv::Op.Loop {:offset o} "OP_LOOP"] [:loxv::Op.Call {:argc a} "OP_CALL"]
+    [:loxv::Op.Closure {:slot s} "OP_CLOSURE"] [:loxv::Op.GetUpvalue {:slot s} "OP_GET_UPVALUE"]
+    [:loxv::Op.SetUpvalue {:slot s} "OP_SET_UPVALUE"] [:loxv::Op.CloseUpvalue {} "OP_CLOSE_UPVALUE"]
     [:loxv::Op.Return {} "OP_RETURN"]))
 
 (:wat::core::defn :loxv::op-key [op <- :loxv::Op] -> :wat::core::String
@@ -205,6 +233,10 @@
     [:loxv::Op.JumpIfFalse {:offset o} (:wat::string::concat "JIF/" (:wat::i64::to-string o))]
     [:loxv::Op.Loop {:offset o} (:wat::string::concat "LOOP/" (:wat::i64::to-string o))]
     [:loxv::Op.Call {:argc a} (:wat::string::concat "CALL/" (:wat::i64::to-string a))]
+    [:loxv::Op.Closure {:slot s} (:wat::string::concat "CLOS/" (:wat::i64::to-string s))]
+    [:loxv::Op.GetUpvalue {:slot s} (:wat::string::concat "GETU/" (:wat::i64::to-string s))]
+    [:loxv::Op.SetUpvalue {:slot s} (:wat::string::concat "SETU/" (:wat::i64::to-string s))]
+    [:loxv::Op.CloseUpvalue {} "CLOSEU"]
     [:loxv::Op.Return {} "RET"]))
 
 (:wat::core::defn :loxv::code-sig [c <- :loxv::Chunk] -> :wat::core::String

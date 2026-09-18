@@ -15,10 +15,18 @@
 ;; chapter 22. A local is a name and the scope depth it was declared at; its SLOT is its index in
 ;; this vector, which is also its index on the running stack. `depth` -1 means "declared but not
 ;; yet initialized", which is what makes `var a = a;` an error rather than a read of nil.
-(:wat::core::defrecord :loxv::Local [name <- :wat::core::String  depth <- :wat::core::i64])
+(:wat::core::defrecord :loxv::Local
+  [name <- :wat::core::String  depth <- :wat::core::i64
+   ;; chapter 25: set when an inner function captures this local, so the scope that owns it emits
+   ;; CLOSE_UPVALUE instead of POP on the way out
+   captured <- :wat::core::bool])
 
 (:wat::core::defrecord :loxv::CFrame
-  [chunk <- :loxv::Chunk  locals <- (:wat::core::Vector :- [:loxv::Local])  depth <- :wat::core::i64])
+  [chunk <- :loxv::Chunk  locals <- (:wat::core::Vector :- [:loxv::Local])  depth <- :wat::core::i64
+   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])])
+
+;; a resolution answers both the (possibly edited) compiler and an index
+(:wat::core::defrecord :loxv::UpR [p <- :loxv::C  index <- :wat::core::i64])
 
 ;; a function's parser answers two things -- the compiler and the arity -- and a wat function
 ;; answers one, so they travel together
@@ -34,7 +42,9 @@
    depth <- :wat::core::i64
    ;; chapter 24: the compilers a function declaration suspends. Nystrom links them with an
    ;; `enclosing` pointer; a vector of saved frames is the same thing without the pointer.
-   cframes <- (:wat::core::Vector :- [:loxv::CFrame])])
+   cframes <- (:wat::core::Vector :- [:loxv::CFrame])
+   ;; chapter 25: what the function being compiled captures
+   upvals <- (:wat::core::Vector :- [:loxv::UpDesc])])
 
 ;; F-104 again, this time in the COMPILER: marking a local initialized changes the depth of the
 ;; LAST element of a vector, and there is no positional update, so the vector is rebuilt.
@@ -207,37 +217,121 @@
 
 ;; F-019 again: a bare `(:loxv::Val.Fn {…})` has the VARIANT's type, and the constant pool wants
 ;; the enum's. A helper whose declared return type is the enum widens it (P-006).
-(:wat::core::defn :loxv::fnval [c <- :loxv::Chunk name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::Val
-  (:loxv::Val.Fn {:chunk c :name name :arity arity}))
+(:wat::core::defn :loxv::fnval [c <- :loxv::Chunk name <- :wat::core::String arity <- :wat::core::i64
+                                ups <- (:wat::core::Vector :- [:loxv::UpDesc])] -> :loxv::Val
+  (:loxv::Val.Fn {:chunk c :name name :arity arity :updescs ups}))
+
+;; ---- chapter 25: resolving a name to an UPVALUE
+;; Nystrom recurses through `enclosing` pointers and mutates each compiler on the way back down.
+;; The levels here are a vector, so the same walk is an index and the mutations are rebuilds.
+(:wat::core::defn :loxv::nlevels [p <- :loxv::C] -> :wat::core::i64
+  (:wat::core::length (:loxv::C/cframes p)))
+
+(:wat::core::defn :loxv::lvl-locals [p <- :loxv::C lv <- :wat::core::i64]
+  -> (:wat::core::Vector :- [:loxv::Local])
+  (:wat::core::if (:wat::core::= lv (:loxv::nlevels p)) (:loxv::C/locals p)
+    (:loxv::CFrame/locals (:wat::core::nth (:loxv::C/cframes p) lv))))
+
+(:wat::core::defn :loxv::lvl-upvals [p <- :loxv::C lv <- :wat::core::i64]
+  -> (:wat::core::Vector :- [:loxv::UpDesc])
+  (:wat::core::if (:wat::core::= lv (:loxv::nlevels p)) (:loxv::C/upvals p)
+    (:loxv::CFrame/upvals (:wat::core::nth (:loxv::C/cframes p) lv))))
+
+(:wat::core::defn :loxv::cframes-set [v <- (:wat::core::Vector :- [:loxv::CFrame]) i <- :wat::core::i64
+                                      x <- :loxv::CFrame j <- :wat::core::i64
+                                      acc <- (:wat::core::Vector :- [:loxv::CFrame])]
+  -> (:wat::core::Vector :- [:loxv::CFrame])
+  (:wat::core::if (:wat::core::>= j (:wat::core::length v)) acc
+    (:loxv::cframes-set v i x (:wat::core::+ j 1)
+      (:wat::core::conj acc (:wat::core::if (:wat::core::= j i) x (:wat::core::nth v j))))))
+
+(:wat::core::defn :loxv::set-lvl-locals [p <- :loxv::C lv <- :wat::core::i64
+                                         v <- (:wat::core::Vector :- [:loxv::Local])] -> :loxv::C
+  (:wat::core::if (:wat::core::= lv (:loxv::nlevels p)) (:wat::core::assoc p :locals v)
+    (:wat::core::assoc p :cframes
+      (:loxv::cframes-set (:loxv::C/cframes p) lv
+        (:wat::core::assoc (:wat::core::nth (:loxv::C/cframes p) lv) :locals v) 0
+        (:wat::core::Vector :- [:loxv::CFrame])))))
+
+(:wat::core::defn :loxv::set-lvl-upvals [p <- :loxv::C lv <- :wat::core::i64
+                                         v <- (:wat::core::Vector :- [:loxv::UpDesc])] -> :loxv::C
+  (:wat::core::if (:wat::core::= lv (:loxv::nlevels p)) (:wat::core::assoc p :upvals v)
+    (:wat::core::assoc p :cframes
+      (:loxv::cframes-set (:loxv::C/cframes p) lv
+        (:wat::core::assoc (:wat::core::nth (:loxv::C/cframes p) lv) :upvals v) 0
+        (:wat::core::Vector :- [:loxv::CFrame])))))
+
+(:wat::core::defn :loxv::mark-captured [p <- :loxv::C lv <- :wat::core::i64 idx <- :wat::core::i64] -> :loxv::C
+  (:wat::core::let [ls (:loxv::lvl-locals p lv)]
+    (:loxv::set-lvl-locals p lv
+      (:loxv::locals-set ls idx (:wat::core::assoc (:wat::core::nth ls idx) :captured true) 0
+        (:wat::core::Vector :- [:loxv::Local])))))
+
+;; addUpvalue's de-duplication: the same capture asked for twice gets one slot
+(:wat::core::defn :loxv::find-updesc [v <- (:wat::core::Vector :- [:loxv::UpDesc]) idx <- :wat::core::i64
+                                      is-local <- :wat::core::bool i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length v)) -1)
+    ((:wat::core::and (:wat::core::= (:loxv::UpDesc/index (:wat::core::nth v i)) idx)
+                      (:wat::core::= (:loxv::UpDesc/is-local (:wat::core::nth v i)) is-local)) i)
+    (:else (:loxv::find-updesc v idx is-local (:wat::core::+ i 1)))))
+
+(:wat::core::defn :loxv::add-upvalue [p <- :loxv::C lv <- :wat::core::i64 index <- :wat::core::i64
+                                      is-local <- :wat::core::bool] -> :loxv::UpR
+  (:wat::core::let [v (:loxv::lvl-upvals p lv)
+                    found (:loxv::find-updesc v index is-local 0)]
+    (:wat::core::if (:wat::core::>= found 0) (:loxv::UpR :p p :index found)
+      (:loxv::UpR :index (:wat::core::length v)
+        :p (:loxv::set-lvl-upvals p lv
+             (:wat::core::conj v (:loxv::UpDesc :index index :is-local is-local)))))))
+
+(:wat::core::defn :loxv::resolve-up-at [p <- :loxv::C lv <- :wat::core::i64 name <- :wat::core::String] -> :loxv::UpR
+  (:wat::core::if (:wat::core::= lv 0) (:loxv::UpR :p p :index -1)
+    (:wat::core::let [enc (:wat::core::- lv 1)
+                      ls (:loxv::lvl-locals p enc)
+                      local (:loxv::resolve-local ls name (:wat::core::- (:wat::core::length ls) 1))]
+      (:wat::core::if (:wat::core::>= local 0)
+        (:loxv::add-upvalue (:loxv::mark-captured p enc local) lv local true)
+        (:wat::core::let [r (:loxv::resolve-up-at p enc name)]
+          (:wat::core::if (:wat::core::< (:loxv::UpR/index r) 0)
+            (:loxv::UpR :p (:loxv::UpR/p r) :index -1)
+            (:loxv::add-upvalue (:loxv::UpR/p r) lv (:loxv::UpR/index r) false)))))))
 
 (:wat::core::defn :loxv::begin-function [p <- :loxv::C] -> :loxv::C
-  (:wat::core::assoc
+  (:wat::core::assoc (:wat::core::assoc
     (:wat::core::assoc
       (:wat::core::assoc
         (:wat::core::assoc p :cframes
           (:wat::core::conj (:loxv::C/cframes p)
-            (:loxv::CFrame :chunk (:loxv::C/chunk p) :locals (:loxv::C/locals p) :depth (:loxv::C/depth p))))
+            (:loxv::CFrame :chunk (:loxv::C/chunk p) :locals (:loxv::C/locals p)
+                           :depth (:loxv::C/depth p) :upvals (:loxv::C/upvals p))))
         :chunk (:loxv::new-chunk))
       :locals (:wat::core::Vector :- [:loxv::Local]))
-    :depth 0))
+    :depth 0) :upvals (:wat::core::Vector :- [:loxv::UpDesc])))
 
 ;; endCompiler: finish the function's chunk with an implicit `return nil`, restore the enclosing
 ;; compiler, and emit the finished function as a CONSTANT of the enclosing chunk
 (:wat::core::defn :loxv::end-function [p <- :loxv::C name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::C
   (:wat::core::let
     [p1 (:loxv::c-emit (:loxv::c-emit p (:loxv::Op.Nil {})) (:loxv::Op.Return {}))
-     fn (:loxv::fnval (:loxv::C/chunk p1) name arity)
+     fn (:loxv::fnval (:loxv::C/chunk p1) name arity (:loxv::C/upvals p1))
      n (:wat::core::length (:loxv::C/cframes p1))
      f (:wat::core::nth (:loxv::C/cframes p1) (:wat::core::- n 1))
      p2 (:wat::core::assoc
           (:wat::core::assoc
             (:wat::core::assoc
-              (:wat::core::assoc p1 :chunk (:loxv::CFrame/chunk f))
-              :locals (:loxv::CFrame/locals f))
+              (:wat::core::assoc
+                (:wat::core::assoc p1 :chunk (:loxv::CFrame/chunk f))
+                :locals (:loxv::CFrame/locals f))
+              :upvals (:loxv::CFrame/upvals f))
             :depth (:loxv::CFrame/depth f))
           :cframes (:loxv::cframes-take (:loxv::C/cframes p1) (:wat::core::- n 1) 0
                      (:wat::core::Vector :- [:loxv::CFrame])))]
-    (:loxv::c-constant p2 fn)))
+    ;; OP_CLOSURE rather than OP_CONSTANT: the function is built at RUNTIME, out of the constant
+    ;; and whatever its `updescs` say it captures
+    (:wat::core::let [ch (:loxv::add-constant (:loxv::C/chunk p2) fn)
+                      p3 (:wat::core::assoc p2 :chunk ch)]
+      (:loxv::c-emit p3 (:loxv::Op.Closure {:slot (:loxv::constant-slot ch)})))))
 
 ;; ---- chapter 23: jumps, and the patch F-104 has been waiting for
 ;;
@@ -288,9 +382,15 @@
       (:loxv::count-above v d (:wat::core::- i 1) (:wat::core::+ acc 1))
       acc)))
 
-(:wat::core::defn :loxv::emit-pops [p <- :loxv::C k <- :wat::core::i64] -> :loxv::C
+;; a captured local leaves by CLOSE_UPVALUE, an uncaptured one by POP -- which is the only
+;; visible difference between a variable an inner function took a reference to and one it did not
+(:wat::core::defn :loxv::emit-pops [p <- :loxv::C v <- (:wat::core::Vector :- [:loxv::Local])
+                                    i <- :wat::core::i64 k <- :wat::core::i64] -> :loxv::C
   (:wat::core::if (:wat::core::= k 0) p
-    (:loxv::emit-pops (:loxv::c-emit p (:loxv::Op.Pop {})) (:wat::core::- k 1))))
+    (:loxv::emit-pops
+      (:loxv::c-emit p (:wat::core::if (:loxv::Local/captured (:wat::core::nth v i))
+                         (:loxv::Op.CloseUpvalue {}) (:loxv::Op.Pop {})))
+      v (:wat::core::- i 1) (:wat::core::- k 1))))
 
 ;; leaving a scope pops every local it owned -- one instruction each, which is why Nystrom notes
 ;; that a `for` loop body's locals cost two instructions per iteration
@@ -298,7 +398,7 @@
   (:wat::core::let [d (:wat::core::- (:loxv::C/depth p) 1)
                     v (:loxv::C/locals p)
                     k (:loxv::count-above v d (:wat::core::- (:wat::core::length v) 1) 0)
-                    p1 (:loxv::emit-pops p k)]
+                    p1 (:loxv::emit-pops p v (:wat::core::- (:wat::core::length v) 1) k)]
     (:wat::core::assoc (:wat::core::assoc p1 :depth d)
       :locals (:loxv::locals-take v (:wat::core::- (:wat::core::length v) k) 0
                 (:wat::core::Vector :- [:loxv::Local])))))
@@ -329,15 +429,14 @@
       (:loxv::c-error p "Already a variable with this name in this scope.")
       ;; depth -1: DECLARED, not yet initialized
       (:wat::core::assoc p :locals
-        (:wat::core::conj (:loxv::C/locals p) (:loxv::Local :name name :depth -1))))))
+        (:wat::core::conj (:loxv::C/locals p) (:loxv::Local :name name :depth -1 :captured false))))))
 
 (:wat::core::defn :loxv::mark-initialized [p <- :loxv::C] -> :loxv::C
   (:wat::core::let [v (:loxv::C/locals p) n (:wat::core::length v)]
     (:wat::core::if (:wat::core::= n 0) p
       (:wat::core::assoc p :locals
         (:loxv::locals-set v (:wat::core::- n 1)
-          (:loxv::Local :name (:loxv::Local/name (:wat::core::nth v (:wat::core::- n 1)))
-                        :depth (:loxv::C/depth p))
+          (:wat::core::assoc (:wat::core::nth v (:wat::core::- n 1)) :depth (:loxv::C/depth p))
           0 (:wat::core::Vector :- [:loxv::Local]))))))
 
 ;; ---- chapter 21: names, statements and declarations
@@ -357,6 +456,12 @@
       (:loxv::c-emit (:loxv::expression (:loxv::c-advance p1)) (:loxv::Op.SetGlobal {:slot slot}))
       (:loxv::c-emit p1 (:loxv::Op.GetGlobal {:slot slot})))))
 
+(:wat::core::defn :loxv::upvalue-variable [p <- :loxv::C slot <- :wat::core::i64
+                                           can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p) "EQUAL"))
+    (:loxv::c-emit (:loxv::expression (:loxv::c-advance p)) (:loxv::Op.SetUpvalue {:slot slot}))
+    (:loxv::c-emit p (:loxv::Op.GetUpvalue {:slot slot}))))
+
 (:wat::core::defn :loxv::local-variable [p <- :loxv::C slot <- :wat::core::i64
                                          can-assign <- :wat::core::bool] -> :loxv::C
   (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p) "EQUAL"))
@@ -369,7 +474,11 @@
                     slot (:loxv::resolve-local (:loxv::C/locals p) name
                            (:wat::core::- (:wat::core::length (:loxv::C/locals p)) 1))]
     (:wat::core::cond
-      ((:wat::core::= slot -1) (:loxv::global-variable p name can-assign))
+      ((:wat::core::= slot -1)
+        (:wat::core::let [r (:loxv::resolve-up-at p (:loxv::nlevels p) name)]
+          (:wat::core::if (:wat::core::>= (:loxv::UpR/index r) 0)
+            (:loxv::upvalue-variable (:loxv::UpR/p r) (:loxv::UpR/index r) can-assign)
+            (:loxv::global-variable (:loxv::UpR/p r) name can-assign))))
       ;; declared but not yet initialized: `var a = a;` reads the local being defined
       ((:wat::core::= (:loxv::Local/depth (:wat::core::nth (:loxv::C/locals p) slot)) -1)
         (:loxv::c-error p "Can't read local variable in its own initializer."))
@@ -592,7 +701,8 @@
                   :chunk (:loxv::new-chunk)
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
                   :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
-                  :cframes (:wat::core::Vector :- [:loxv::CFrame]))
+                  :cframes (:wat::core::Vector :- [:loxv::CFrame])
+                  :upvals (:wat::core::Vector :- [:loxv::UpDesc]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::decl-loop p1)]
     (:loxv::c-emit p2 (:loxv::Op.Return {}))))
@@ -617,7 +727,8 @@
                   :chunk (:loxv::new-chunk)
                   :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
                   :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0
-                  :cframes (:wat::core::Vector :- [:loxv::CFrame]))
+                  :cframes (:wat::core::Vector :- [:loxv::CFrame])
+                  :upvals (:wat::core::Vector :- [:loxv::UpDesc]))
      p1 (:loxv::c-advance p0)
      p2 (:loxv::expression p1)
      p3 (:loxv::c-consume p2 "EOF" "Expect end of expression.")]

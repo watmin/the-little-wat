@@ -353,7 +353,7 @@ ch 1 and PAIP's CL chapters got.
 | 22 | **Local variables** | **done** (C-105) | a local costs no instruction to create, checked through the emitted code; both compile errors checked; `OP_SET_LOCAL` is F-104 in an inner loop (76 µs at one local, 404 µs at forty) and the probe it prompted found **F-116** |
 | 23 | **Jumping back and forth** | **done** (C-106) | the backpatch chapter 14 predicted: a patch rebuilds the code vector, **~7 µs per instruction already emitted**, so patches are quadratic in program length (90 `if`s: 1.06 s against 0.16 s) |
 | 24 | **Calls and functions** | **done** (C-107) | functions as values with their own chunks, a stack of compilers, call frames. A frame is allocated per **call**, not per instruction, so it cost less than ch22-23. A native is a name, not a closure (F-114). Two checks pin the ch24/ch25 boundary |
-| 25 | Closures | **not started** |
+| 25 | **Closures** | **done** (C-108) | the one chapter whose DESIGN had to change: an upvalue is a `Value*` into the stack, and wat cannot share a mutable location, so the pointer became an index into a VM-owned cell table. Sharing, non-sharing and closing all checked |
 | 26 | Garbage collection | **partly covered** — SICP §5.3 (C-081) already built stop-and-copy with broken hearts; Nystrom's mark-sweep is a different algorithm and is worth building |
 | 27 | Classes and instances | **not started** |
 | 28 | Methods and initializers | **not started** |

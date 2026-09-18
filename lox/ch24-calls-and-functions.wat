@@ -50,7 +50,8 @@
 ;; the code of the FUNCTION in constant slot 0, not of the enclosing script
 (:wat::core::defn :c24::fn-code [src <- :wat::core::String slot <- :wat::core::i64] -> :wat::core::String
   (:wat::core::match (:wat::core::nth (:loxv::Chunk/constants (:loxv::C/chunk (:loxv::compile-program src))) slot)
-    [:loxv::Val.Fn {:chunk c :name nm :arity a} (:loxv::code-sig c)]
+    [:loxv::Val.Fn {:chunk c :name nm :arity a :updescs u} (:loxv::code-sig c)]
+    [:loxv::Val.Closure {:chunk c :name nm :arity a :cells u} (:loxv::code-sig c)]
     [:loxv::Val.Nil {} "(not a function)"] [:loxv::Val.Bool {:b b} "(not a function)"]
     [:loxv::Val.Num {:n n} "(not a function)"] [:loxv::Val.Str {:s x} "(not a function)"]
     [:loxv::Val.Native {:name nm :arity a} "(not a function)"]))
@@ -87,16 +88,18 @@
         ;; local of `outer`, and `outer` resolves it as a local:
         (:c24::expect "a local function is callable"
           (:c24::run "fun outer() { fun inner() { return 5; } return inner() + 1; } print outer();") "6")
-        ;; but it CANNOT refer to itself, because the reference is inside ITS OWN body, where the
-        ;; name is a local of the ENCLOSING function. `resolveLocal` only looks at the current
-        ;; compiler; `resolveUpvalue` is chapter 25. So this is a global lookup that fails --
-        ;; which is exactly what clox does at this point in the book, and what chapter 25 fixes.
-        (:c24::expect "but cannot recurse yet     "
+;; AND THIS IS WHERE CHAPTER 25 MOVED THE LINE. When this file was written these two answered
+        ;; *"Undefined variable"*, because the reference lives inside the inner function's OWN
+        ;; body, where the name is a local of the ENCLOSING compiler -- `resolveLocal` does not
+        ;; look there, and `resolveUpvalue` is chapter 25. Both now work, and these two lines
+        ;; record that they were MOVED rather than quietly widened: ch25's file is where they are
+        ;; explained, and this is the before-and-after.
+        (:c24::expect "a local function recurses  "
           (:c24::run "fun outer() { fun down(n) { if (n == 0) return 0; return down(n - 1); } return down(5); } print outer();")
-          "[line 1] Runtime error: Undefined variable 'down'.")
-        (:c24::expect "  nor read an outer local  "
+          "0")
+        (:c24::expect "  and reads an outer local "
           (:c24::run "fun outer() { var a = 1; fun get() { return a; } return get(); } print outer();")
-          "[line 1] Runtime error: Undefined variable 'a'.")
+          "1")
 
         ;; FRAMES: locals are frame-relative, so the same body works at any depth
         (:c24::expect "each call has its own local"
@@ -146,11 +149,14 @@
 
         ;; THE EMITTED CODE. A function declaration is a CONSTANT plus a define; the body lives
         ;; in its own chunk, which is why the script's code says nothing about it.
-        (:c24::expect "a declaration is a constant" (:c24::code "fun f() {}") "CONST/1 DEFG/0 RET")
+        ;; chapter 25 changed this instruction: a function literal was OP_CONSTANT when this file
+        ;; was written and is OP_CLOSURE now, because the value is BUILT at runtime out of the
+        ;; constant and whatever it captures. One codebase, so the line records what it says now.
+        (:c24::expect "a declaration is a closure " (:c24::code "fun f() {}") "CLOS/1 DEFG/0 RET")
         (:c24::expect "the body is its own chunk  " (:c24::fn-code "fun f() { return 7; }" 1)
           "CONST/0 RET NIL RET")
         (:c24::expect "a call is CALL/n           " (:c24::code "fun f(a,b) {} f(1,2);")
-          "CONST/1 DEFG/0 GETG/2 CONST/3 CONST/4 CALL/2 POP RET")
+          "CLOS/1 DEFG/0 GETG/2 CONST/3 CONST/4 CALL/2 POP RET")
         (:c24::expect "a parameter is local slot 0" (:c24::fn-code "fun f(a) { return a; }" 1)
           "GETL/0 RET NIL RET")
 
@@ -185,11 +191,12 @@
         (:wat::kernel::println "can tell -- until chapter 25 gives closures their own captured state.")
         (:wat::kernel::println "")
         (:wat::kernel::println "One expectation here was wrong on the first run, and the fix was to the")
-        (:wat::kernel::println "expectation: a local function cannot yet refer to itself, because the")
-        (:wat::kernel::println "reference lives inside its own body where the name is a local of the")
-        (:wat::kernel::println "ENCLOSING compiler. resolveLocal does not look there; resolveUpvalue is")
-        (:wat::kernel::println "chapter 25. Two checks now pin that boundary, so chapter 25 will have to")
-        (:wat::kernel::println "move them rather than quietly widen.")
+        (:wat::kernel::println "expectation: at chapter 24 a local function cannot refer to itself,")
+        (:wat::kernel::println "because the reference lives inside its own body where the name is a")
+        (:wat::kernel::println "local of the ENCLOSING compiler. Two checks pinned that boundary, and")
+        (:wat::kernel::println "chapter 25 then MOVED them -- they now answer 0 and 1 rather than")
+        (:wat::kernel::println "Undefined variable. That is the record of a capability arriving, which")
+        (:wat::kernel::println "is what pinning a boundary is for.")
         (:wat::kernel::println "")
         (:wat::test::assert-eq
           (:wat::core::foldl (:wat::core::fn [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64

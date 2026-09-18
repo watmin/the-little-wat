@@ -26,15 +26,32 @@
   :Jump [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output  target <- :wat::core::i64]
   ;; chapter 24: an instruction that changes which CHUNK is running
   :Call [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output
-         argc <- :wat::core::i64  chunk <- :loxv::Chunk]
+         argc <- :wat::core::i64  chunk <- :loxv::Chunk
+         ups <- (:wat::core::Vector :- [:wat::core::i64])]
   :Ret  [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output]
+  ;; chapter 25: four instructions that touch the CELL table, which lives in the loop rather
+  ;; than in `exec` -- the same arrangement jumps and calls already use
+  :MakeClosure [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output  slot <- :wat::core::i64]
+  :GetUp [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output  slot <- :wat::core::i64]
+  :SetUp [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output  slot <- :wat::core::i64]
+  :CloseUp [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output]
   :Fail [msg <- :wat::core::String])
+
+;; an upvalue's home. OPEN means the variable is still on the stack and the cell is an alias for
+;; that slot; CLOSED means the frame is gone and the cell owns the value. Nystrom's `Value*
+;; location` and `Value closed` in one enum, with the pointer replaced by an index.
+(:wat::core::defenum :loxv::Cell :wat::enum::Pure
+  :OnStack [idx <- :wat::core::i64]
+  :Closed  [v <- :loxv::Val])
+
+(:wat::core::typealias :loxv::Cells (:wat::core::Vector :- [:loxv::Cell]))
 
 ;; the frames the VM has left behind. The CURRENT frame is not in here -- it rides in
 ;; `run-loop`'s arguments, which is C-098's threaded shape: a frame record allocated per CALL
 ;; rather than per instruction.
 (:wat::core::defrecord :loxv::Saved
-  [chunk <- :loxv::Chunk  ip <- :wat::core::i64  base <- :wat::core::i64])
+  [chunk <- :loxv::Chunk  ip <- :wat::core::i64  base <- :wat::core::i64
+   ups <- (:wat::core::Vector :- [:wat::core::i64])])
 
 (:wat::core::defenum :loxv::Out :wat::enum::Pure
   :Ok  [stack <- :loxv::Stack  globals <- :loxv::Globals  out <- :loxv::Output  steps <- :wat::core::i64]
@@ -223,11 +240,15 @@
       (:wat::core::if (:wat::core::< (:wat::core::length s) (:wat::core::+ n 1))
         (:loxv::Step.Fail {:msg "Stack underflow."})
         (:wat::core::match (:loxv::peek-n s n)
-          [:loxv::Val.Fn {:chunk fc :name nm :arity a}
+          ;; after chapter 25 only a CLOSURE is callable -- every function literal is wrapped by
+          ;; OP_CLOSURE, so a bare `Fn` is a constant-pool entry and never a user-visible value
+          [:loxv::Val.Closure {:chunk fc :name nm :arity a :cells cs}
             (:wat::core::if (:wat::core::not= a n)
               (:loxv::Step.Fail {:msg (:wat::string::concat "Expected " (:wat::i64::to-string a)
                                         " arguments but got " (:wat::i64::to-string n) ".")})
-              (:loxv::Step.Call {:g g :out out :s s :argc n :chunk fc}))]
+              (:loxv::Step.Call {:g g :out out :s s :argc n :chunk fc :ups cs}))]
+          [:loxv::Val.Fn {:chunk fc :name nm :arity a :updescs u}
+            (:loxv::Step.Fail {:msg "Can only call functions and classes."})]
           [:loxv::Val.Native {:name nm :arity a}
             (:wat::core::if (:wat::core::not= a n)
               (:loxv::Step.Fail {:msg (:wat::string::concat "Expected " (:wat::i64::to-string a)
@@ -237,6 +258,11 @@
           [:loxv::Val.Bool {:b b} (:loxv::Step.Fail {:msg "Can only call functions and classes."})]
           [:loxv::Val.Num {:n x} (:loxv::Step.Fail {:msg "Can only call functions and classes."})]
           [:loxv::Val.Str {:s x} (:loxv::Step.Fail {:msg "Can only call functions and classes."})]))]
+    ;; ---- chapter 25: handled by the loop, which owns the cell table
+    [:loxv::Op.Closure {:slot i} (:loxv::Step.MakeClosure {:g g :out out :s s :slot i})]
+    [:loxv::Op.GetUpvalue {:slot i} (:loxv::Step.GetUp {:g g :out out :s s :slot i})]
+    [:loxv::Op.SetUpvalue {:slot i} (:loxv::Step.SetUp {:g g :out out :s s :slot i})]
+    [:loxv::Op.CloseUpvalue {} (:loxv::Step.CloseUp {:g g :out out :s s})]
     [:loxv::Op.Return {} (:loxv::Step.Ret {:g g :out out :s s})]))
 
 ;; kept for the disassembler's sake; the LOOP no longer uses it, because a Return now pops a
@@ -253,7 +279,9 @@
     [:loxv::Op.SetGlobal {:slot i} false]
     [:loxv::Op.GetLocal {:slot i} false] [:loxv::Op.SetLocal {:slot i} false]
     [:loxv::Op.Jump {:offset o} false] [:loxv::Op.JumpIfFalse {:offset o} false]
-    [:loxv::Op.Loop {:offset o} false] [:loxv::Op.Call {:argc a} false]))
+    [:loxv::Op.Loop {:offset o} false] [:loxv::Op.Call {:argc a} false]
+    [:loxv::Op.Closure {:slot i} false] [:loxv::Op.GetUpvalue {:slot i} false]
+    [:loxv::Op.SetUpvalue {:slot i} false] [:loxv::Op.CloseUpvalue {} false]))
 
 ;; drop the innermost saved frame -- F-104 once more, but paid per RETURN rather than per
 ;; instruction, which is the difference between a tax and a disaster
@@ -264,11 +292,89 @@
   (:wat::core::if (:wat::core::>= j k) acc
     (:loxv::frames-take v k (:wat::core::+ j 1) (:wat::core::conj acc (:wat::core::nth v j)))))
 
+;; ---- the cell table (chapter 25)
+(:wat::core::defn :loxv::cells-set [v <- :loxv::Cells i <- :wat::core::i64 x <- :loxv::Cell
+                                    j <- :wat::core::i64 acc <- :loxv::Cells] -> :loxv::Cells
+  (:wat::core::if (:wat::core::>= j (:wat::core::length v)) acc
+    (:loxv::cells-set v i x (:wat::core::+ j 1)
+      (:wat::core::conj acc (:wat::core::if (:wat::core::= j i) x (:wat::core::nth v j))))))
+
+(:wat::core::defn :loxv::cell-read [cells <- :loxv::Cells s <- :loxv::Stack id <- :wat::core::i64] -> :loxv::Val
+  (:wat::core::match (:wat::core::nth cells id)
+    [:loxv::Cell.Closed {:v v} v]
+    [:loxv::Cell.OnStack {:idx i}
+      (:wat::core::if (:wat::core::>= i (:wat::core::length s)) (:loxv::Val.Nil {}) (:wat::core::nth s i))]))
+
+;; a write goes to the STACK while the cell is open and to the cell once it is closed, which is
+;; the whole reason the indirection exists
+(:wat::core::defrecord :loxv::CW [cells <- :loxv::Cells  s <- :loxv::Stack])
+
+(:wat::core::defn :loxv::cell-write [cells <- :loxv::Cells s <- :loxv::Stack id <- :wat::core::i64
+                                     v <- :loxv::Val] -> :loxv::CW
+  (:wat::core::match (:wat::core::nth cells id)
+    [:loxv::Cell.OnStack {:idx i} (:loxv::CW :cells cells :s (:loxv::store s i v))]
+    [:loxv::Cell.Closed {:v old}
+      (:loxv::CW :s s :cells (:loxv::cells-set cells id (:loxv::Cell.Closed {:v v}) 0
+                               (:wat::core::Vector :- [:loxv::Cell])))]))
+
+;; captureUpvalue's search: one cell per captured stack slot, so two closures over one variable
+;; get the SAME id and therefore see each other's writes
+(:wat::core::defn :loxv::find-open [cells <- :loxv::Cells idx <- :wat::core::i64 i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length cells)) -1
+    (:wat::core::match (:wat::core::nth cells i)
+      [:loxv::Cell.OnStack {:idx j} (:wat::core::if (:wat::core::= j idx) i
+                                      (:loxv::find-open cells idx (:wat::core::+ i 1)))]
+      [:loxv::Cell.Closed {:v v} (:loxv::find-open cells idx (:wat::core::+ i 1))])))
+
+;; closeUpvalues(last): every open cell at or above `from` takes its value with it
+(:wat::core::defn :loxv::close-from [cells <- :loxv::Cells s <- :loxv::Stack from <- :wat::core::i64
+                                     i <- :wat::core::i64] -> :loxv::Cells
+  (:wat::core::if (:wat::core::>= i (:wat::core::length cells)) cells
+    (:wat::core::match (:wat::core::nth cells i)
+      [:loxv::Cell.Closed {:v v} (:loxv::close-from cells s from (:wat::core::+ i 1))]
+      [:loxv::Cell.OnStack {:idx j}
+        (:wat::core::if (:wat::core::< j from) (:loxv::close-from cells s from (:wat::core::+ i 1))
+          (:loxv::close-from
+            (:loxv::cells-set cells i
+              (:loxv::Cell.Closed {:v (:wat::core::if (:wat::core::>= j (:wat::core::length s))
+                                        (:loxv::Val.Nil {}) (:wat::core::nth s j))})
+              0 (:wat::core::Vector :- [:loxv::Cell]))
+            s from (:wat::core::+ i 1)))])))
+
+;; the ids a new closure captures, and the cells table after any it had to create
+(:wat::core::defrecord :loxv::CapR
+  [cells <- :loxv::Cells  ids <- (:wat::core::Vector :- [:wat::core::i64])])
+
+(:wat::core::defn :loxv::capture [cells <- :loxv::Cells base <- :wat::core::i64
+                                  ups <- (:wat::core::Vector :- [:wat::core::i64])
+                                  descs <- (:wat::core::Vector :- [:loxv::UpDesc])
+                                  i <- :wat::core::i64
+                                  acc <- (:wat::core::Vector :- [:wat::core::i64])] -> :loxv::CapR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length descs)) (:loxv::CapR :cells cells :ids acc)
+    (:wat::core::let [d (:wat::core::nth descs i)]
+      (:wat::core::if (:loxv::UpDesc/is-local d)
+        (:wat::core::let [target (:wat::core::+ base (:loxv::UpDesc/index d))
+                          found (:loxv::find-open cells target 0)]
+          (:wat::core::if (:wat::core::>= found 0)
+            (:loxv::capture cells base ups descs (:wat::core::+ i 1) (:wat::core::conj acc found))
+            (:loxv::capture (:wat::core::conj cells (:loxv::Cell.OnStack {:idx target}))
+              base ups descs (:wat::core::+ i 1) (:wat::core::conj acc (:wat::core::length cells)))))
+        (:loxv::capture cells base ups descs (:wat::core::+ i 1)
+          (:wat::core::conj acc (:wat::core::nth ups (:loxv::UpDesc/index d))))))))
+
+;; F-019: widen the variant to the enum, as everywhere else
+(:wat::core::defn :loxv::closureval [c <- :loxv::Chunk name <- :wat::core::String arity <- :wat::core::i64
+                                     cells <- (:wat::core::Vector :- [:wat::core::i64])] -> :loxv::Val
+  (:loxv::Val.Closure {:chunk c :name name :arity arity :cells cells}))
+
 ;; the threaded loop -- C-098's cheaper shape, chosen on that chapter's evidence. The CURRENT
-;; frame's chunk, ip and base ride in the arguments; only enclosing frames are a vector.
+;; frame's chunk, ip, base and captured cells ride in the arguments; only enclosing frames are a
+;; vector.
 (:wat::core::defn :loxv::run-loop [c <- :loxv::Chunk ip <- :wat::core::i64 base <- :wat::core::i64
+                                   ups <- (:wat::core::Vector :- [:wat::core::i64])
                                    frames <- (:wat::core::Vector :- [:loxv::Saved])
                                    s <- :loxv::Stack g <- :loxv::Globals out <- :loxv::Output
+                                   cells <- :loxv::Cells
                                    steps <- :wat::core::i64] -> :loxv::Out
   (:wat::core::if (:wat::core::>= ip (:loxv::count c))
     (:loxv::Out.Ok {:stack s :globals g :out out :steps steps})
@@ -278,38 +384,71 @@
           (:loxv::Out.Err {:msg m :line (:wat::core::nth (:loxv::Chunk/lines c) ip)
                            :out out :steps (:wat::core::+ steps 1)})]
         [:loxv::Step.Jump {:s s2 :g g2 :out o2 :target t}
-          (:loxv::run-loop c t base frames s2 g2 o2 (:wat::core::+ steps 1))]
-        ;; a call pushes the RETURN address and starts the callee at ip 0. `base` is the first
-        ;; argument, so the callee itself sits at base-1 and is discarded on return.
-        [:loxv::Step.Call {:s s2 :g g2 :out o2 :argc n :chunk fc}
+          (:loxv::run-loop c t base ups frames s2 g2 o2 cells (:wat::core::+ steps 1))]
+        [:loxv::Step.Call {:s s2 :g g2 :out o2 :argc n :chunk fc :ups us}
           (:wat::core::if (:wat::core::> (:wat::core::length frames) 200)
             (:loxv::Out.Err {:msg "Stack overflow." :line (:wat::core::nth (:loxv::Chunk/lines c) ip)
                              :out o2 :steps (:wat::core::+ steps 1)})
-            (:loxv::run-loop fc 0 (:wat::core::- (:wat::core::length s2) n)
-              (:wat::core::conj frames (:loxv::Saved :chunk c :ip (:wat::core::+ ip 1) :base base))
-              s2 g2 o2 (:wat::core::+ steps 1)))]
+            (:loxv::run-loop fc 0 (:wat::core::- (:wat::core::length s2) n) us
+              (:wat::core::conj frames (:loxv::Saved :chunk c :ip (:wat::core::+ ip 1) :base base :ups ups))
+              s2 g2 o2 cells (:wat::core::+ steps 1)))]
         [:loxv::Step.Ret {:s s2 :g g2 :out o2}
           (:wat::core::if (:wat::core::= (:wat::core::length frames) 0)
             (:loxv::Out.Ok {:stack s2 :globals g2 :out o2 :steps (:wat::core::+ steps 1)})
             (:wat::core::let
               [result (:wat::core::if (:wat::core::= (:wat::core::length s2) 0) (:loxv::Val.Nil {})
                         (:loxv::peek-n s2 0))
+               ;; anything this frame's locals were captured into must be closed before the
+               ;; frame goes away, or the cell would alias a slot that no longer exists
+               cells2 (:loxv::close-from cells s2 base 0)
                f (:wat::core::nth frames (:wat::core::- (:wat::core::length frames) 1))
                fr2 (:loxv::frames-take frames (:wat::core::- (:wat::core::length frames) 1) 0
                      (:wat::core::Vector :- [:loxv::Saved]))
-               ;; discard the whole frame -- arguments and the callee -- and leave the result
                s3 (:wat::core::conj
                     (:loxv::take-k s2 (:wat::core::- base 1) 0 (:wat::core::Vector :- [:loxv::Val]))
                     result)]
               (:loxv::run-loop (:loxv::Saved/chunk f) (:loxv::Saved/ip f) (:loxv::Saved/base f)
-                fr2 s3 g2 o2 (:wat::core::+ steps 1))))]
+                (:loxv::Saved/ups f) fr2 s3 g2 o2 cells2 (:wat::core::+ steps 1))))]
+        [:loxv::Step.MakeClosure {:s s2 :g g2 :out o2 :slot i}
+          (:wat::core::match (:wat::core::nth (:loxv::Chunk/constants c) i)
+            [:loxv::Val.Fn {:chunk fc :name nm :arity a :updescs descs}
+              (:wat::core::let [r (:loxv::capture cells base ups descs 0
+                                    (:wat::core::Vector :- [:wat::core::i64]))]
+                (:loxv::run-loop c (:wat::core::+ ip 1) base ups frames
+                  (:wat::core::conj s2 (:loxv::closureval fc nm a (:loxv::CapR/ids r)))
+                  g2 o2 (:loxv::CapR/cells r) (:wat::core::+ steps 1)))]
+            [:loxv::Val.Nil {} (:loxv::Out.Err {:msg "OP_CLOSURE on a non-function."
+              :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})]
+            [:loxv::Val.Bool {:b b} (:loxv::Out.Err {:msg "OP_CLOSURE on a non-function."
+              :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})]
+            [:loxv::Val.Num {:n x} (:loxv::Out.Err {:msg "OP_CLOSURE on a non-function."
+              :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})]
+            [:loxv::Val.Str {:s x} (:loxv::Out.Err {:msg "OP_CLOSURE on a non-function."
+              :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})]
+            [:loxv::Val.Closure {:chunk fc :name nm :arity a :cells cs} (:loxv::Out.Err
+              {:msg "OP_CLOSURE on a non-function."
+               :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})]
+            [:loxv::Val.Native {:name nm :arity a} (:loxv::Out.Err {:msg "OP_CLOSURE on a non-function."
+              :line (:wat::core::nth (:loxv::Chunk/lines c) ip) :out o2 :steps (:wat::core::+ steps 1)})])]
+        [:loxv::Step.GetUp {:s s2 :g g2 :out o2 :slot i}
+          (:loxv::run-loop c (:wat::core::+ ip 1) base ups frames
+            (:wat::core::conj s2 (:loxv::cell-read cells s2 (:wat::core::nth ups i)))
+            g2 o2 cells (:wat::core::+ steps 1))]
+        [:loxv::Step.SetUp {:s s2 :g g2 :out o2 :slot i}
+          (:wat::core::let [w (:loxv::cell-write cells s2 (:wat::core::nth ups i) (:loxv::peek-n s2 0))]
+            (:loxv::run-loop c (:wat::core::+ ip 1) base ups frames
+              (:loxv::CW/s w) g2 o2 (:loxv::CW/cells w) (:wat::core::+ steps 1)))]
+        ;; a block ending with a captured local: close its cell, then pop the slot
+        [:loxv::Step.CloseUp {:s s2 :g g2 :out o2}
+          (:loxv::run-loop c (:wat::core::+ ip 1) base ups frames
+            (:loxv::pop-n s2 1) g2 o2
+            (:loxv::close-from cells s2 (:wat::core::- (:wat::core::length s2) 1) 0)
+            (:wat::core::+ steps 1))]
         [:loxv::Step.Next {:s s2 :g g2 :out o2}
-          (:loxv::run-loop c (:wat::core::+ ip 1) base frames s2 g2 o2 (:wat::core::+ steps 1))]))))
+          (:loxv::run-loop c (:wat::core::+ ip 1) base ups frames s2 g2 o2 cells
+            (:wat::core::+ steps 1))]))))
 
-;; F-019, met in the ordinary course of writing this: `(:loxv::Val.Native {…})` inline has type
-;; `:loxv::Val.Native`, not `:loxv::Val`, so `assoc` into a `HashMap<String, Val>` is refused --
-;; *"parameter #3 expects :loxv::Val; got :loxv::Val.Native"*. A helper whose declared RETURN type
-;; is the enum widens it, which is that finding's own recorded route (P-006).
+;; F-019, again
 (:wat::core::defn :loxv::native [name <- :wat::core::String arity <- :wat::core::i64] -> :loxv::Val
   (:loxv::Val.Native {:name name :arity arity}))
 
@@ -323,6 +462,8 @@
     "answer" (:loxv::native "answer" 0)))
 
 (:wat::core::defn :loxv::run [c <- :loxv::Chunk] -> :loxv::Out
-  (:loxv::run-loop c 0 0 (:wat::core::Vector :- [:loxv::Saved])
+  (:loxv::run-loop c 0 0 (:wat::core::Vector :- [:wat::core::i64])
+    (:wat::core::Vector :- [:loxv::Saved])
     (:wat::core::Vector :- [:loxv::Val]) (:loxv::base-globals)
-    (:wat::core::Vector :- [:wat::core::String]) 0))
+    (:wat::core::Vector :- [:wat::core::String])
+    (:wat::core::Vector :- [:loxv::Cell]) 0))
