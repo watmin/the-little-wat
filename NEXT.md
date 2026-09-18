@@ -7,10 +7,18 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## Where this stands (2026-09-16)
+## Where this stands (2026-09-18) — **every numbered item is closed**
 
-§1–§5 are done and §6 is declined (both recorded below). §7–§12 are the next wave, queued
-2026-09-16 after a measurement of what this repository has actually produced:
+§1–§5 done, §6 declined, §7–§8 built as instruments, §9–§12 ported and complete. The list this
+file was written to work through is finished; what follows is kept as the record of how each item
+was settled, not as a queue.
+
+**The one thing still labelled in progress anywhere** is §4, Advent of Code: 7 puzzles and 30
+answers against Clojure, against a stated ambition of "one year". Every other suite in FINDINGS.md's
+status table reads complete. Project Euler (6 problems) was never a numbered item and has no stated
+end.
+
+The measurement this file was queued on, 2026-09-16:
 
 | era | findings | involving a port | probe of wat only |
 |---|---|---|---|
@@ -18,15 +26,11 @@ Ordered by how directly each tests what wat claims to be.
 | F/C-051…075 | 25 | **18** | 6 |
 | F/C-076…095 | 20 | 1 | **18** |
 
-The last stretch was a systematic sweep of wat's own namespaces (linter, grep, cache,
-telemetry, docs, rationals, fix, brackets, reflection, deporder) and that sweep is now
-**exhausted — every namespace has probes**. The stretch before it was suite-building, and it
-was port-driven at 18 of 25. So porting still works; what stopped was me doing it. §7–§12
-return to porting, choosing each suite for the machinery it stresses rather than for being a
-book.
-
-Two items (§7, §8) are instruments rather than ports, and §7 is the only thing here with a
-deadline.
+It said the namespace sweep was exhausted and that porting still worked, so §7–§12 returned to
+porting. **That was right**: F/C-096 onward is almost entirely port-driven, and §12 alone produced
+F-112 through F-117 plus C-098 to C-113 — including three findings (F-113, F-116, F-117) that no
+probe of wat's own namespaces would have reached, because each needed a program large enough to
+need the missing thing twice.
 
 ## Where §1–§6 stand (2026-09-15)
 
@@ -321,7 +325,12 @@ builder's call, 2026-09-16: networking is simulated via IPC anyway (processes ov
 Unix domain sockets, threads over crossbeam-style channels), so the puzzles run against
 `:wat::spawn::`/`:wat::bracket::`/`:wat::service::` directly.
 
-## 12. *Crafting Interpreters*, Part II — the bytecode VM — **COMPLETE 2026-09-18** (ch 14-29; ch 30 is the only chapter left, and C-103 is a reason to re-read that ruling)
+## 12. *Crafting Interpreters*, Part II — the bytecode VM — **COMPLETE 2026-09-18, ch 14-30, 17 programs**
+
+Chapter 30 was recorded here as "no portable content" and that was half right: the content does not
+port (NaN boxing, a hash-table bitmask) and the METHOD does. Re-reading the ruling — which C-103
+is the standing reason to do — produced C-113, which **reversed a recommendation made on this
+page** about the VM's stack type.
 
 A flat instruction array, a dispatch loop, a value stack, jump patching. Not for the book's
 sake: it rehearses the exact machinery §7's baseline is being taken for, and it tests whether
@@ -374,12 +383,12 @@ IS the thing being tested. So each chapter checks its own invariants — a progr
 instruction count, the stack's high-water mark — and where a result can be cross-checked against
 an existing port (SICP §5.5's compiler, C-081) it is.
 
-## Suggested order
+## Suggested order — **spent 2026-09-18**
 
-§7 first, because it is the only item that expires. Then §8, which makes everything already
-found keep paying. Then the ports, in the order §10, §11, §9, §12 — Okasaki first because it
-aims at defects already measured, Semaphores next because F-094 left a live question, EOPL
-because it is the largest, and Crafting Interpreters last so it can be written against
+The order this section recommended was §7, §8, then §10, §11, §9, §12. That is the order it was
+done in, and every item is closed. The ordering advice is kept because its reasoning still holds
+for whatever comes next: instruments before ports, ports aimed at defects already measured before
+ports chosen for being books, and the largest interpreter last so it can be written against
 whatever the byte-code work has become.
 
 A note on spelling, 2026-09-16: the builder expects to drop the o.g. wat syntax for a
