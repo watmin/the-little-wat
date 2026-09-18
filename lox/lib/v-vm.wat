@@ -37,6 +37,19 @@
 (:wat::core::defn :loxv::pop-n [s <- :loxv::Stack n <- :wat::core::i64] -> :loxv::Stack
   (:loxv::take-k s (:wat::core::- (:wat::core::length s) n) 0 (:wat::core::Vector :- [:loxv::Val])))
 
+;; **F-104, in the inner loop.** Chapter 22 puts locals ON the stack, so `OP_SET_LOCAL` is
+;; `vm.stack[slot] = peek(0)` -- a positional write to a vector, which neither of wat's vector
+;; types has. Nystrom's line is an assignment into an array; this rebuilds the stack.
+;; `lox/ch22-local-variables.wat` measures what that costs as the number of locals grows.
+(:wat::core::defn :loxv::set-at [s <- :loxv::Stack i <- :wat::core::i64 v <- :loxv::Val
+                                 j <- :wat::core::i64 acc <- :loxv::Stack] -> :loxv::Stack
+  (:wat::core::if (:wat::core::>= j (:wat::core::length s)) acc
+    (:loxv::set-at s i v (:wat::core::+ j 1)
+      (:wat::core::conj acc (:wat::core::if (:wat::core::= j i) v (:wat::core::nth s j))))))
+
+(:wat::core::defn :loxv::store [s <- :loxv::Stack i <- :wat::core::i64 v <- :loxv::Val] -> :loxv::Stack
+  (:loxv::set-at s i v 0 (:wat::core::Vector :- [:loxv::Val])))
+
 (:wat::core::defn :loxv::peek-n [s <- :loxv::Stack n <- :wat::core::i64] -> :loxv::Val
   (:wat::core::nth s (:wat::core::- (:wat::core::length s) (:wat::core::+ n 1))))
 
@@ -145,6 +158,15 @@
           (:wat::core::if (:wat::core::not (:wat::core::contains? g name)) (:loxv::undefined name)
             (:loxv::Step.Next {:out out :s s
               :g (:wat::core::assoc g name (:loxv::peek-n s 0))}))))]
+    ;; ---- chapter 22: locals, which live on the stack itself
+    [:loxv::Op.GetLocal {:slot i}
+      (:wat::core::if (:wat::core::>= i (:wat::core::length s)) (:loxv::Step.Fail {:msg "Bad local slot."})
+        (:loxv::Step.Next {:g g :out out :s (:wat::core::conj s (:wat::core::nth s i))}))]
+    ;; assignment is an expression, so the value STAYS on the stack after being stored
+    [:loxv::Op.SetLocal {:slot i}
+      (:wat::core::if (:wat::core::= (:wat::core::length s) 0) (:loxv::Step.Fail {:msg "Stack underflow."})
+        (:wat::core::if (:wat::core::>= i (:wat::core::length s)) (:loxv::Step.Fail {:msg "Bad local slot."})
+          (:loxv::Step.Next {:g g :out out :s (:loxv::store s i (:loxv::peek-n s 0))})))]
     [:loxv::Op.Return {} (:loxv::Step.Next {:g g :out out :s s})]))
 
 (:wat::core::defn :loxv::halts? [op <- :loxv::Op] -> :wat::core::bool
@@ -156,7 +178,8 @@
     [:loxv::Op.Multiply {} false] [:loxv::Op.Divide {} false] [:loxv::Op.Not {} false]
     [:loxv::Op.Negate {} false] [:loxv::Op.Print {} false] [:loxv::Op.Pop {} false]
     [:loxv::Op.DefineGlobal {:slot i} false] [:loxv::Op.GetGlobal {:slot i} false]
-    [:loxv::Op.SetGlobal {:slot i} false]))
+    [:loxv::Op.SetGlobal {:slot i} false]
+    [:loxv::Op.GetLocal {:slot i} false] [:loxv::Op.SetLocal {:slot i} false]))
 
 ;; the threaded loop -- C-098's cheaper shape, chosen on that chapter's evidence
 (:wat::core::defn :loxv::run-loop [c <- :loxv::Chunk ip <- :wat::core::i64 s <- :loxv::Stack

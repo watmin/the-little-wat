@@ -350,7 +350,7 @@ ch 1 and PAIP's CL chapters got.
 | 19 | **Strings** | **done** (C-102) | one enum variant and one `string::concat`; `Obj`/`ObjString`/`freeObjects` are C's memory management. Debt: ch26's collector must build its own heap |
 | 20 | **Hash tables** | **done** (C-103) — **the earlier ruling was half wrong** | the table itself is not worth rewriting (C-078 priced wat's two), but the chapter's **interning** is a language decision, and its cost claim is about a C program: measured, it buys **nothing at 10 characters** and about a quarter at 100 000 |
 | 21 | **Global variables** | **done** (C-104) | statements, a globals table, assignment as an expression, `synchronize()` counted rather than assumed; `canAssign` checked on five invalid targets. Cost: **F-115** |
-| 22 | Local variables | **not started** |
+| 22 | **Local variables** | **done** (C-105) | a local costs no instruction to create, checked through the emitted code; both compile errors checked; `OP_SET_LOCAL` is F-104 in an inner loop (76 µs at one local, 404 µs at forty) and the probe it prompted found **F-116** |
 | 23 | Jumping back and forth | **not started** |
 | 24 | Calls and functions | **not started** |
 | 25 | Closures | **not started** |
@@ -359,6 +359,13 @@ ch 1 and PAIP's CL chapters got.
 | 28 | Methods and initializers | **not started** |
 | 29 | Superclasses | **not started** |
 | 30 | Optimization | **no portable content** — NaN boxing and cache-line layout are about C's memory model |
+
+**One piece of work this section found and did not do.** `probes/lox/stack-ops.wat` (F-116) shows
+that a VM stack should be a `PersistentVector`, not a `Vector`: `conj` on the first is flat and on
+the second is a clone, so a rebuild-pop is linear rather than quadratic — 34 ms against 121 ms at
+depth 4000. The lox VM uses `Vector`, as every port here does. Switching it is the `Stack`
+typealias plus about twenty call sites, and it would change C-098's and C-105's published numbers,
+so it is written down here rather than done inside the chapter that discovered it.
 
 **Oracle.** Unlike the other suites there is no second implementation to compare against: the VM
 IS the thing being tested. So each chapter checks its own invariants — a program's value, the

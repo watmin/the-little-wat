@@ -12,12 +12,38 @@
 (:wat::load-file! "v-vm.wat")
 (:wat::load-file! "prec.wat")
 
+;; chapter 22. A local is a name and the scope depth it was declared at; its SLOT is its index in
+;; this vector, which is also its index on the running stack. `depth` -1 means "declared but not
+;; yet initialized", which is what makes `var a = a;` an error rather than a read of nil.
+(:wat::core::defrecord :loxv::Local [name <- :wat::core::String  depth <- :wat::core::i64])
+
 (:wat::core::defrecord :loxv::C
   [src <- :wat::core::String  n <- :wat::core::i64  i <- :wat::core::i64  line <- :wat::core::i64
    cur <- :lox::Token  prev <- :lox::Token
    chunk <- :loxv::Chunk
    errs <- (:wat::core::Vector :- [:wat::core::String])
-   panic <- :wat::core::bool])
+   panic <- :wat::core::bool
+   locals <- (:wat::core::Vector :- [:loxv::Local])
+   depth <- :wat::core::i64])
+
+;; F-104 again, this time in the COMPILER: marking a local initialized changes the depth of the
+;; LAST element of a vector, and there is no positional update, so the vector is rebuilt.
+(:wat::core::defn :loxv::locals-set [v <- (:wat::core::Vector :- [:loxv::Local])
+                                     i <- :wat::core::i64 x <- :loxv::Local
+                                     j <- :wat::core::i64
+                                     acc <- (:wat::core::Vector :- [:loxv::Local])]
+  -> (:wat::core::Vector :- [:loxv::Local])
+  (:wat::core::if (:wat::core::>= j (:wat::core::length v)) acc
+    (:loxv::locals-set v i x (:wat::core::+ j 1)
+      (:wat::core::conj acc (:wat::core::if (:wat::core::= j i) x (:wat::core::nth v j))))))
+
+;; and dropping the locals a scope owned is the same rebuild from the other end
+(:wat::core::defn :loxv::locals-take [v <- (:wat::core::Vector :- [:loxv::Local]) k <- :wat::core::i64
+                                      j <- :wat::core::i64
+                                      acc <- (:wat::core::Vector :- [:loxv::Local])]
+  -> (:wat::core::Vector :- [:loxv::Local])
+  (:wat::core::if (:wat::core::>= j k) acc
+    (:loxv::locals-take v k (:wat::core::+ j 1) (:wat::core::conj acc (:wat::core::nth v j)))))
 
 (:wat::core::defn :loxv::c-error [p <- :loxv::C msg <- :wat::core::String] -> :loxv::C
   (:wat::core::if (:loxv::C/panic p) p
@@ -131,6 +157,70 @@
       ((:wat::core::= k "LESS_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Greater {}) (:loxv::Op.Not {})))
       (:else (:loxv::c-error p1 "Expect an operator.")))))
 
+;; ---- chapter 22: scopes and locals
+(:wat::core::defn :loxv::begin-scope [p <- :loxv::C] -> :loxv::C
+  (:wat::core::assoc p :depth (:wat::core::+ (:loxv::C/depth p) 1)))
+
+;; how many locals belong to scopes deeper than `d`
+(:wat::core::defn :loxv::count-above [v <- (:wat::core::Vector :- [:loxv::Local]) d <- :wat::core::i64
+                                      i <- :wat::core::i64 acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< i 0) acc
+    (:wat::core::if (:wat::core::> (:loxv::Local/depth (:wat::core::nth v i)) d)
+      (:loxv::count-above v d (:wat::core::- i 1) (:wat::core::+ acc 1))
+      acc)))
+
+(:wat::core::defn :loxv::emit-pops [p <- :loxv::C k <- :wat::core::i64] -> :loxv::C
+  (:wat::core::if (:wat::core::= k 0) p
+    (:loxv::emit-pops (:loxv::c-emit p (:loxv::Op.Pop {})) (:wat::core::- k 1))))
+
+;; leaving a scope pops every local it owned -- one instruction each, which is why Nystrom notes
+;; that a `for` loop body's locals cost two instructions per iteration
+(:wat::core::defn :loxv::end-scope [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [d (:wat::core::- (:loxv::C/depth p) 1)
+                    v (:loxv::C/locals p)
+                    k (:loxv::count-above v d (:wat::core::- (:wat::core::length v) 1) 0)
+                    p1 (:loxv::emit-pops p k)]
+    (:wat::core::assoc (:wat::core::assoc p1 :depth d)
+      :locals (:loxv::locals-take v (:wat::core::- (:wat::core::length v) k) 0
+                (:wat::core::Vector :- [:loxv::Local])))))
+
+;; resolveLocal: the INNERMOST declaration of `name`, or -1 for "not a local, try the globals"
+(:wat::core::defn :loxv::resolve-local [v <- (:wat::core::Vector :- [:loxv::Local])
+                                        name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::< i 0) -1)
+    ((:wat::core::= (:loxv::Local/name (:wat::core::nth v i)) name) i)
+    (:else (:loxv::resolve-local v name (:wat::core::- i 1)))))
+
+;; is `name` already declared at exactly this depth? Shadowing an OUTER scope is legal; two
+;; declarations in the SAME scope are not.
+(:wat::core::defn :loxv::declared-here? [v <- (:wat::core::Vector :- [:loxv::Local])
+                                         name <- :wat::core::String d <- :wat::core::i64
+                                         i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::< i 0) false)
+    ((:wat::core::< (:loxv::Local/depth (:wat::core::nth v i)) d) false)
+    ((:wat::core::= (:loxv::Local/name (:wat::core::nth v i)) name) true)
+    (:else (:loxv::declared-here? v name d (:wat::core::- i 1)))))
+
+(:wat::core::defn :loxv::declare-variable [p <- :loxv::C name <- :wat::core::String] -> :loxv::C
+  (:wat::core::if (:wat::core::= (:loxv::C/depth p) 0) p
+    (:wat::core::if (:loxv::declared-here? (:loxv::C/locals p) name (:loxv::C/depth p)
+                      (:wat::core::- (:wat::core::length (:loxv::C/locals p)) 1))
+      (:loxv::c-error p "Already a variable with this name in this scope.")
+      ;; depth -1: DECLARED, not yet initialized
+      (:wat::core::assoc p :locals
+        (:wat::core::conj (:loxv::C/locals p) (:loxv::Local :name name :depth -1))))))
+
+(:wat::core::defn :loxv::mark-initialized [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [v (:loxv::C/locals p) n (:wat::core::length v)]
+    (:wat::core::if (:wat::core::= n 0) p
+      (:wat::core::assoc p :locals
+        (:loxv::locals-set v (:wat::core::- n 1)
+          (:loxv::Local :name (:loxv::Local/name (:wat::core::nth v (:wat::core::- n 1)))
+                        :depth (:loxv::C/depth p))
+          0 (:wat::core::Vector :- [:loxv::Local]))))))
+
 ;; ---- chapter 21: names, statements and declarations
 ;; identifierConstant(): the variable's NAME goes in the constant pool, and the instruction
 ;; carries its slot. Two calls rather than one, because a wat function answers one value.
@@ -140,13 +230,31 @@
 (:wat::core::defn :loxv::last-slot [p <- :loxv::C] -> :wat::core::i64
   (:loxv::constant-slot (:loxv::C/chunk p)))
 
-(:wat::core::defn :loxv::named-variable [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
-  (:wat::core::let [name (:lox::Token/text (:loxv::C/prev p))
-                    p1 (:loxv::add-name p name)
+(:wat::core::defn :loxv::global-variable [p <- :loxv::C name <- :wat::core::String
+                                          can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::add-name p name)
                     slot (:loxv::last-slot p1)]
     (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p1) "EQUAL"))
       (:loxv::c-emit (:loxv::expression (:loxv::c-advance p1)) (:loxv::Op.SetGlobal {:slot slot}))
       (:loxv::c-emit p1 (:loxv::Op.GetGlobal {:slot slot})))))
+
+(:wat::core::defn :loxv::local-variable [p <- :loxv::C slot <- :wat::core::i64
+                                         can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::if (:wat::core::and can-assign (:lox::kind-is? (:loxv::C/cur p) "EQUAL"))
+    (:loxv::c-emit (:loxv::expression (:loxv::c-advance p)) (:loxv::Op.SetLocal {:slot slot}))
+    (:loxv::c-emit p (:loxv::Op.GetLocal {:slot slot}))))
+
+;; a local shadows a global of the same name, and the compiler -- not the VM -- decides which
+(:wat::core::defn :loxv::named-variable [p <- :loxv::C can-assign <- :wat::core::bool] -> :loxv::C
+  (:wat::core::let [name (:lox::Token/text (:loxv::C/prev p))
+                    slot (:loxv::resolve-local (:loxv::C/locals p) name
+                           (:wat::core::- (:wat::core::length (:loxv::C/locals p)) 1))]
+    (:wat::core::cond
+      ((:wat::core::= slot -1) (:loxv::global-variable p name can-assign))
+      ;; declared but not yet initialized: `var a = a;` reads the local being defined
+      ((:wat::core::= (:loxv::Local/depth (:wat::core::nth (:loxv::C/locals p) slot)) -1)
+        (:loxv::c-error p "Can't read local variable in its own initializer."))
+      (:else (:loxv::local-variable p slot can-assign)))))
 
 (:wat::core::defn :loxv::print-stmt [p <- :loxv::C] -> :loxv::C
   (:loxv::c-emit
@@ -160,21 +268,41 @@
     (:loxv::c-consume (:loxv::expression p) "SEMICOLON" "Expect ';' after expression.")
     (:loxv::Op.Pop {})))
 
+(:wat::core::defn :loxv::block-loop [p <- :loxv::C] -> :loxv::C
+  (:wat::core::if (:wat::core::or (:lox::kind-is? (:loxv::C/cur p) "RIGHT_BRACE")
+                                  (:lox::kind-is? (:loxv::C/cur p) "EOF")) p
+    (:loxv::block-loop (:loxv::declaration p))))
+
+(:wat::core::defn :loxv::block [p <- :loxv::C] -> :loxv::C
+  (:loxv::c-consume (:loxv::block-loop p) "RIGHT_BRACE" "Expect '}' after block."))
+
 (:wat::core::defn :loxv::statement [p <- :loxv::C] -> :loxv::C
-  (:wat::core::if (:lox::kind-is? (:loxv::C/cur p) "PRINT")
-    (:loxv::print-stmt (:loxv::c-advance p))
-    (:loxv::expr-stmt p)))
+  (:wat::core::cond
+    ((:lox::kind-is? (:loxv::C/cur p) "PRINT") (:loxv::print-stmt (:loxv::c-advance p)))
+    ((:lox::kind-is? (:loxv::C/cur p) "LEFT_BRACE")
+      (:loxv::end-scope (:loxv::block (:loxv::begin-scope (:loxv::c-advance p)))))
+    (:else (:loxv::expr-stmt p))))
+
+;; defineVariable: a global gets an instruction and a name constant; a LOCAL gets neither -- its
+;; initializer already left the value in the right stack slot, so all that remains is to mark it
+;; initialized. Nystrom's "there is no code to create a local variable at runtime".
+(:wat::core::defn :loxv::define-variable [p <- :loxv::C slot <- :wat::core::i64] -> :loxv::C
+  (:wat::core::if (:wat::core::> (:loxv::C/depth p) 0) (:loxv::mark-initialized p)
+    (:loxv::c-emit p (:loxv::Op.DefineGlobal {:slot slot}))))
 
 (:wat::core::defn :loxv::var-decl [p <- :loxv::C] -> :loxv::C
   (:wat::core::let [p1 (:loxv::c-consume p "IDENTIFIER" "Expect variable name.")
-                    p2 (:loxv::add-name p1 (:lox::Token/text (:loxv::C/prev p1)))
-                    slot (:loxv::last-slot p2)
+                    name (:lox::Token/text (:loxv::C/prev p1))
+                    p2 (:loxv::declare-variable p1 name)
+                    ;; only a global needs its name in the constant pool
+                    p3 (:wat::core::if (:wat::core::= (:loxv::C/depth p2) 0) (:loxv::add-name p2 name) p2)
+                    slot (:wat::core::if (:wat::core::= (:loxv::C/depth p2) 0) (:loxv::last-slot p3) 0)
                     ;; `var a;` is `var a = nil;` -- the initializer is optional and defaults
-                    p3 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p2) "EQUAL")
-                         (:loxv::expression (:loxv::c-advance p2))
-                         (:loxv::c-emit p2 (:loxv::Op.Nil {})))
-                    p4 (:loxv::c-consume p3 "SEMICOLON" "Expect ';' after variable declaration.")]
-    (:loxv::c-emit p4 (:loxv::Op.DefineGlobal {:slot slot}))))
+                    p4 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p3) "EQUAL")
+                         (:loxv::expression (:loxv::c-advance p3))
+                         (:loxv::c-emit p3 (:loxv::Op.Nil {})))
+                    p5 (:loxv::c-consume p4 "SEMICOLON" "Expect ';' after variable declaration.")]
+    (:loxv::define-variable p5 slot)))
 
 (:wat::core::defn :loxv::sync-start? [k <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or (:wat::core::= k "CLASS")
@@ -215,7 +343,8 @@
     [p0 (:loxv::C :src src :n (:wat::string::length src) :i 0 :line 1
                   :cur (:lox::blank-token) :prev (:lox::blank-token)
                   :chunk (:loxv::new-chunk)
-                  :errs (:wat::core::Vector :- [:wat::core::String]) :panic false)
+                  :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
+                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0)
      p1 (:loxv::c-advance p0)
      p2 (:loxv::decl-loop p1)]
     (:loxv::c-emit p2 (:loxv::Op.Return {}))))
@@ -238,7 +367,8 @@
     [p0 (:loxv::C :src src :n (:wat::string::length src) :i 0 :line 1
                   :cur (:lox::blank-token) :prev (:lox::blank-token)
                   :chunk (:loxv::new-chunk)
-                  :errs (:wat::core::Vector :- [:wat::core::String]) :panic false)
+                  :errs (:wat::core::Vector :- [:wat::core::String]) :panic false
+                  :locals (:wat::core::Vector :- [:loxv::Local]) :depth 0)
      p1 (:loxv::c-advance p0)
      p2 (:loxv::expression p1)
      p3 (:loxv::c-consume p2 "EOF" "Expect end of expression.")]

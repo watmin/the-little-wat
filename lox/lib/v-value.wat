@@ -107,6 +107,10 @@
   :DefineGlobal [slot <- :wat::core::i64]
   :GetGlobal [slot <- :wat::core::i64]
   :SetGlobal [slot <- :wat::core::i64]
+  ;; chapter 22: a local lives on the STACK, at a slot the compiler worked out, so these two
+  ;; instructions index the running stack rather than a table of names.
+  :GetLocal [slot <- :wat::core::i64]
+  :SetLocal [slot <- :wat::core::i64]
   :Return [])
 
 (:wat::core::typealias :loxv::Code (:wat::core::Vector :- [:loxv::Op]))
@@ -146,6 +150,7 @@
     [:loxv::Op.DefineGlobal {:slot s} "OP_DEFINE_GLOBAL"]
     [:loxv::Op.GetGlobal {:slot s} "OP_GET_GLOBAL"]
     [:loxv::Op.SetGlobal {:slot s} "OP_SET_GLOBAL"]
+    [:loxv::Op.GetLocal {:slot s} "OP_GET_LOCAL"] [:loxv::Op.SetLocal {:slot s} "OP_SET_LOCAL"]
     [:loxv::Op.Return {} "OP_RETURN"]))
 
 (:wat::core::defn :loxv::op-key [op <- :loxv::Op] -> :wat::core::String
@@ -160,6 +165,8 @@
     [:loxv::Op.DefineGlobal {:slot s} (:wat::string::concat "DEFG/" (:wat::i64::to-string s))]
     [:loxv::Op.GetGlobal {:slot s} (:wat::string::concat "GETG/" (:wat::i64::to-string s))]
     [:loxv::Op.SetGlobal {:slot s} (:wat::string::concat "SETG/" (:wat::i64::to-string s))]
+    [:loxv::Op.GetLocal {:slot s} (:wat::string::concat "GETL/" (:wat::i64::to-string s))]
+    [:loxv::Op.SetLocal {:slot s} (:wat::string::concat "SETL/" (:wat::i64::to-string s))]
     [:loxv::Op.Return {} "RET"]))
 
 (:wat::core::defn :loxv::code-sig [c <- :loxv::Chunk] -> :wat::core::String
