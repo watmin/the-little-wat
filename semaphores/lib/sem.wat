@@ -37,6 +37,14 @@
      :Ok               [n <- :wat::core::i64]
      :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
      :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
+;; ADD: a read-modify-write in ONE round. Chapters 2 and 6 both lost updates to a `peek` followed
+   ;; by an `init` (C-094, C-096) -- two rounds, interleavable. This is the same operation done as a
+   ;; single message, which is what wat's design says a counter should be, and it needs no mutex.
+   (:wat::core::defrecord :sem::Sem::AddRequest [name <- :wat::core::String  delta <- :wat::core::i64])
+   (:wat::core::defenum :sem::Sem::AddResponse :wat::enum::Pure
+     :Ok               [n <- :wat::core::i64]
+     :RequestTooLarge  [bytes <- :wat::core::i64  cap <- :wat::core::i64]
+     :RequestMalformed [path <- (:wat::core::Vector :- [:wat::core::String])  expected <- :wat::core::String  got <- :wat::core::String])
    (:wat::core::defrecord :sem::Sem::PeekRequest [name <- :wat::core::String])
    (:wat::core::defenum :sem::Sem::PeekResponse :wat::enum::Pure
      :Ok               [n <- :wat::core::i64]
@@ -46,6 +54,7 @@
   [(init   [self <- :sem::Sem req <- :sem::Sem::InitRequest]   -> :sem::Sem::InitResponse   :max-request-bytes 524288)
    (try    [self <- :sem::Sem req <- :sem::Sem::TryRequest]    -> :sem::Sem::TryResponse    :max-request-bytes 524288)
    (signal [self <- :sem::Sem req <- :sem::Sem::SignalRequest] -> :sem::Sem::SignalResponse :max-request-bytes 524288)
+   (add    [self <- :sem::Sem req <- :sem::Sem::AddRequest]    -> :sem::Sem::AddResponse    :max-request-bytes 524288)
    (peek   [self <- :sem::Sem req <- :sem::Sem::PeekRequest]   -> :sem::Sem::PeekResponse   :max-request-bytes 524288)])
 
 (:wat::core::typealias :sem::Counts (:wat::core::PersistentMap :- [:wat::core::String :wat::core::i64]))
@@ -83,6 +92,16 @@
        (:wat::service::Outcome.Reply
          {:state (:sem::sem::State :durable (:sem::sem::Record :counts (:wat::map::assoc m k (:wat::core::+ n 1))))
           :reply (:sem::Sem::SignalResponse.Ok {:n (:wat::core::+ n 1)})})))
+   (add [s ctx req]
+     (:wat::core::let [m (:sem::sem::Record/counts (:sem::sem::State/durable s))
+                       k (:sem::Sem::AddRequest/name req)
+                       n (:wat::core::match (:wat::map::get m k)
+                           [:wat::core::Option.Some {:value v} v]
+                           [:wat::core::Option.None {} 0])
+                       v2 (:wat::core::+ n (:sem::Sem::AddRequest/delta req))]
+       (:wat::service::Outcome.Reply
+         {:state (:sem::sem::State :durable (:sem::sem::Record :counts (:wat::map::assoc m k v2)))
+          :reply (:sem::Sem::AddResponse.Ok {:n v2})})))
    (peek [s ctx req]
      (:wat::core::let [m (:sem::sem::Record/counts (:sem::sem::State/durable s))
                        n (:wat::core::match (:wat::map::get m (:sem::Sem::PeekRequest/name req))
@@ -120,6 +139,19 @@
         [:sem::Sem::SignalResponse.Ok {:n k} k]
         [:sem::Sem::SignalResponse.RequestTooLarge {:bytes b :cap q} -1]
         [:sem::Sem::SignalResponse.RequestMalformed {:path p :expected e :got g} -2])]
+    [:wat::kernel::RecvOutcome.Lost {:cause x} -3]
+    [:wat::kernel::RecvOutcome.Stopped {} -4]
+    [:wat::kernel::RecvOutcome.Closed {} -5]))
+
+;; the atomic bump. One round, so no two callers can both read the same value -- the thing C-094
+;; showed a `peek`+`init` pair cannot promise.
+(:wat::core::defn :sem::do-add [c <- :sem::Conn name <- :wat::core::String delta <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::match (:sem::Sem/add c (:sem::Sem::AddRequest :name name :delta delta))
+    [:wat::kernel::RecvOutcome.Message {:msg m}
+      (:wat::core::match m
+        [:sem::Sem::AddResponse.Ok {:n k} k]
+        [:sem::Sem::AddResponse.RequestTooLarge {:bytes b :cap q} -1]
+        [:sem::Sem::AddResponse.RequestMalformed {:path p :expected e :got g} -2])]
     [:wat::kernel::RecvOutcome.Lost {:cause x} -3]
     [:wat::kernel::RecvOutcome.Stopped {} -4]
     [:wat::kernel::RecvOutcome.Closed {} -5]))

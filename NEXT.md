@@ -306,7 +306,7 @@ set** (a visited set has to be a `PersistentMap` to `true`). Laziness and amorti
 wat's `:wat::stream::` territory, which F-088 showed is documented as an API that does not
 exist. Oracle: the book's bounds, and timing curves rather than single points (C-050's method).
 
-## 11. Downey — *The Little Book of Semaphores* — **ch 1-4 DONE; NOT blocked after all**
+## 11. Downey — *The Little Book of Semaphores* — **COMPLETE, ch 1-7 (2026-09-17)**
 
 **The "blocked past ch 3 by F-102" label was wrong** (2026-09-17). F-102 makes every wait a spin,
 which is expensive, not impossible — `semaphores/lib/sem.wat` is a counting semaphore built that
