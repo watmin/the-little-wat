@@ -358,14 +358,16 @@ ch 1 and PAIP's CL chapters got.
 | 27 | **Classes and instances** | **done** (C-110) | `var a = f; a.x = 2; print f.x;` forced the **second** VM-owned index table in three chapters — **F-117**. A class needed none of it: immutable once declared |
 | 28 | **Methods and initializers** | **done** (C-111) | cost **nothing** — `this` is local slot 0, so a closure inside a method captures it like any other local. `init` differs in exactly two compiled details |
 | 29 | **Superclasses** | **done** (C-112) | `super` checked to be **lexical** through a three-level hierarchy: `CBA` with a C receiver. `OP_INHERIT` is `OP_METHOD`'s move again |
-| 30 | Optimization | **no portable content** — NaN boxing and cache-line layout are about C's memory model |
+| 30 | **Optimization** | **done** (C-113) — the content does not port, the **method** does | NaN boxing and the hash-table bitmask are about C; benchmarking before optimising is not, and it **reversed a recommendation made on this page** (see below) |
 
-**One piece of work this section found and did not do.** `probes/lox/stack-ops.wat` (F-116) shows
-that a VM stack should be a `PersistentVector`, not a `Vector`: `conj` on the first is flat and on
-the second is a clone, so a rebuild-pop is linear rather than quadratic — 34 ms against 121 ms at
-depth 4000. The lox VM uses `Vector`, as every port here does. Switching it is the `Stack`
-typealias plus about twenty call sites, and it would change C-098's and C-105's published numbers,
-so it is written down here rather than done inside the chapter that discovered it.
+**A recommendation this page made and chapter 30 reversed.** `probes/lox/stack-ops.wat` (F-116)
+showed that a `Vector`'s rebuild-pop is quadratic where a `PersistentVector`'s is linear — 121 ms
+against 34 ms for one pop at depth 4000 — and this page concluded that the lox VM's stack should
+therefore be a `PersistentVector`, listing the switch as work to do. **It should not.**
+`probes/lox/stack-mix.wat` runs the operation mix a VM actually performs at the depths it actually
+reaches, and the `Vector` wins at every one of them: 89% of the cost at depth 4, 80% at 32, 82% at
+128, crossing over only past 256. `PersistentVector`'s `get` answers an `Option`, and the unwrap on
+every read costs more than the clone it saves. F-116's numbers stand; the advice did not (C-113).
 
 **Oracle.** Unlike the other suites there is no second implementation to compare against: the VM
 IS the thing being tested. So each chapter checks its own invariants — a program's value, the
