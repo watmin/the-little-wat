@@ -35,9 +35,14 @@ print, in order (`lib/check.wat`).
 | day19 passports | 300 key:value records | how many are complete, and how many are valid | 0.69 s | 1.17 s |
 | day20 enhance | a 512-entry lookup and a 30×30 image | lit pixels after 2 steps, and after 12 | 10.1 s | 1.37 s |
 | day21 dice | two starting positions | the deterministic game's answer, and the quantum one's | 8.89 s | 1.17 s |
+| day22 cuboids | 60 on/off boxes | cubes lit in -50..50, and in the whole space | 0.75 s | 0.97 s |
+| day23 scale | 20000 name-and-score rows | the top hundred scores' sum, and how many distinct names | 3.86 s | 0.99 s |
+| day24 order | 29 dependencies | the alphabetically first valid order, and the longest chain | 0.54 s | 1.01 s |
+| day25 cucumbers | a 24×24 grid of two herds | the first step on which nothing moves (one part, as day 25 always is) | 9.70 s | 1.06 s |
 
-All answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and the
-JVM's about 1.49 s of Clojure's.
+**Twenty-five days, 70 answers, all matching.** That is NEXT.md's §4 finished against its own
+stated scope of "one year". The times are whole runs: wat's startup is about 0.29 s of its own,
+and the JVM's about 1.49 s of Clojure's.
 
 ## What the puzzles showed
 
@@ -125,6 +130,19 @@ JVM's about 1.49 s of Clojure's.
   case where the caller genuinely cannot: 16172 states is a property of the search, not of the
   input. The capacity has to be a bound on the state space — 10 × 21 × 10 × 21 — and getting it
   wrong fails silently, by recomputing.
+- **Size is fine; rebuilding is what costs.** day23 sorts 20000 numbers and puts 20000 names in a
+  `PersistentMap` in 3.9 s all told, so neither `sort` nor a sharing map has a scaling problem.
+  The four slowest puzzles are all rebuilds: day05 (20.6 s, a copying container — fixed to 20.6 s
+  from 135 s by changing it), day18 (13.0 s, a whole number copied per rewrite), day20 (10.1 s, a
+  growing image built a character at a time) and day25 (9.7 s, two grids rebuilt per step, 85
+  steps). The Clojure references take about a second each. Nothing here is a wat defect; it is
+  what immutability costs when the rebuild is per-element rather than per-structure, and F-104
+  and F-116 are the two verbs that would change it.
+- **Immutability is occasionally the point rather than the price.** day25's two herds move
+  SIMULTANEOUSLY, which a mutable grid has to be careful about — move one cucumber and the next
+  sees the new state. Here there is no choice to get wrong: each step reads the old grid and
+  builds a new one, and a square decides its own contents from three reads of something that
+  cannot change underneath. The rebuild F-104 forces IS the algorithm.
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 

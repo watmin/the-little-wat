@@ -13,10 +13,9 @@ Ordered by how directly each tests what wat claims to be.
 file was written to work through is finished; what follows is kept as the record of how each item
 was settled, not as a queue.
 
-**The one thing still labelled in progress anywhere** is §4, Advent of Code: 7 puzzles and 30
-answers against Clojure, against a stated ambition of "one year". Every other suite in FINDINGS.md's
-status table reads complete. Project Euler (6 problems) was never a numbered item and has no stated
-end.
+**§4 is now finished too** (2026-09-18): 25 puzzles, 70 answers, against its stated ambition of
+"one year" (C-114). Every suite in FINDINGS.md's status table reads complete. Project Euler (6
+problems) was never a numbered item and has no stated end.
 
 The measurement this file was queued on, 2026-09-16:
 
@@ -42,7 +41,7 @@ need the missing thing twice.
 | §1 | Clojure Koans | `koans/` — 229 rows: 29 literal, 163 the wat way, 17 with no route, 20 refused by design (C-030) |
 | §2 | Make-a-Lisp | `mal/` — 11/11 steps, 909 of mal's own tests (C-032) |
 | §3 | SICP chapter 3 | `sicp/` — 4 chapters, 65 results against guile |
-| §4 | Advent of Code | `aoc/` — 5 puzzles, 10 answers against Clojure |
+| §4 | Advent of Code | `aoc/` — **25 puzzles, 70 answers** against Clojure (C-114) |
 | §5 | PAIP chapters 11–12 | `paip/` — 2 chapters, 58 results against guile (C-033, C-034) |
 
 **§6, the Shield slice, is not being built** — the builder's call, 2026-09-15. It needs
@@ -79,12 +78,17 @@ encoding, if the item is ever revived.
   and queues test services as the home for state. The chapter 4 evaluator is a sequel to
   Little Schemer chapter 10.
 
-## 4. Advent of Code (one year): is it pleasant for real work?
+## 4. Advent of Code — **COMPLETE: 25 days, 70 answers (2026-09-18)**
 
 - **What:** real input files, parsing, grids, hash maps, and a known right answer for every
   puzzle.
 - **Stresses:** what the textbooks never touch: reading files, splitting strings,
   performance. `wat`'s startup (~350–450ms per run on the i7-1270P laptop) will show up.
+- **Answered (C-114).** Startup is 0.29 s, a fifth of the JVM's, and never the problem. Size is
+  fine — 20000 sorted and mapped in 3.9 s. What costs is REBUILDING: the four slowest puzzles all
+  rebuild per element, which is F-104 and F-116. The most expensive single gap for ordinary work
+  is F-061: seven validation rules that are one-line regular expressions elsewhere are 150 lines
+  of wat against 60 of Clojure.
 
 ## 5. Norvig's PAIP — **COMPLETE: 20 of 20 portable chapters (2026-09-16)**
 
