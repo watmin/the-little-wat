@@ -25,6 +25,12 @@ print, in order (`lib/check.wat`).
 | day09 basins | a 100×100 grid of heights | how many basins, and the product of the three largest | 2.08 s | 1.04 s |
 | day10 growth | 300 timers | the population after 80 days, and after 500 | 0.56 s | 1.03 s |
 | day11 maze | a 150×150 maze | the fewest steps across, and how many squares are reachable | 3.01 s | 1.17 s |
+| day12 caves | 16 cave edges | how many paths run start to end, and with one small cave repeatable | 2.25 s | 1.24 s |
+| day13 origami | 104 dots and 3 folds | dots after the first fold, then the picture — the answers are TEXT | 0.58 s | 1.03 s |
+| day14 polymer | a template and 100 rules | commonest minus rarest after 10 steps, and after 40 | 0.82 s | 1.21 s |
+| day15 bingo | a draw order and 20 boards | the first board to win, and the last | 1.44 s | 1.39 s |
+| day16 assembly | a 12-instruction program | register a, and register a with c starting at 1 | 0.59 s | 1.08 s |
+| day17 intervals | 615 blocked ranges | the lowest value not blocked, and how many are not | 0.67 s | 1.07 s |
 
 All answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and the
 JVM's about 1.49 s of Clojure's.
@@ -86,6 +92,24 @@ JVM's about 1.49 s of Clojure's.
   F-006/F-008 family). The answer is therefore a bigint, and **F-060 has to be worked around a
   second time in a second suite**: a bigint has no `to-string`, so its digits come from `str`
   with a trailing `N` to strip — the identical helper `euler/p57-p71-rationals.wat` needed.
+- **An answer can be a picture.** day13 folds a sheet of dots until it reads, and its second
+  answer is six rows of `#` and `.` compared to Clojure's character for character. Every other
+  puzzle answers with a number, and a number is much easier to get accidentally right.
+- **`sort` takes no key, so the data has to be shaped to suit it.** day17 sorts 615 ranges by
+  their low end, and there is no `sort-by` and no comparator argument — only `sort` over a whole
+  collection. The route is to pack each pair into one integer, `lo * 1000000000 + hi`, which
+  orders by `lo` then `hi`. That is also why the puzzle's space stops at 999999999 rather than
+  2^32: `lo * 2^32 + hi` is 1.8 × 10¹⁹ and i64 stops at 9.2 × 10¹⁸. Choosing the universe to fit
+  the packing is a decision a comparator would have made unnecessary.
+- **No regex means splitting twice.** day15's boards are five rows of five columns aligned with
+  spaces, so a run of spaces has to be split on one space with the empty fields dropped (F-061:
+  the whole regex surface is `matches?`). The Clojure reference says `#"\s+"`.
+- **The machine `lox/` spends seventeen chapters on is forty lines when it is read from text.**
+  day16 is a four-register interpreter, and the differences are the interesting part: the
+  dispatch is a `cond` over strings rather than an exhaustive `match`, so a typo in the input is
+  a runtime error where a bad opcode in lox is unconstructible; the registers are a `defrecord`
+  updated with `assoc` (F-113); and the ip is an ordinary loop argument, which is what C-098
+  measured as the cheap shape.
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 

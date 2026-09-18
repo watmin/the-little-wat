@@ -1,0 +1,16 @@
+start-AA
+start-bb
+AA-cc
+bb-BB
+cc-BB
+BB-dd
+dd-CC
+CC-ee
+ee-end
+CC-end
+BB-ff
+ff-CC
+AA-dd
+bb-end
+cc-gg
+gg-CC
