@@ -90,6 +90,8 @@
     ((:wat::core::= name "GREATER_EQUAL") (:lox::PREC-COMPARISON))
     ((:wat::core::= name "LESS") (:lox::PREC-COMPARISON))
     ((:wat::core::= name "LESS_EQUAL") (:lox::PREC-COMPARISON))
+    ((:wat::core::= name "AND") (:lox::PREC-AND))
+    ((:wat::core::= name "OR") (:lox::PREC-OR))
     (:else (:lox::PREC-NONE))))
 
 (:wat::core::defn :loxv::expression [p <- :loxv::C] -> :loxv::C
@@ -140,7 +142,33 @@
         (:loxv::c-emit (:loxv::parse-prec p (:lox::PREC-UNARY)) (:loxv::Op.Not {})))
       (:else (:loxv::c-error p "Expect expression.")))))
 
+;; `and` short-circuits by jumping over its right operand and LEAVING the left one, which is why
+;; `nil and 1` is nil rather than false. `or` does the same with the sense inverted, which it
+;; spells as a jump over a jump -- Nystrom notes it would be one instruction with an
+;; OP_JUMP_IF_TRUE, and that he keeps the instruction set small instead.
+(:wat::core::defn :loxv::and-op [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::c-emit p (:loxv::Op.JumpIfFalse {:offset 0}))
+                    end (:wat::core::- (:loxv::ccount p1) 1)
+                    p2 (:loxv::parse-prec (:loxv::c-emit p1 (:loxv::Op.Pop {})) (:lox::PREC-AND))]
+    (:loxv::patch-jif p2 end)))
+
+(:wat::core::defn :loxv::or-op [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [p1 (:loxv::c-emit p (:loxv::Op.JumpIfFalse {:offset 0}))
+                    else-j (:wat::core::- (:loxv::ccount p1) 1)
+                    p2 (:loxv::c-emit p1 (:loxv::Op.Jump {:offset 0}))
+                    end-j (:wat::core::- (:loxv::ccount p2) 1)
+                    p3 (:loxv::c-emit (:loxv::patch-jif p2 else-j) (:loxv::Op.Pop {}))
+                    p4 (:loxv::parse-prec p3 (:lox::PREC-OR))]
+    (:loxv::patch-jmp p4 end-j)))
+
 (:wat::core::defn :loxv::c-infix [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let [k0 (:lox::tok-name (:lox::Token/kind (:loxv::C/prev p)))]
+    (:wat::core::cond
+      ((:wat::core::= k0 "AND") (:loxv::and-op p))
+      ((:wat::core::= k0 "OR") (:loxv::or-op p))
+      (:else (:loxv::c-infix-binary p)))))
+
+(:wat::core::defn :loxv::c-infix-binary [p <- :loxv::C] -> :loxv::C
   (:wat::core::let [k (:lox::tok-name (:lox::Token/kind (:loxv::C/prev p)))
                     p1 (:loxv::parse-prec p (:wat::core::+ (:loxv::infix-prec k) 1))]
     (:wat::core::cond
@@ -156,6 +184,43 @@
       ((:wat::core::= k "GREATER_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Less {}) (:loxv::Op.Not {})))
       ((:wat::core::= k "LESS_EQUAL") (:loxv::c-emit2 p1 (:loxv::Op.Greater {}) (:loxv::Op.Not {})))
       (:else (:loxv::c-error p1 "Expect an operator.")))))
+
+;; ---- chapter 23: jumps, and the patch F-104 has been waiting for
+;;
+;; Nystrom emits a jump with a PLACEHOLDER operand, remembers the offset, compiles the body, and
+;; then writes the real distance back: `chunk->code[offset] = (jump >> 8) & 0xff;`. That is a
+;; positional write into a vector, which wat does not have (F-104) -- so a patch here REBUILDS
+;; the code array. `lox/ch23-jumping.wat` measures it: about seven microseconds per instruction
+;; already emitted, so one patch is LINEAR in the program compiled so far and a program's patches
+;; together are QUADRATIC in its length. (F-116's per-element clone is on top of that, and still
+;; small at these sizes, so the curve gets worse rather than better.)
+(:wat::core::defn :loxv::ccount [p <- :loxv::C] -> :wat::core::i64
+  (:wat::core::length (:loxv::Chunk/code (:loxv::C/chunk p))))
+
+(:wat::core::defn :loxv::code-set [v <- :loxv::Code i <- :wat::core::i64 x <- :loxv::Op
+                                   j <- :wat::core::i64 acc <- :loxv::Code] -> :loxv::Code
+  (:wat::core::if (:wat::core::>= j (:wat::core::length v)) acc
+    (:loxv::code-set v i x (:wat::core::+ j 1)
+      (:wat::core::conj acc (:wat::core::if (:wat::core::= j i) x (:wat::core::nth v j))))))
+
+(:wat::core::defn :loxv::patch-with [p <- :loxv::C idx <- :wat::core::i64 op <- :loxv::Op] -> :loxv::C
+  (:wat::core::assoc p :chunk
+    (:wat::core::assoc (:loxv::C/chunk p) :code
+      (:loxv::code-set (:loxv::Chunk/code (:loxv::C/chunk p)) idx op 0
+        (:wat::core::Vector :- [:loxv::Op])))))
+
+;; patchJump: the distance from the instruction AFTER the jump to here
+(:wat::core::defn :loxv::patch-jif [p <- :loxv::C idx <- :wat::core::i64] -> :loxv::C
+  (:loxv::patch-with p idx
+    (:loxv::Op.JumpIfFalse {:offset (:wat::core::- (:wat::core::- (:loxv::ccount p) idx) 1)})))
+
+(:wat::core::defn :loxv::patch-jmp [p <- :loxv::C idx <- :wat::core::i64] -> :loxv::C
+  (:loxv::patch-with p idx
+    (:loxv::Op.Jump {:offset (:wat::core::- (:wat::core::- (:loxv::ccount p) idx) 1)})))
+
+;; emitLoop: a BACKWARD jump, whose distance is known when it is written, so it needs no patch
+(:wat::core::defn :loxv::emit-loop [p <- :loxv::C start <- :wat::core::i64] -> :loxv::C
+  (:loxv::c-emit p (:loxv::Op.Loop {:offset (:wat::core::- (:wat::core::+ (:loxv::ccount p) 1) start)})))
 
 ;; ---- chapter 22: scopes and locals
 (:wat::core::defn :loxv::begin-scope [p <- :loxv::C] -> :loxv::C
@@ -276,9 +341,70 @@
 (:wat::core::defn :loxv::block [p <- :loxv::C] -> :loxv::C
   (:loxv::c-consume (:loxv::block-loop p) "RIGHT_BRACE" "Expect '}' after block."))
 
+;; if-then-else. The two Pops are the condition being discarded on whichever path is taken;
+;; JUMP_IF_FALSE peeks rather than pops so `and`/`or` can keep the value.
+(:wat::core::defn :loxv::if-stmt [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let
+    [p1 (:loxv::c-consume p "LEFT_PAREN" "Expect '(' after 'if'.")
+     p2 (:loxv::c-consume (:loxv::expression p1) "RIGHT_PAREN" "Expect ')' after condition.")
+     p3 (:loxv::c-emit p2 (:loxv::Op.JumpIfFalse {:offset 0}))
+     then-j (:wat::core::- (:loxv::ccount p3) 1)
+     p4 (:loxv::statement (:loxv::c-emit p3 (:loxv::Op.Pop {})))
+     p5 (:loxv::c-emit p4 (:loxv::Op.Jump {:offset 0}))
+     else-j (:wat::core::- (:loxv::ccount p5) 1)
+     p6 (:loxv::c-emit (:loxv::patch-jif p5 then-j) (:loxv::Op.Pop {}))
+     p7 (:wat::core::if (:lox::kind-is? (:loxv::C/cur p6) "ELSE")
+          (:loxv::statement (:loxv::c-advance p6)) p6)]
+    (:loxv::patch-jmp p7 else-j)))
+
+(:wat::core::defn :loxv::while-stmt [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let
+    [start (:loxv::ccount p)
+     p1 (:loxv::c-consume p "LEFT_PAREN" "Expect '(' after 'while'.")
+     p2 (:loxv::c-consume (:loxv::expression p1) "RIGHT_PAREN" "Expect ')' after condition.")
+     p3 (:loxv::c-emit p2 (:loxv::Op.JumpIfFalse {:offset 0}))
+     exit (:wat::core::- (:loxv::ccount p3) 1)
+     p4 (:loxv::statement (:loxv::c-emit p3 (:loxv::Op.Pop {})))
+     p5 (:loxv::emit-loop p4 start)]
+    (:loxv::c-emit (:loxv::patch-jif p5 exit) (:loxv::Op.Pop {}))))
+
+;; `for` is the chapter's set piece: desugared entirely in the compiler, with the increment
+;; compiled BEFORE the body and jumped over, so it can run after the body without a second pass.
+(:wat::core::defn :loxv::for-stmt [p <- :loxv::C] -> :loxv::C
+  (:wat::core::let
+    [p1 (:loxv::c-consume (:loxv::begin-scope p) "LEFT_PAREN" "Expect '(' after 'for'.")
+     p2 (:wat::core::cond
+          ((:lox::kind-is? (:loxv::C/cur p1) "SEMICOLON") (:loxv::c-advance p1))
+          ((:lox::kind-is? (:loxv::C/cur p1) "VAR") (:loxv::var-decl (:loxv::c-advance p1)))
+          (:else (:loxv::expr-stmt p1)))
+     start0 (:loxv::ccount p2)
+     has-cond (:wat::core::not (:lox::kind-is? (:loxv::C/cur p2) "SEMICOLON"))
+     p3 (:wat::core::if has-cond
+          (:loxv::c-emit
+            (:loxv::c-emit (:loxv::c-consume (:loxv::expression p2) "SEMICOLON" "Expect ';' after loop condition.")
+              (:loxv::Op.JumpIfFalse {:offset 0}))
+            (:loxv::Op.Pop {}))
+          (:loxv::c-advance p2))
+     exit (:wat::core::if has-cond (:wat::core::- (:loxv::ccount p3) 2) -1)
+     has-inc (:wat::core::not (:lox::kind-is? (:loxv::C/cur p3) "RIGHT_PAREN"))
+     p4 (:wat::core::if has-inc (:loxv::c-emit p3 (:loxv::Op.Jump {:offset 0})) p3)
+     body-j (:wat::core::if has-inc (:wat::core::- (:loxv::ccount p4) 1) -1)
+     inc-start (:loxv::ccount p4)
+     p5 (:wat::core::if has-inc (:loxv::c-emit (:loxv::expression p4) (:loxv::Op.Pop {})) p4)
+     p6 (:loxv::c-consume p5 "RIGHT_PAREN" "Expect ')' after for clauses.")
+     p7 (:wat::core::if has-inc (:loxv::patch-jmp (:loxv::emit-loop p6 start0) body-j) p6)
+     start (:wat::core::if has-inc inc-start start0)
+     p8 (:loxv::emit-loop (:loxv::statement p7) start)
+     p9 (:wat::core::if has-cond
+          (:loxv::c-emit (:loxv::patch-jif p8 exit) (:loxv::Op.Pop {})) p8)]
+    (:loxv::end-scope p9)))
+
 (:wat::core::defn :loxv::statement [p <- :loxv::C] -> :loxv::C
   (:wat::core::cond
     ((:lox::kind-is? (:loxv::C/cur p) "PRINT") (:loxv::print-stmt (:loxv::c-advance p)))
+    ((:lox::kind-is? (:loxv::C/cur p) "IF") (:loxv::if-stmt (:loxv::c-advance p)))
+    ((:lox::kind-is? (:loxv::C/cur p) "WHILE") (:loxv::while-stmt (:loxv::c-advance p)))
+    ((:lox::kind-is? (:loxv::C/cur p) "FOR") (:loxv::for-stmt (:loxv::c-advance p)))
     ((:lox::kind-is? (:loxv::C/cur p) "LEFT_BRACE")
       (:loxv::end-scope (:loxv::block (:loxv::begin-scope (:loxv::c-advance p)))))
     (:else (:loxv::expr-stmt p))))

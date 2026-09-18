@@ -111,6 +111,12 @@
   ;; instructions index the running stack rather than a table of names.
   :GetLocal [slot <- :wat::core::i64]
   :SetLocal [slot <- :wat::core::i64]
+  ;; chapter 23. `offset` counts INSTRUCTIONS, not bytes -- see the note at the top of
+  ;; lox/lib/chunk.wat: an opcode here carries its operand, so there are no operand bytes to
+  ;; count. Nystrom's two-byte big-endian operand and his 65535 limit have no analogue.
+  :Jump [offset <- :wat::core::i64]
+  :JumpIfFalse [offset <- :wat::core::i64]
+  :Loop [offset <- :wat::core::i64]
   :Return [])
 
 (:wat::core::typealias :loxv::Code (:wat::core::Vector :- [:loxv::Op]))
@@ -151,6 +157,8 @@
     [:loxv::Op.GetGlobal {:slot s} "OP_GET_GLOBAL"]
     [:loxv::Op.SetGlobal {:slot s} "OP_SET_GLOBAL"]
     [:loxv::Op.GetLocal {:slot s} "OP_GET_LOCAL"] [:loxv::Op.SetLocal {:slot s} "OP_SET_LOCAL"]
+    [:loxv::Op.Jump {:offset o} "OP_JUMP"] [:loxv::Op.JumpIfFalse {:offset o} "OP_JUMP_IF_FALSE"]
+    [:loxv::Op.Loop {:offset o} "OP_LOOP"]
     [:loxv::Op.Return {} "OP_RETURN"]))
 
 (:wat::core::defn :loxv::op-key [op <- :loxv::Op] -> :wat::core::String
@@ -167,6 +175,9 @@
     [:loxv::Op.SetGlobal {:slot s} (:wat::string::concat "SETG/" (:wat::i64::to-string s))]
     [:loxv::Op.GetLocal {:slot s} (:wat::string::concat "GETL/" (:wat::i64::to-string s))]
     [:loxv::Op.SetLocal {:slot s} (:wat::string::concat "SETL/" (:wat::i64::to-string s))]
+    [:loxv::Op.Jump {:offset o} (:wat::string::concat "JMP/" (:wat::i64::to-string o))]
+    [:loxv::Op.JumpIfFalse {:offset o} (:wat::string::concat "JIF/" (:wat::i64::to-string o))]
+    [:loxv::Op.Loop {:offset o} (:wat::string::concat "LOOP/" (:wat::i64::to-string o))]
     [:loxv::Op.Return {} "RET"]))
 
 (:wat::core::defn :loxv::code-sig [c <- :loxv::Chunk] -> :wat::core::String

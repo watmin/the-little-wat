@@ -22,6 +22,8 @@
 
 (:wat::core::defenum :loxv::Step :wat::enum::Pure
   :Next [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output]
+  ;; chapter 23: an instruction that sets `ip` rather than advancing it
+  :Jump [s <- :loxv::Stack  g <- :loxv::Globals  out <- :loxv::Output  target <- :wat::core::i64]
   :Fail [msg <- :wat::core::String])
 
 (:wat::core::defenum :loxv::Out :wat::enum::Pure
@@ -100,7 +102,8 @@
   (:loxv::Step.Fail {:msg (:wat::string::concat "Undefined variable '" name "'.")}))
 
 (:wat::core::defn :loxv::exec [op <- :loxv::Op c <- :loxv::Chunk s <- :loxv::Stack
-                               g <- :loxv::Globals out <- :loxv::Output] -> :loxv::Step
+                               g <- :loxv::Globals out <- :loxv::Output
+                               ip <- :wat::core::i64] -> :loxv::Step
   (:wat::core::match op
     [:loxv::Op.Constant {:slot i}
       (:loxv::Step.Next {:g g :out out :s (:wat::core::conj s (:wat::core::nth (:loxv::Chunk/constants c) i))})]
@@ -167,6 +170,18 @@
       (:wat::core::if (:wat::core::= (:wat::core::length s) 0) (:loxv::Step.Fail {:msg "Stack underflow."})
         (:wat::core::if (:wat::core::>= i (:wat::core::length s)) (:loxv::Step.Fail {:msg "Bad local slot."})
           (:loxv::Step.Next {:g g :out out :s (:loxv::store s i (:loxv::peek-n s 0))})))]
+    ;; ---- chapter 23. A jump is a value, so the loop does not have to reach into `exec`.
+    [:loxv::Op.Jump {:offset o}
+      (:loxv::Step.Jump {:g g :out out :s s :target (:wat::core::+ (:wat::core::+ ip 1) o)})]
+    ;; the condition is PEEKED, not popped -- the surrounding code emits the Pop, which is what
+    ;; lets `and` and `or` leave their operand behind as the expression's value
+    [:loxv::Op.JumpIfFalse {:offset o}
+      (:wat::core::if (:wat::core::= (:wat::core::length s) 0) (:loxv::Step.Fail {:msg "Stack underflow."})
+        (:wat::core::if (:loxv::falsey? (:loxv::peek-n s 0))
+          (:loxv::Step.Jump {:g g :out out :s s :target (:wat::core::+ (:wat::core::+ ip 1) o)})
+          (:loxv::Step.Next {:g g :out out :s s})))]
+    [:loxv::Op.Loop {:offset o}
+      (:loxv::Step.Jump {:g g :out out :s s :target (:wat::core::- (:wat::core::+ ip 1) o)})]
     [:loxv::Op.Return {} (:loxv::Step.Next {:g g :out out :s s})]))
 
 (:wat::core::defn :loxv::halts? [op <- :loxv::Op] -> :wat::core::bool
@@ -179,7 +194,9 @@
     [:loxv::Op.Negate {} false] [:loxv::Op.Print {} false] [:loxv::Op.Pop {} false]
     [:loxv::Op.DefineGlobal {:slot i} false] [:loxv::Op.GetGlobal {:slot i} false]
     [:loxv::Op.SetGlobal {:slot i} false]
-    [:loxv::Op.GetLocal {:slot i} false] [:loxv::Op.SetLocal {:slot i} false]))
+    [:loxv::Op.GetLocal {:slot i} false] [:loxv::Op.SetLocal {:slot i} false]
+    [:loxv::Op.Jump {:offset o} false] [:loxv::Op.JumpIfFalse {:offset o} false]
+    [:loxv::Op.Loop {:offset o} false]))
 
 ;; the threaded loop -- C-098's cheaper shape, chosen on that chapter's evidence
 (:wat::core::defn :loxv::run-loop [c <- :loxv::Chunk ip <- :wat::core::i64 s <- :loxv::Stack
@@ -190,10 +207,12 @@
     (:wat::core::let [op (:wat::core::nth (:loxv::Chunk/code c) ip)]
       (:wat::core::if (:loxv::halts? op)
         (:loxv::Out.Ok {:stack s :globals g :out out :steps (:wat::core::+ steps 1)})
-        (:wat::core::match (:loxv::exec op c s g out)
+        (:wat::core::match (:loxv::exec op c s g out ip)
           [:loxv::Step.Fail {:msg m}
             (:loxv::Out.Err {:msg m :line (:wat::core::nth (:loxv::Chunk/lines c) ip)
                              :out out :steps (:wat::core::+ steps 1)})]
+          [:loxv::Step.Jump {:s s2 :g g2 :out o2 :target t}
+            (:loxv::run-loop c t s2 g2 o2 (:wat::core::+ steps 1))]
           [:loxv::Step.Next {:s s2 :g g2 :out o2}
             (:loxv::run-loop c (:wat::core::+ ip 1) s2 g2 o2 (:wat::core::+ steps 1))])))))
 

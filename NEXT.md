@@ -351,7 +351,7 @@ ch 1 and PAIP's CL chapters got.
 | 20 | **Hash tables** | **done** (C-103) — **the earlier ruling was half wrong** | the table itself is not worth rewriting (C-078 priced wat's two), but the chapter's **interning** is a language decision, and its cost claim is about a C program: measured, it buys **nothing at 10 characters** and about a quarter at 100 000 |
 | 21 | **Global variables** | **done** (C-104) | statements, a globals table, assignment as an expression, `synchronize()` counted rather than assumed; `canAssign` checked on five invalid targets. Cost: **F-115** |
 | 22 | **Local variables** | **done** (C-105) | a local costs no instruction to create, checked through the emitted code; both compile errors checked; `OP_SET_LOCAL` is F-104 in an inner loop (76 µs at one local, 404 µs at forty) and the probe it prompted found **F-116** |
-| 23 | Jumping back and forth | **not started** |
+| 23 | **Jumping back and forth** | **done** (C-106) | the backpatch chapter 14 predicted: a patch rebuilds the code vector, **~7 µs per instruction already emitted**, so patches are quadratic in program length (90 `if`s: 1.06 s against 0.16 s) |
 | 24 | Calls and functions | **not started** |
 | 25 | Closures | **not started** |
 | 26 | Garbage collection | **partly covered** — SICP §5.3 (C-081) already built stop-and-copy with broken hearts; Nystrom's mark-sweep is a different algorithm and is worth building |
