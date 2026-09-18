@@ -10,7 +10,7 @@ and two answers from it. Each puzzle has a reference implementation in Clojure
 (`oracle/aoc/NAME.clj`), run by `tools/aoc-oracle.sh`, whose answers the wat solution must
 print, in order (`lib/check.wat`).
 
-## Puzzles (2026-09-15, wat-rs `a3218644d`)
+## Puzzles (2026-09-18, wat-rs `a3218644d`)
 
 | puzzle | input | answers | wat | Clojure |
 |---|---|---|---|---|
@@ -19,9 +19,15 @@ print, in order (`lib/check.wat`).
 | day03 words | 5000 words | how many are distinct, and how often the commonest occurs | 0.90 s | 2.50 s |
 | day04 binary | 1000 binary numbers | the product of the common-bit numbers, and of the two narrowed rows | 1.05 s | 2.50 s |
 | day05 paths | a 60×60 grid of risks, then the same grown to 300×300 | the cheapest path across each | 20.6 s | 2.78 s |
+| day06 adapters | 95 adapter joltages | the 1-jolt × 3-jolt product, and how many arrangements | 2.31 s | 1.02 s |
+| day07 packets | one hex packet, nested | the version sum, and the value it computes | 0.58 s | 1.12 s |
+| day08 brackets | 99 lines of brackets | the syntax-error score, and the median completion score | 0.63 s | 0.89 s |
+| day09 basins | a 100×100 grid of heights | how many basins, and the product of the three largest | 2.08 s | 1.04 s |
+| day10 growth | 300 timers | the population after 80 days, and after 500 | 0.56 s | 1.03 s |
+| day11 maze | a 150×150 maze | the fewest steps across, and how many squares are reachable | 3.01 s | 1.17 s |
 
-All ten answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and
-the JVM's about 1.49 s of Clojure's.
+All answers match. The times are whole runs: wat's startup is about 0.29 s of its own, and the
+JVM's about 1.49 s of Clojure's.
 
 ## What the puzzles showed
 
@@ -61,6 +67,25 @@ the JVM's about 1.49 s of Clojure's.
   nothing about that (F-058, `probes/aoc/persistent-nested-type*.wat`).
 - **There is no persistent set.** `PersistentVector` and `PersistentMap` share structure; no set
   does, so the settled squares are a `PersistentMap` to `true` (F-057).
+- **A stack is cheap and a queue is not — and the difference is the SIZE, not the operation.**
+  day08 needs a stack: no `pop`, no `subvec`, `take`/`drop` answer a Stream (F-088), and no
+  positional update (F-104), so a pop rebuilds. Its stack is at most nine deep and it costs
+  nothing. day11 needs a queue, whose frontier reaches 129 — and the way out is not a workaround
+  but a better shape: a level-synchronous BFS steps the whole frontier at once and never pops
+  anything. F-116 is a finding about stacks that reach thousands; these two puzzles are the
+  before and after.
+- **The recursion the problem describes is the recursion you can write.** day09's flood fill is
+  four recursive calls per cell, and the largest basin is 266 — well inside F-099's limit (fine
+  to 100000 frames, SIGSEGV at 120000). The cost is not depth but PLUMBING: with no mutable set,
+  `seen` must come back out of each of the four calls to go into the next, so the fill answers a
+  record of (seen, count).
+- **i64 traps; it does not wrap.** day10's population after 500 days is 2.6 × 10²¹, and the i64
+  version dies with *"i64 overflow: … does not fit in 64 bits"*, naming the operation and both
+  operands — better than C's silence and Java's wrap. The one complaint is that it locates at
+  `wat/core.wat:66`, inside wat's own stdlib rather than at the line that overflowed (the
+  F-006/F-008 family). The answer is therefore a bigint, and **F-060 has to be worked around a
+  second time in a second suite**: a bigint has no `to-string`, so its digits come from `str`
+  with a trailing `N` to strip — the identical helper `euler/p57-p71-rationals.wat` needed.
 - **Startup is small.** The thing NEXT.md expected to hurt — wat's startup on a per-puzzle
   program — is 0.29 s, a fifth of the JVM's.
 
