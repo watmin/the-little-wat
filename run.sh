@@ -70,7 +70,9 @@ while IFS= read -r f; do
   if [ -n "${RECORD:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$WAT_REV" "$f" "$ms" "$rc" >> timings.tsv
   fi
-done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' 2>/dev/null | sort)   # lib/ files are definitions only, no main
+# lib/ files are definitions only, no main; elf/refuse.wat is a NEGATIVE test (the compiler
+# pointed at a program it must refuse), so it is checked by tools/elf-run.sh instead.
+done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' -not -path 'elf/refuse.wat' 2>/dev/null | sort)
 
 echo "---"
 echo "$pass passed, $fail failed  (wat-rs $WAT_REV)"
