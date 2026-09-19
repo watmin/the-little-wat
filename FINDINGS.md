@@ -9798,6 +9798,59 @@ complete at check time. Any openness either moves it to link time or gives it up
   `./elf/out/deepvec.elf`.
 
 
+### C-146: `let` bindings take the registers a parameter did not -- 10% on fib, and 33 bytes smaller
+
+- **Where:** `elf/compile.wat` (`:c::bind-each`, `:c::compile-fn`, `:c::reg-mov-from`,
+  `:c::Prog/nlr`, `:c::Prog/regbase`). **`tools/bootstrap.sh` green from the interpreter,
+  fixpoint at 129,319 bytes; `tools/loop.sh`, `tools/mem.sh`, `tools/vs-c.sh` green.**
+- **The opportunity came from C-142, not from `let`.** `fib` has no `let` in it at all -- but
+  inlining turns every inlined call into one, and each of those bindings was round-tripping
+  through a frame slot, a store and then a load per read, where gcc keeps the value in a
+  register. C-136 already saves rbx, r12 and r13 for the parameters of looping functions; this
+  gives the ones a parameter did not take to `let`.
+- **Measured A/B, one session, the same build either way** -- which is C-136's own lesson, where
+  *"registers are faster"* would have shipped a regression:
+
+  | | ON | OFF | |
+  | --- | --- | --- | --- |
+  | `fib(32)` | **20,171 µs** | 22,374 µs | **−9.8%** |
+  | `poly` | 303,819 µs | 307,028 µs | −1.0% |
+  | `mix` | 355,845 µs | 357,104 µs | −0.4% |
+  | the compiler on itself | **275 ms** | 294 ms | **−6.5%** |
+  | `fib32.elf` | **1,119 B** | 1,152 B | 33 bytes **smaller** |
+
+  Smaller, because a register store is three bytes where a frame store is four, and a register
+  read is three where a load is four. The loop benchmarks barely move because C-133's direct
+  operand and C-137's scratch pool had already taken their bindings; the win is concentrated
+  exactly where the inlining put the bindings.
+- **The disconfirming probe was mechanical, and it mattered**: the trie (C-145) had just added
+  three runtime routines that use rbx, r12 and r13. Disassembling the whole runtime and checking
+  that every routine writing a callee-saved register pushes it first came back clean -- the
+  assumption C-136 already rests on, re-verified after the thing that could have broken it.
+- **Excluded for a function that clones**, for C-136's reason exactly: the child inherits the
+  frame, so a value moved out of it is a value the child cannot see. `threads4` still sums to
+  1000 and `fork` still prints `1 2 7 1 1 4`.
+- **The counts ride in `:c::Prog`**, set per function beside `linear`, so not one expression form
+  needed a new argument. All three readers of a binding already consulted `lookup-reg` before
+  `lookup` -- verified by audit, and there are exactly three.
+- **What the disassembly says is left**, and neither is this strike:
+  - **A store-then-reload pair at every binding**: `mov %rax,%rbx` followed immediately by
+    `mov %rbx,%rax`, because `bind-each` writes the register and the body's first act is to read
+    it. A peephole would take it, but only with knowledge of branch targets the emitter does not
+    have at emit time -- a jump can land on the read.
+  - **C-136's ruling has been undermined by this change.** It gives parameters registers only in
+    looping functions, because the prologue cost is per call and the benefit per iteration. But
+    a function with `let` registers is already paying that prologue -- so the marginal cost of
+    also giving its parameters registers is now nearly zero, and `fib` still loads `n` from the
+    frame three times.
+- **Against `-O2`, honestly:** this closes about a tenth of a two-fold gap. The rest is what the
+  disassembly showed in C-142 -- `-O2` inlines about six levels deep and partially turns the
+  recursion into iteration, spending 1,040 bytes on a three-line function. That is a different
+  and larger piece of work, not more of this one.
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh`; `elf/bench/fib32.wat`; `tools/bootstrap.sh`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
