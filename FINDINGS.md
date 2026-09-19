@@ -9914,6 +9914,57 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh`; `elf/bench/fib32.wat`; `tools/bootstrap.sh`.
 
 
+### F-125 / C-148: the compiled language did not trap on i64 overflow -- a wrong answer, not a refusal
+
+- **Where:** `elf/runtime.s` (`ovf`), `elf/compile.wat` (`:c::ovf-check`, `:c::fold`,
+  `:c::lvl-pure`), `elf/bad/overflow.wat`, `tools/elf-run.sh`. **`tools/bootstrap.sh` green from
+  the interpreter, fixpoint at 133,594 bytes; `loop`, `mem`, `vs-c`, `elf-run` green.**
+- **Found by chasing an optimisation, not by looking for a bug.** `gcc -O2` beats this compiler
+  on `fib` partly by *tail recursion modulo `+`* -- `acc += fib(n-1); n -= 2` -- which
+  **reassociates** the additions. That is free in C, where signed overflow is undefined. wat
+  traps. So the question *"may we reassociate?"* became *"what do we do on overflow at all?"*:
+
+  | `(+ 9223372036854775807 1)` | |
+  | --- | --- |
+  | interpreted | dies — `IntegerOverflow: 9223372036854775807 :wat::i64::+ 1 does not fit in 64 bits` |
+  | compiled | printed **-9223372036854775808**, exit **0** |
+
+  A bare `add rax, rcx`, wrapping silently. **A wrong ANSWER, not a refusal** -- the shape F-120
+  names as the worst kind -- and forty differential programs stayed green because not one of
+  them overflowed. The suite had never asked.
+- **The fix is six bytes a site.** `add`, `sub` and `imul` set the overflow flag, so every `+`,
+  `-` and `*` now carries `jo` to a handler modelled on `oom`: flush what stdout had buffered --
+  the interpreter would have printed it -- name the fault on stderr, exit 70. The branch is
+  never taken and predicts as such.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `fib(32)` | 14,828 µs | 15,586 µs |
+  | `four.elf` | 452 B | 611 B (C `-nostdlib`: 968) |
+  | the compiler on itself | 245 ms / 129,016 B | 261 ms / 133,594 B |
+
+  Five percent and a hundred and sixty bytes, for not lying.
+- **`quot` and `rem` are NOT covered, and that is stated rather than deferred:** `idiv` faults on
+  `MIN / -1` rather than setting a flag, so it is a different mechanism -- a signal, not a
+  branch -- and it needs its own answer.
+- **The fix nearly hid a second bug, and the symptom was a binary getting smaller.** Inserting
+  `ovf` at runtime index 1 shifted every later index, and `:c::inl-ok?` carried a hardcoded
+  *"pure means level ≤ 3"* -- a 3 that had silently meant `print_bool`. `(< n 2)` now scored 4,
+  **`fib` stopped being inlinable**, and `fib32.elf` fell from 3,104 to 702 bytes while its time
+  doubled to 43,313 µs. Nothing failed. C-139's lesson word for word: a number standing in for a
+  question. It is `(:c::lvl-pure)` now, defined as *"everything at or below the last routine that
+  does not touch the heap."*
+- **And the optimisation that started this is inadmissible, which is the finding underneath the
+  finding.** Reassociating `+` changes *whether a program traps*: for terms that can be negative,
+  a prefix sum can overflow where the total does not. `gcc` may do it because C says overflow is
+  undefined; wat says it stops. **So the specific trick `-O2` uses to beat us here is one this
+  compiler cannot take** without the compiled language diverging from the interpreted one. That
+  is a real, measured consequence of wat choosing trapping arithmetic -- a cost on one side of a
+  ledger whose other side is that `(+ a b)` never silently answers nonsense.
+- **Class:** FIX.
+- **Repro:** `tools/elf-run.sh`; `./elf/out/overflow.elf`; `wat elf/bad/overflow.wat`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
