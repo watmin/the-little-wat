@@ -37,7 +37,9 @@ measurement lives, and why it was not done at the time.
    C-128 and C-143 both named decrements as the next step, both for MEMORY. **F-127 makes it a
    correctness constraint**: without a count that falls, a compiled wat cannot both answer
    correctly and append in place through a container field, and the honest rule costs 3.06x peak
-   memory to prove it. Three repairs were tried on paper and all three hit the same wall — the
+   memory to prove it, spread across THREE record-field accumulators (`:c::Out/code` 142,856 KiB,
+   `:c::Out/tail` 80,480, `:c::PassR/code` and friends the rest) rather than the one the entry
+   first claimed. Three repairs were tried on paper and all three hit the same wall — the
    container's own count is never 1, because `:c::push-args` increments every pointer-typed
    symbol argument. C-143 tried to make that a move and was reverted over four aliasing holes,
    which are written up in its entry and are the real specification for this work. **This is now

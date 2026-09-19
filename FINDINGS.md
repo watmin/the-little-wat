@@ -10093,9 +10093,34 @@ complete at check time. Any openness either moves it to link time or gives it up
   user call and an `if` can all hand back something older than themselves.
 - **The price, measured, because it is not free.** Peak resident memory compiling the whole of
   `elf/`, interleaved on two retained binaries and taking the minimum of each,
-  **145,092 -> 444,200 KiB (3.06x)**; wall clock the same way, **303 -> 346 ms (14%)**. All of it is one call site:
-  `:c::emit` is `(assoc o :code (concat (:c::Out/code o) hex))`, the compiler's own accumulator,
-  and its left operand is a field read. It was fast because the rule was wrong.
+  **145,092 -> 444,200 KiB (3.06x)**; wall clock the same way, **303 -> 346 ms (14%)**.
+- **And then measured AGAIN, because the first account of where it went was wrong.** It read
+  *"all of it is one call site"* -- `:c::emit`, whose left operand is `(:c::Out/code o)`. That
+  was reasoning, not measurement, and four throwaway builds that hand `own?` back to one class of
+  operand at a time say otherwise:
+
+  | granted back | peak KiB | recovers |
+  | --- | --- | --- |
+  | nothing (the correct rule) | 444,200 | -- |
+  | `(:c::Out/code o)` alone | 301,344 | 142,856 |
+  | `(:c::Out/tail o)` alone | 363,720 | 80,480 |
+  | every field read | 149,868 | 294,332 |
+  | every NON-field-read (user calls) | 440,388 | 3,812 |
+
+  So it is **three accumulators, not one** -- `:c::Out/code` (the instruction stream),
+  `:c::Out/tail` (the data segment, which is nearly as hot because this compiler is mostly hex
+  literals) and `:c::PassR/code` -- and the operands that LOOK like the majority in a source
+  count, the fifty-odd `(concat (:c::mov-rax n) "...")` calls, are worth 0.9% between them.
+  **Every kilobyte of it is the same shape: a String grown by `concat` inside a record field.**
+- **And one alarm that the measurement put out.** `:c::patch` rebuilds the accumulated code with
+  a `subs` either side of the hole -- F-104 again, on the hottest string in the compiler, for
+  every forward branch, which is every `if` and every `cond` clause. It looks like the worst
+  thing in the file. Compiled with `:c::patch` made a no-op it peaks at **431,820 KiB against
+  444,200 -- 2.8%**, because a patch rewrites one FUNCTION's code and functions are small. The
+  first attempt at that probe measured the wrong binary (the broken output of the patch-less
+  compiler, not the patch-less compiler itself) and reported 1.86 GB; the number above is the
+  corrected one. **An O(n) copy in an obvious place is worth measuring before it is worth
+  fixing**, which is the same lesson C-140 learned from the other side.
 - **Three ways to buy it back, and the same wall behind all three.**
   1. **Check the container's count too** -- extend in place only when the record itself is
      unshared. `:c::push-args` increments every pointer-typed symbol argument, so `o`'s count
