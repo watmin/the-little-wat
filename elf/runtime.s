@@ -312,6 +312,7 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
     ret
 
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
+    push %rbx                    # rbx, r12 and r13 hold the caller's parameters now
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
     movq %r15, %r11
     leaq 16(,%r8,8), %r10
@@ -331,6 +332,7 @@ slot_set:                        # rax = vector/record, rcx = index, rdx = value
     movq %r11, %r15
     movq %r9, %rax
     movq %rbx, 8(%rax,%r10,8)
+    pop %rbx
     ret
 
 oom:                             # no memory left: say so on stderr rather than fault
@@ -526,6 +528,8 @@ hexchar:                         # rax = 0..15  ->  al = one ascii hex digit
     ret
 
 prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes written
+    push %rbx
+    push %r12
     movq %rax, %r8
     movq %rcx, %r9
     movq %r15, %r10              # a NUL-terminated path, at the heap top as scratch
@@ -570,9 +574,12 @@ prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes writte
     movq %r9, %rdi
     syscall
     movq %r10, %rax
+    pop %r12
+    pop %rbx
     ret
 
 prim_read_hex:                   # rax = path  ->  rax = a String of hex
+    push %r12
     movq %r15, %r10
     leaq 8(%rax), %rsi
     movq %r10, %rdi
@@ -636,9 +643,11 @@ prim_read_hex:                   # rax = path  ->  rax = a String of hex
     decq %rdx
     jnz 4b
 5:  movq %r10, %rax
+    pop %r12
     ret
 
 io_read_file:                    # rax = path  ->  rax = a String of the file's bytes
+    push %r12
     movq %r15, %r10
     leaq 8(%rax), %rsi
     movq %r10, %rdi
@@ -686,4 +695,5 @@ io_read_file:                    # rax = path  ->  rax = a String of the file's 
     movq %rdx, %rcx
     rep movsb
     movq %r10, %rax
+    pop %r12
     ret
