@@ -791,6 +791,7 @@
 (:wat::core::defrecord :c::Prog
   [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
    linear <- (:wat::core::Vector :- [:wat::core::String])
+   pokers <- (:wat::core::Vector :- [:wat::core::String])
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -826,6 +827,7 @@
             :recs (:wat::core::Vector :- [:c::Rec])
             :aliases (:wat::core::Vector :- [:c::Alias])
             :linear (:wat::core::Vector :- [:wat::core::String])
+            :pokers (:wat::core::Vector :- [:wat::core::String])
             :src (rd/read "")))
 
 (:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
@@ -1396,48 +1398,57 @@
               (:wat::core::or (:c::len? h) (:wat::core::or (:c::strlen? h)
                                                           (:c::peek? h))))))))))))))
 
-(:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+(:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") true
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
-          ;; `=` and `not=` may be `str_eq`, which is a call
-          (:wat::core::and
-            (:wat::core::and (:c::quiet-head? h)
-              (:wat::core::and (:wat::core::not= (:c::binop h) "=")
-                               (:wat::core::not= (:c::binop h) "not=")))
-            (:c::all-safe? ks 1 pg)))))))
+          (:wat::core::and (:c::quiet-head? h)
+            (:wat::core::and (:c::word-cmp? h ks env pg)
+                             (:c::all-safe? ks 1 env pg))))))))
 
-(:wat::core::defn :c::all-safe? [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+;; `=` and `not=` compile to a machine-word compare, or to a call into `str_eq` -- and which one
+;; is a question the type pass can answer, exactly as it does for the `if` condition in
+;; `:c::cmp-cond`. Everything else on the whitelist is a word compare by construction.
+(:wat::core::defn :c::word-cmp? [h <- :wat::core::String ks <- :c::Kids env <- :c::Env
+                                 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [op (:c::binop h)]
+    (:wat::core::if (:wat::core::and (:wat::core::not= op "=") (:wat::core::not= op "not=")) true
+      (:wat::core::and (:wat::core::= (:wat::core::length ks) 3)
+        (:wat::core::and
+          (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 1) env pg)))
+          (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 2) env pg))))))))
+
+(:wat::core::defn :c::all-safe? [ks <- :c::Kids i <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
-    (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
-                     (:c::all-safe? ks (:wat::core::+ i 1) pg))))
+    (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
+                     (:c::all-safe? ks (:wat::core::+ i 1) env pg))))
 
 ;; how many of r8..r11 evaluating this subtree will use
-(:wat::core::defn :c::scratch-need [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+(:wat::core::defn :c::scratch-need [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") 0
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
         (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))]
           (:wat::core::if (:wat::core::or (:wat::core::= op "") (:wat::core::= op "quot"))
-            (:c::need-max ks 0 pg 0)
-            (:wat::core::if (:wat::core::= op "rem") (:c::need-max ks 0 pg 0)
-              (:c::need-fold ks 2 pg
-                (:c::scratch-need (:wat::core::nth ks 1) pg)))))))))
+            (:c::need-max ks 0 env pg 0)
+            (:wat::core::if (:wat::core::= op "rem") (:c::need-max ks 0 env pg 0)
+              (:c::need-fold ks 2 env pg
+                (:c::scratch-need (:wat::core::nth ks 1) env pg)))))))))
 
-(:wat::core::defn :c::need-max [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
-                                best <- :wat::core::i64] -> :wat::core::i64
+(:wat::core::defn :c::need-max [ks <- :c::Kids i <- :wat::core::i64 env <- :c::Env
+                                pg <- :c::Prog best <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
-    (:c::need-max ks (:wat::core::+ i 1) pg
-      (:c::imax best (:c::scratch-need (:wat::core::nth ks i) pg)))))
+    (:c::need-max ks (:wat::core::+ i 1) env pg
+      (:c::imax best (:c::scratch-need (:wat::core::nth ks i) env pg)))))
 
-(:wat::core::defn :c::need-fold [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
-                                 best <- :wat::core::i64] -> :wat::core::i64
+(:wat::core::defn :c::need-fold [ks <- :c::Kids i <- :wat::core::i64 env <- :c::Env
+                                 pg <- :c::Prog best <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
-    (:wat::core::let [r (:c::scratch-need (:wat::core::nth ks i) pg)
-                      use? (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
+    (:wat::core::let [r (:c::scratch-need (:wat::core::nth ks i) env pg)
+                      use? (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
                                             (:wat::core::< r (:c::nscratch)))]
-      (:c::need-fold ks (:wat::core::+ i 1) pg
+      (:c::need-fold ks (:wat::core::+ i 1) env pg
         (:c::imax best (:wat::core::if use? (:wat::core::+ r 1) r))))))
 
 ;; ---------------------------------------------------------------- the direct operand
@@ -1519,10 +1530,10 @@
                             rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)
-                      r (:c::scratch-need (:wat::core::nth ks i) pg)
+                      r (:c::scratch-need (:wat::core::nth ks i) env pg)
                       scr? (:wat::core::and (:wat::core::= fast "")
                              (:wat::core::and (:wat::core::not= (:c::scr-op op 0) "")
-                               (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
+                               (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
                                                 (:wat::core::< r (:c::nscratch)))))]
       (:wat::core::cond
         ((:wat::core::not= fast "")
@@ -2012,8 +2023,80 @@
 ;; type is not a pointer. The second is the next thing to build and is the same idea one level
 ;; up; the first is a different program.
 
+;; **Which statements can have their allocations released, asked properly.**
+;;
+;; This used to be a substring test for "poke" on the statement's own source. That is wrong in
+;; the direction that matters: a statement calling a function that pokes contains no `poke`
+;; itself, so it was released -- and anything it allocated and handed over was freed underneath
+;; the pointer. No program here did it, but the rule permitted it.
+;;
+;; The compiler has a call graph: `:c::Prog/fns` holds every function and its body. So the set of
+;; functions that transitively reach a `poke` is computed once, as a fixpoint over that graph,
+;; and a statement is releasable when it neither pokes nor calls anything that does.
+;; `clone` is asked of the function ITSELF, not transitively: the child inherits the frame and
+;; the registers that are live at the clone site, which is inside whoever called it. A substring
+;; test used to stand in for this, and it would have been fooled by a name or a string literal
+;; that merely contained the word.
+(:wat::core::defn :c::has-clone? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a pg) "vector") (:c::any-clone? (:c::kidsof pg a) 0 pg))
+    ((:wat::core::not= (:c::kind a pg) "list") false)
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
+          (:wat::core::or (:c::clone? (:c::text pg (:wat::core::nth ks 0)))
+                          (:c::any-clone? ks 0 pg)))))))
+
+(:wat::core::defn :c::any-clone? [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
+    (:wat::core::or (:c::has-clone? (:wat::core::nth ks i) pg)
+                    (:c::any-clone? ks (:wat::core::+ i 1) pg))))
+
+(:wat::core::defn :c::is-poker? [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length (:c::Prog/pokers pg))) false)
+    ((:wat::core::= (:wat::core::nth (:c::Prog/pokers pg) i) name) true)
+    (:else (:c::is-poker? pg name (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::calls-poke? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a pg) "vector") (:c::any-poke? (:c::kidsof pg a) 0 pg))
+    ((:wat::core::not= (:c::kind a pg) "list") false)
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
+          (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
+            (:wat::core::or (:c::poke? h)
+              (:wat::core::or (:c::is-poker? pg h 0) (:c::any-poke? ks 0 pg)))))))))
+
+(:wat::core::defn :c::any-poke? [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
+    (:wat::core::or (:c::calls-poke? (:wat::core::nth ks i) pg)
+                    (:c::any-poke? ks (:wat::core::+ i 1) pg))))
+
+;; one sweep: any function that reaches a poke, or calls one that does, joins the set
+(:wat::core::defn :c::poke-scan [pg <- :c::Prog i <- :wat::core::i64] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) pg
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)
+                      nm (:c::Fn/name f)]
+      (:c::poke-scan
+        (:wat::core::if (:wat::core::and (:wat::core::not (:c::is-poker? pg nm 0))
+                                         (:c::calls-poke? (:c::Fn/node f) pg))
+          (:wat::core::assoc pg :pokers (:wat::core::conj (:c::Prog/pokers pg) nm))
+          pg)
+        (:wat::core::+ i 1)))))
+
+;; sweep until nothing new joins; the set can only grow, so the function count bounds the rounds
+(:wat::core::defn :c::poke-fix [pg <- :c::Prog rounds <- :wat::core::i64] -> :c::Prog
+  (:wat::core::if (:wat::core::<= rounds 0) pg
+    (:wat::core::let [pg2 (:c::poke-scan pg 0)]
+      (:wat::core::if (:wat::core::= (:wat::core::length (:c::Prog/pokers pg2))
+                                     (:wat::core::length (:c::Prog/pokers pg)))
+        pg2
+        (:c::poke-fix pg2 (:wat::core::- rounds 1))))))
+
 (:wat::core::defn :c::releasable? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::not (:wat::string::contains? (:c::text pg a) "poke")))
+  (:wat::core::not (:c::calls-poke? a pg)))
 
 ;; a sequence of forms; the last one's value is the value of the whole, and every form before it
 ;; gives its allocations back
@@ -2209,7 +2292,7 @@
      ;; the child inherits the frame, and moving a parameter into a register moves it out of
      ;; the place the child reads it from
      regs? (:wat::core::and
-             (:wat::core::not (:wat::string::contains? (:c::text pg node) "clone"))
+             (:wat::core::not (:c::has-clone? node pg))
              (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
                              (:c::text pg (:wat::core::nth ks 1)) n pg))
      nr (:wat::core::if regs? (:c::imin n (:c::nregs)) 0)
@@ -2239,7 +2322,7 @@
      ;; break invariants the rest of the compiler is entitled to assume about wat.
      pg (:wat::core::assoc pg :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
-     tc (:wat::core::if (:wat::string::contains? (:c::text pg node) "clone")
+     tc (:wat::core::if (:c::has-clone? node pg)
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
                   :target (:wat::core::+ base (:c::codelen o1))))
@@ -2431,8 +2514,10 @@
 (:wat::core::defn :c::compile [src-path <- :wat::core::String out-path <- :wat::core::String] -> :wat::core::nil
   (:wat::core::let
     [st (rd/read (:wat::io::read-file src-path))
-     pg0 (:c::collect-in (:rd::St/kids st) 0
-           (:wat::core::assoc (:c::empty-prog) :src st) (:c::dir-of src-path))
+     pg-c (:c::collect-in (:rd::St/kids st) 0
+            (:wat::core::assoc (:c::empty-prog) :src st) (:c::dir-of src-path))
+     ;; which functions reach a `poke`, transitively, before any code is emitted
+     pg0 (:c::poke-fix pg-c (:wat::core::length (:c::Prog/fns pg-c)))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one
      p1 (:c::pass pg0 0 0 0 (:c::empty-pass))
