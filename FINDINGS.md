@@ -9623,8 +9623,12 @@ complete at check time. Any openness either moves it to link time or gives it up
   into a move needs an invariant that four separate kinds of uncounted reference break, and the
   repair for *those* is decrements -- which need to know when a heap object dies, which a bump
   allocator that frees by rewinding `r15` does not. That is a memory model, not a patch.
-- **So this stops asking the compiler.** wat has no positional vector update (F-104), so
-  appending to a flat Vector copies all of it: n copies of an n-element arena. A **block list**
+- **So this stops asking the compiler.** Appending to a flat Vector copies all of it when the
+  compiler cannot prove the vector is unique: n copies of an n-element arena. (**Not F-104** --
+  an earlier draft of this entry blamed the missing positional update, and that is wrong. The
+  arena grows by `conj`, which needs no positional update; C-143 made the same program 660x
+  cheaper without touching `assoc` at all. The cause is the ownership model, measured below.) A
+  **block list**
   makes an append copy one block plus the spine -- `b + n/b` words instead of `n` -- and b is
   128, which is about the square root of the 16,349 nodes `elf/compile.wat` reads to. Nodes are
   still addressed by a single index; `rd/at` divides it.
@@ -9637,7 +9641,22 @@ complete at check time. Any openness either moves it to link time or gives it up
 
   **7.2x less memory and no slower** -- a gigabyte for 2,600 lines becomes 138 MB, which is
   finally the same order as a C compiler rather than twenty times worse.
-- **What it is, said plainly: a workaround, and the right one.** `elf/src/moved.wat` still costs
+- **And the cliff is ours, not wat's.** The same three programs, interpreted and compiled:
+
+  | | interpreted | compiled |
+  | --- | --- | --- |
+  | `grow20000` — `conj` at the call site | 75,032 KiB | **988 KiB** |
+  | `pass20000` — the same, through a function | 73,444 KiB | **1,563,944 KiB** |
+  | `moved.wat` — the same, in a record | 75,760 KiB | **1,564,432 KiB** |
+
+  **The interpreter does not notice the shape change at all** -- it is flat at ~75 MB across all
+  three, because its vector shares structure. The compiled runtime swings **1,580x** on it,
+  because `vec_conj` copies a flat array whenever the compiler cannot prove uniqueness. So this
+  is not a gap in wat and not a missing language feature: **it is our own data structure**, and
+  the ownership proof C-143 could not construct is only needed because of it. A compiled Vector
+  that shared structure would not need the proof at all -- and would fix every user program,
+  not just the one reader we own.
+- **What it is, said plainly: a workaround, and the right one for now.** `elf/src/moved.wat` still costs
   1.5 GB, because C-143's limitation is still exactly true for any user program that threads a
   collection through a call. We routed around it in the one place we own; we did not fix it. The
   two findings belong together -- C-143 is why this is a data structure change and not a
