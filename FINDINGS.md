@@ -9680,6 +9680,50 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/bootstrap.sh`; `elf/bench/out_maxrss ./elf/out/compiler.elf`; `elf/conform.wat`.
 
 
+### F-124: `wat.core/Vector` clones on every `conj`, and is quadratic in time -- `PersistentVector` is the one that does not
+
+- **Where:** `wat-rs/src/collection/eval.rs:280` (`vector_conj_inner`), against
+  `wat-rs/src/value/pvec.rs`. Measured with `elf/bench/pass20000.wat`.
+- **The source.** `vector_conj_inner` is, in full:
+
+  ```rust
+  Value::Vec(xs) => {
+      let mut out = (**xs).clone();
+      out.push(item.clone());
+      Ok(Value::Vec(Arc::new(out)))
+  }
+  ```
+
+  A full clone of the backing `Vec` on every append -- no `Arc::make_mut`, no sharing, no
+  uniqueness check. So `conj` on a `(Vector :- [T])` is O(n), and building one by repeated
+  `conj` is **O(n^2)**.
+- **Measured, and it is the curve.** `elf/bench/pass20000.wat` grows a vector to 20,000 by
+  `conj` through a function call. At **4x** the elements:
+
+  | | |
+  | --- | --- |
+  | 20,000 | 6,027 ms |
+  | 80,000 | **109,402 ms** |
+
+  **18.2x for 4x the input** -- quadratic, with the constant showing. Peak memory stays flat
+  (~75 MB) the whole time, because `Arc` frees each dead copy as the next one is made; the cost
+  is paid entirely in time, which is why nothing had noticed.
+- **`PersistentVector` is the type that does not do this**, and its design says why:
+  `PVec` is `Array(Arc<Vec<Value>>) | Tree(rpds::VectorSync<Value>)`, promoting one-way past
+  eight elements on persistent append, with the rule that **representation must be
+  unobservable**. Its own doc comment states the principle: *"One representation chosen globally
+  is a claim about how vectors are built; promoting per instance makes no claim."* That is the
+  right answer -- it is just not the answer `wat.core/Vector` gets.
+- **Why it matters here.** Nothing in the books or the suites builds a vector large enough for
+  the curve to bite, which is why 97 chapters passed over it. `elf/` found it because a compiler
+  builds one big vector -- an arena of 16,349 nodes -- and it is the difference between the
+  compiled and interpreted cost models that made it visible (C-144).
+- **Class:** FIX (in wat-rs). The builder's stated direction is that wat's aggregates move to
+  persistent stores -- rpds already supplies the map, vector, set and list -- so this is a case
+  of `Vector` not yet having made that move rather than a design anyone chose.
+- **Repro:** `time wat elf/bench/pass20000.wat`, then the same file with 20000 -> 80000.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
