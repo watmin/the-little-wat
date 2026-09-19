@@ -3055,6 +3055,7 @@
     (:c::compile "elf/src/vectors.wat" "elf/out/vectors.elf")
     (:c::compile "elf/src/memory.wat"  "elf/out/memory.elf")
     (:c::compile "elf/src/linear.wat"  "elf/out/linear.elf")
+    (:c::compile "elf/src/moved.wat"   "elf/out/moved.elf")
     (:c::compile "elf/src/freed.wat"   "elf/out/freed.elf")
     (:c::compile "elf/src/strverbs.wat" "elf/out/strverbs.elf")
     (:c::compile "elf/src/reader.wat"  "elf/out/reader.elf")
