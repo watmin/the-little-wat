@@ -40,6 +40,11 @@ if [ -n "$FAST" ]; then
   ./elf/out/seed.elf > "$SNAP/stage0.log" 2>&1 || { echo "FAIL: the seed could not compile this source."
                                                     tail -3 "$SNAP/stage0.log"
                                                     echo "      (a new form may need the interpreter: run without --fast)"; exit 1; }
+  # exit 0 is not enough: a seed left behind by an experiment can run, print something else and
+  # write no binaries at all -- and then every comparison below passes because nothing moved.
+  grep -q '"compile: ok"' "$SNAP/stage0.log" || { echo "FAIL: the seed ran but did not compile."
+                                                  echo "      last line: $(tail -1 "$SNAP/stage0.log")"
+                                                  echo "      (elf/out/compiler.elf is not a compiler: rebuild without --fast)"; exit 1; }
   t0=$(ms $s)
   chmod +x elf/out/*.elf
   cp elf/out/*.elf "$SNAP/"
@@ -62,6 +67,8 @@ echo
 echo "== stage 1: the compiler, compiled, runs itself =="
 s=$(date +%s%N)
 ./elf/out/stage1.elf > "$SNAP/stage1.log" 2>&1 || { echo "FAIL: stage 1 did not finish"; tail -3 "$SNAP/stage1.log"; exit 1; }
+grep -q '"compile: ok"' "$SNAP/stage1.log" || { echo "FAIL: stage 1 ran but did not compile"
+                                                echo "      last line: $(tail -1 "$SNAP/stage1.log")"; exit 1; }
 t1=$(ms $s)
 [ "$t1" -lt 1 ] && t1=1
 if [ -n "$FAST" ]; then

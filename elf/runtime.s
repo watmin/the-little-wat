@@ -55,79 +55,72 @@ print_i64:                       # rax = value
     ret
 
 # `str_cat_own` is `concat` where the compiler has proved the left operand is a last use -- the
-# same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of. A String
-# is `[rc:8][len:8][bytes, padded to 8]`, so appending in place costs nothing at all while the
-# padding has room, and one bump when it does not.
+# same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
+#
+# A String is `[rc:8][len:8][bytes]` inside a block whose size is ALWAYS the next power of two
+# at or above `16 + len`. That makes the spare room derivable from the length alone, with no
+# header field to carry it, so appending in place is legal whenever the new length still fits
+# the block -- WHEREVER the string sits in the heap. The rule before this one also demanded the
+# string be the TOP of the heap, which is what a bump allocator needs to EXTEND an object; that
+# made the fast path conditional on nothing else having allocated since, which is true of a
+# microbenchmark and false of `:c::emit`. elf/bench/catx.wat is the measurement: one growing
+# accumulator 2,180 KiB, the same appends with a second one beside it 1,855,368 KiB.
 str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->  rax
-    cmpq $1, -8(%rax)            # ever stored anywhere?
+    cmpq $1, -8(%rax)            # ever stored anywhere? a literal is 0, a shared value is > 1
     jne str_cat
+    movq %rcx, %r9               # park b: rcx is about to be a shift count
     movq (%rax), %r8             # len a
-    leaq 7(%r8), %rdx
-    andq $-8, %rdx               # its bytes, rounded up to eight
-    leaq 8(%rax,%rdx), %r9
-    cmpq %r15, %r9               # is this object still the top of the heap?
-    jne str_cat
-    movq (%rcx), %r10            # len b
+    movq (%r9), %r10             # len b
     movq %r8, %r11
     addq %r10, %r11              # the new length
-    leaq 7(%r11), %rdi
-    andq $-8, %rdi
-    subq %rdx, %rdi              # how many more bytes that needs, often zero
-    movq %r15, %rdx
-    addq %rdi, %rdx
-    cmpq 8(%r14), %rdx
-    jbe 1f
-    call oom
-1:  movq %rdx, %r15
-    movq %r11, (%rax)            # the new length
-    leaq 8(%rax,%r8), %rdi       # append straight after the old bytes
-    leaq 8(%rcx), %rsi
+    leaq 15(%r8), %rdx           # (16 + len a) - 1
+    bsrq %rdx, %rcx
+    movq $2, %rdi
+    shlq %cl, %rdi               # 2 << bsr(n-1) is the next power of two at or above n
+    leaq 16(%r11), %rdx
+    cmpq %rdi, %rdx              # does the new length still fit a's block?
+    ja 8f
+    movq %r11, (%rax)            # it does: the new length, and the bytes straight on the end
+    leaq 8(%rax,%r8), %rdi
+    leaq 8(%r9), %rsi
     movq %r10, %rcx
     rep movsb
     ret
+8:  movq %r9, %rcx               # it does not: copy into a block of the next size up
+    jmp str_cat
 
+# `str_cat(rax = a, rcx = b) -> rax`: the two lengths added, a header written at the heap top,
+# both payloads copied, r15 bumped past the whole block. The block is the next power of two at
+# or above `16 + len`, which is what gives the in-place path above room to grow into. The slack
+# is never more than the string itself, and it is what turns an append loop into O(n).
 str_cat:                         # rax = a, rcx = b  ->  rax
-    movq (%rax), %r8
-    movq (%rcx), %r9
-    leaq 8(%rax), %rdx
-    leaq 8(%rcx), %rcx
+    movq (%rax), %r8             # len a
+    movq (%rcx), %r9             # len b
+    leaq 8(%rax), %r10           # a's bytes
+    leaq 8(%rcx), %r11           # b's bytes
     movq %r8, %rax
-    addq %r9, %rax
-    addq $23, %rax
-    andq $-8, %rax               # 8 rc + 8 length + total, rounded up to eight
-    movq %r15, %r11
-    addq %rax, %r11
-    cmpq 8(%r14), %r11
-    jbe 9f
+    addq %r9, %rax               # the new length
+    leaq 15(%rax), %rdx
+    bsrq %rdx, %rcx
+    movq $2, %rdx
+    shlq %cl, %rdx               # 8 rc + 8 len + bytes, rounded up to a power of two
+    movq %r15, %rcx
+    addq %rdx, %rcx
+    cmpq 8(%r14), %rcx           # check BEFORE writing anything
+    jbe 1f
     call oom
-9:  movq $1, (%r15)              # rc = 1
-    leaq 8(%r15), %r10           # the pointer is the word after the rc
-    movq %r8, %rax
-    addq %r9, %rax
-    movq %rax, (%r10)            # the new length
-    leaq 8(%r10), %rdi
-    movq %r11, %r15
-    movq %rdx, %rsi
-    movq %r8, %r11
-1:  testq %r11, %r11
-    jz 2f
-    movb (%rsi), %al
-    movb %al, (%rdi)
-    incq %rsi
-    incq %rdi
-    decq %r11
-    jmp 1b
-2:  movq %rcx, %rsi
-    movq %r9, %r11
-3:  testq %r11, %r11
-    jz 4f
-    movb (%rsi), %al
-    movb %al, (%rdi)
-    incq %rsi
-    incq %rdi
-    decq %r11
-    jmp 3b
-4:  movq %r10, %rax
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %rdx           # the pointer is the word after the rc
+    movq %rax, (%rdx)            # the new length
+    movq %rcx, %r15              # the whole block is reserved, slack included
+    leaq 8(%rdx), %rdi
+    movq %r10, %rsi
+    movq %r8, %rcx
+    rep movsb                    # a's bytes
+    movq %r11, %rsi
+    movq %r9, %rcx
+    rep movsb                    # then b's
+    movq %rdx, %rax
     ret
 
 print_str:                       # rax = string, rendered as EDN
@@ -252,7 +245,7 @@ flush:                           # write whatever is buffered, and empty it
 # field access are the same indexed load.
 
 vec_new:                         # rax = count  ->  rax = vector, slots uninitialised
-    leaq 16(,%rax,8), %rcx       # 8 rc + 8 count + 8n
+    leaq 16(,%rax,8), %rcx       # 8 rc + 8 count + 8n, EXACTLY -- see the note above vec_conj
     movq %r15, %r11
     addq %rcx, %r11
     cmpq 8(%r14), %r11           # check BEFORE writing anything
@@ -265,6 +258,23 @@ vec_new:                         # rax = count  ->  rax = vector, slots uninitia
     movq %r10, %rax
     ret
 
+# ---- Vectors come in two block shapes, and the count word below the pointer says which.
+#
+# A String's block is always the next power of two at or above its header plus its bytes, so
+# its spare room needs no header field. Doing the same for every vector made the compiler's own
+# peak WORSE by 349 MB: `vec_new` and `slot_set` allocate blocks of a known, final size -- every
+# record, and every `assoc` on one -- and rounding those up wastes as much as half of each of
+# the millions the compiler builds, for slack that is never used, because a record never grows.
+#
+# So slack is given out only where it is earned, and the rule is ADAPTIVE. An accumulator that
+# is still the top of the heap is extended by one bump, exactly as before and with no waste at
+# all. Only when it has been DISPLACED -- something else allocated since, which is the case that
+# used to fall back to a full copy every time and made the whole thing quadratic -- is it
+# promoted into a power-of-two block, and marked `0x100000001` in the count word below the
+# pointer. The reachable values are 0 (a literal), 1 (unique, exact block), and 2, 3, ... from
+# the increment-only share rule, so the marker cannot collide, and `incq` on a marked vector
+# lands on neither 1 nor the marker -- shared, which is what it has then become.
+#
 # `vec_conj_own` is `conj` where the COMPILER has proved the container is a last use -- no later
 # read of that variable can observe a change. That plus a reference count of 1 (never stored
 # anywhere durable) plus being the top of the heap is enough to extend in place, which is what
@@ -272,27 +282,68 @@ vec_new:                         # rax = count  ->  rax = vector, slots uninitia
 # transient, arrived at from the two halves neither implementation has alone: the count rules out
 # aliases, last-use rules out later reads.
 vec_conj_own:                    # rax = vector (proved dead after this), rcx = element
-    cmpq $1, -8(%rax)            # ever stored anywhere?
-    jne vec_conj
+    movabsq $0x100000001, %r9    # the marker: unique, and already in a power-of-two block
+    cmpq %r9, -8(%rax)
+    je 2f
+    cmpq $1, -8(%rax)            # unique, in a block of exactly its own size?
+    jne vec_conj                 # 0 is a literal, >1 was stored somewhere durable
     movq (%rax), %r8
     leaq 8(%rax,%r8,8), %rdx     # one past the last slot
-    cmpq %r15, %rdx              # is this object still the top of the heap?
-    jne vec_conj
-    movq %r15, %r11
+    cmpq %r15, %rdx              # still the top of the heap?
+    je 1f                        # then extending it costs one bump and no slack at all
+    movq %rcx, %r9               # displaced by something else: promote it to a block with room
+    jmp 9f
+1:  movq %r15, %r11
     addq $8, %r11
     cmpq 8(%r14), %r11
-    jbe 1f
+    jbe 4f
     call oom
-1:  movq %rcx, (%r15)            # the new element goes exactly where r15 points
+4:  movq %rcx, (%r15)            # the new element goes exactly where r15 points
     movq %r11, %r15
     leaq 1(%r8), %rdx
     movq %rdx, (%rax)
     ret
+2:  movq (%rax), %r8             # marked: the slack is derivable from the count alone
+    movq %rcx, %r9               # park the element: rcx is about to be a shift count
+    leaq 15(,%r8,8), %rdx
+    bsrq %rdx, %rcx
+    movq $2, %rdx
+    shlq %cl, %rdx               # the block it was given
+    leaq 24(,%r8,8), %r11        # what one more slot would need
+    cmpq %rdx, %r11
+    ja 9f
+    movq %r9, 8(%rax,%r8,8)      # it fits: write the slot and bump the count
+    leaq 1(%r8), %rdx
+    movq %rdx, (%rax)
+    ret
+9:  movq (%rax), %r8             # grow: copy into a power-of-two block, and mark it
+    leaq 23(,%r8,8), %rdx        # (8 count + 8 mark + 8(n+1)) - 1
+    bsrq %rdx, %rcx
+    movq $2, %rdx
+    shlq %cl, %rdx
+    movq %r15, %r11
+    addq %rdx, %r11
+    cmpq 8(%r14), %r11
+    jbe 3f
+    call oom
+3:  movabsq $0x100000001, %rdx
+    movq %rdx, (%r15)
+    leaq 8(%r15), %r10
+    leaq 1(%r8), %rdx
+    movq %rdx, (%r10)            # the new count
+    leaq 8(%r10), %rdi
+    leaq 8(%rax), %rsi
+    movq %r8, %rcx
+    rep movsq
+    movq %r9, (%rdi)             # and the new element on the end
+    movq %r11, %r15
+    movq %r10, %rax
+    ret
 
 vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
-    movq %rcx, %r10              # the element, before rcx becomes the copy count
+    movq %rcx, %r10              # the element, before rcx becomes a shift count
     movq (%rax), %r8
-    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1)
+    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1), exactly
     movq %r15, %r11
     addq %rdx, %r11
     cmpq 8(%r14), %r11
@@ -314,9 +365,11 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     push %rbx                    # rbx, r12 and r13 hold the caller's parameters now
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
+    movq %rcx, %r10              # the index, before rcx is the copy count
+    movq %rdx, %rbx              # and the value
     movq %r15, %r11
-    leaq 16(,%r8,8), %r10
-    addq %r10, %r11
+    leaq 16(,%r8,8), %rdx        # the same count, so an EXACT block: assoc never grows
+    addq %rdx, %r11
     cmpq 8(%r14), %r11
     jbe 1f
     call oom
@@ -325,8 +378,6 @@ slot_set:                        # rax = vector/record, rcx = index, rdx = value
     movq %r8, (%r9)
     leaq 8(%r9), %rdi
     leaq 8(%rax), %rsi
-    movq %rcx, %r10
-    movq %rdx, %rbx
     movq %r8, %rcx
     rep movsq
     movq %r11, %r15
@@ -359,8 +410,11 @@ oom:                             # no memory left: say so on stderr rather than 
 str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a new String
     movq %rdx, %r8
     subq %rcx, %r8               # the new length
-    leaq 23(%r8), %r9
-    andq $-8, %r9                # 8 rc + 8 len + bytes, rounded
+    leaq 8(%rax,%rcx), %rdi      # the source bytes, taken before rcx becomes a shift count
+    leaq 15(%r8), %rdx
+    bsrq %rdx, %rcx
+    movq $2, %r9
+    shlq %cl, %r9                # 8 rc + 8 len + bytes, rounded up to a power of two
     movq %r15, %r11
     addq %r9, %r11
     cmpq 8(%r14), %r11
@@ -369,8 +423,8 @@ str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a ne
 1:  movq $1, (%r15)
     leaq 8(%r15), %r10
     movq %r8, (%r10)
+    movq %rdi, %rsi
     leaq 8(%r10), %rdi
-    leaq 8(%rax,%rcx), %rsi      # the source bytes start at s + 8 + from
     movq %r11, %r15
     movq %r8, %rcx
     rep movsb
@@ -443,8 +497,10 @@ i64_to_str:                      # rax = n  ->  rax = a new String
     movb $45, (%rsi)
 3:  movq %rbp, %r9
     subq %rsi, %r9               # how many characters that was
-    leaq 23(%r9), %r10
-    andq $-8, %r10
+    leaq 15(%r9), %r10
+    bsrq %r10, %rcx
+    movq $2, %r10
+    shlq %cl, %r10               # 8 rc + 8 len + bytes, rounded up to a power of two
     movq %r15, %r11
     addq %r10, %r11
     cmpq 8(%r14), %r11
@@ -613,10 +669,11 @@ prim_read_hex:                   # rax = path  ->  rax = a String of hex
     andq $-8, %r8
     movq %rdx, %rax
     addq %rax, %rax              # two hex digits a byte
-    leaq 23(%rax), %rcx
-    andq $-8, %rcx
-    movq %r8, %rsi
-    addq %rcx, %rsi
+    leaq 15(%rax), %rcx
+    bsrq %rcx, %rcx
+    movq $2, %rsi
+    shlq %cl, %rsi               # rounded up to a power of two, like every other String
+    addq %r8, %rsi
     cmpq 8(%r14), %rsi
     jbe 3f
     call oom
@@ -679,10 +736,11 @@ io_read_file:                    # rax = path  ->  rax = a String of the file's 
     subq %r12, %rdx
     leaq 7(%r9), %r8             # the String goes above the scratch, aligned
     andq $-8, %r8
-    leaq 23(%rdx), %rcx
-    andq $-8, %rcx
-    movq %r8, %rsi
-    addq %rcx, %rsi
+    leaq 15(%rdx), %rcx
+    bsrq %rcx, %rcx
+    movq $2, %rsi
+    shlq %cl, %rsi               # rounded up to a power of two, like every other String
+    addq %r8, %rsi
     cmpq 8(%r14), %rsi
     jbe 3f
     call oom

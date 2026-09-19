@@ -172,7 +172,7 @@
   (:wat::string::concat
     "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
     "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e8ab010000c9c3"))
+    "85c0740648ffcec6062d488d55ff4829f248ffc2e87d010000c9c3"))
 
 ;; `str_cat_own`, 86 bytes -- `concat` where the compiler has proved the left operand is a last
 ;; use. The same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
@@ -180,20 +180,19 @@
 ;; padding has room and one bump when it does not.
 (:wat::core::defn :c::rt-str-cat-own [] -> :wat::core::String
   (:wat::string::concat
-    "488378f801754f4c8b00498d50074883e2f84c8d4c10084d39f9753a4c8b"
-    "114d89c34d01d3498d7b074883e7f84829d74c89fa4801fa493b56087605"
-    "e8c90200004989d74c89184a8d7c0008488d71084c89d1f3a4c3"))
+    "488378f80175414989c94c8b004d8b114d89c34d01d3498d500f480fbdca"
+    "48c7c70200000048d3e7498d53104839fa77124c89184a8d7c0008498d71"
+    "084c89d1f3a4c34c89c9eb00"))
 
 ;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
 ;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
 ;; r10 carries the result because rax is the copy loops' scratch byte.
 (:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
   (:wat::string::concat
-    "4c8b004c8b09488d5008488d49084c89c04c01c84883c0174883e0f84d89"
-    "fb4901c34d3b5e087605e88702000049c707010000004d8d57084c89c04c"
-    "01c8498902498d7a084d89df4889d64d89c34d85db740f8a06880748ffc6"
-    "48ffc749ffcbebec4889ce4d89cb4d85db740f8a06880748ffc648ffc749"
-    "ffcbebec4c89d0c3"))
+    "4c8b004c8b094c8d50084c8d59084c89c04c01c8488d500f480fbdca48c7"
+    "c20200000048d3e24c89f94801d1493b4e087605e80603000049c7070100"
+    "0000498d57084889024989cf488d7a084c89d64c89c1f3a44c89de4c89c9"
+    "f3a44889d0c3"))
 
 ;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
 ;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
@@ -237,7 +236,7 @@
 ;; them uninitialised because the caller is about to fill every one.
 (:wat::core::defn :c::rt-vec-new [] -> :wat::core::String
   (:wat::string::concat
-    "488d0cc5100000004d89fb4901cb4d3b5e087605e8de00000049c7070100"
+    "488d0cc5100000004d89fb4901cb4d3b5e087605e88701000049c7070100"
     "00004d8d57084989024d89df4c89d0c3"))
 
 ;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
@@ -251,8 +250,14 @@
 ;; the three tests failing falls through to the copying `vec_conj` below.
 (:wat::core::defn :c::rt-vec-conj-own [] -> :wat::core::String
   (:wat::string::concat
-    "488378f801752d4c8b004a8d54c0084c39fa75204d89fb4983c3084d3b5e"
-    "087605e8a300000049890f4d89df498d5001488910c3"))
+    "49b901000000010000004c3948f8743d488378f8010f85c20000004c8b00"
+    "4a8d54c0084c39fa74054989c9eb564d89fb4983c3084d3b5e087605e833"
+    "01000049890f4d89df498d5001488910c34c8b004989c94a8d14c50f0000"
+    "00480fbdca48c7c20200000048d3e24e8d1cc5180000004939d3770d4e89"
+    "4cc008498d5001488910c34c8b004a8d14c517000000480fbdca48c7c202"
+    "00000048d3e24d89fb4901d34d3b5e087605e8c500000048ba0100000001"
+    "0000004989174d8d5708498d5001498912498d7a08488d70084c89c1f348"
+    "a54c890f4d89df4c89d0c3"))
 
 (:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
   (:wat::string::concat
@@ -266,8 +271,8 @@
 ;; a new one.
 (:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
   (:wat::string::concat
-    "534c8b004d89fb4e8d14c5100000004d01d34d3b5e087605e82f00000049"
-    "c707010000004d8d4f084d8901498d7908488d70084989ca4889d34c89c1"
+    "534c8b004989ca4889d34d89fb4a8d14c5100000004901d34d3b5e087605"
+    "e82900000049c707010000004d8d4f084d8901498d7908488d70084c89c1"
     "f348a54d89df4c89c84a895cd0085bc3"))
 
 ;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
@@ -276,7 +281,7 @@
 ;; between a compiler and a demo -- running out of memory should be a sentence, not a signal.
 (:wat::core::defn :c::rt-oom [] -> :wat::core::String
   (:wat::string::concat
-    "e8e0feffff4883ec2048b87761743a206865614889042448b87020657868"
+    "e837feffff4883ec2048b87761743a206865614889042448b87020657868"
     "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
     "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
@@ -284,9 +289,9 @@
 ;; between. Sixteen of the 117 occurrences the census counts are this one verb.
 (:wat::core::defn :c::rt-str-subs [] -> :wat::core::String
   (:wat::string::concat
-    "4989d04929c84d8d48174983e1f84d89fb4d01cb4d3b5e087605e888ffff"
-    "ff49c707010000004d8d57084d8902498d7a08488d7408084d89df4c89c1"
-    "f3a44c89d0c3"))
+    "4989d04929c8488d7c0808498d500f480fbdca49c7c10200000049d3e14d"
+    "89fb4d01cb4d3b5e087605e879ffffff49c707010000004d8d57084d8902"
+    "4889fe498d7a084d89df4c89c1f3a44c89d0c3"))
 
 ;; `str_starts(rax = s, rcx = prefix) -> 0 or 1`, 40 bytes, `repe cmpsb`.
 (:wat::core::defn :c::rt-str-starts [] -> :wat::core::String
@@ -308,9 +313,9 @@
   (:wat::string::concat
     "554889e54883ec204889ee4d31c04885c0790a48f7d849c7c00100000048"
     "c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d85c07406"
-    "48ffcec6062d4989e94929f14d8d51174983e2f84d89fb4d01d34d3b5e08"
-    "7605e898feffff49c707010000004d8d57084d890a498d7a084d89df4c89"
-    "c9f3a44c89d0c9c3"))
+    "48ffcec6062d4989e94929f14d8d510f490fbdca49c7c20200000049d3e2"
+    "4d89fb4d01d34d3b5e087605e881feffff49c707010000004d8d57084d89"
+    "0a498d7a084d89df4c89c9f3a44c89d0c9c3"))
 
 ;; `str_eq(rax = a, rcx = b) -> 0 or 1`, 40 bytes. **This one closes a silent divergence.**
 ;; `(wat.core/= a b)` on two Strings compiled to a machine-word compare, which compares
@@ -329,7 +334,7 @@
 ;; agree on every successful run and differ only on the path that stops the program.
 (:wat::core::defn :c::rt-die [] -> :wat::core::String
   (:wat::string::concat
-    "4989c2e82efdffff498b12498d720848c7c70200000048c7c0010000000f"
+    "4989c2e86efcffff498b12498d720848c7c70200000048c7c0010000000f"
     "054883ec08c604240a48c7c7020000004889e648c7c20100000048c7c001"
     "0000000f0548c7c74600000048c7c03c0000000f05"))
 
@@ -378,11 +383,11 @@
     "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
     "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
     "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d48174883"
-    "e1f84c89c64801ce493b76087605e8b4fcffff4989f749c700010000004d"
-    "8d5008498902498d7a084c89e64885d2742e480fb6064889c148c1e804e8"
-    "96feffff880748ffc74889c84883e00fe885feffff880748ffc748ffc648"
-    "ffca75d24c89d0415cc3"))
+    "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d480f480f"
+    "bdc948c7c60200000048d3e64c01c6493b76087605e896fcffff4989f749"
+    "c700010000004d8d5008498902498d7a084c89e64885d2742e480fb60648"
+    "89c148c1e804e88ffeffff880748ffc74889c84883e00fe87efeffff8807"
+    "48ffc748ffc648ffca75d24c89d0415cc3"))
 
 ;; `io_read_file(rax = path) -> rax = a String of the file bytes`. This is `wat.io/read-file`.
 (:wat::core::defn :c::rt-io-read-file [] -> :wat::core::String
@@ -390,9 +395,9 @@
     "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
     "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
     "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f8488d4a174883e1f84c89c648"
-    "01ce493b76087605e8defbffff4989f749c700010000004d8d5008498912"
-    "498d7a084c89e64889d1f3a44c89d0415cc3"))
+    "89c70f054c89ca4c29e24d8d41074983e0f8488d4a0f480fbdc948c7c602"
+    "00000048d3e64c01c6493b76087605e8b9fbffff4989f749c70001000000"
+    "4d8d5008498912498d7a084c89e64889d1f3a44c89d0415cc3"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
@@ -2656,6 +2661,7 @@
     (:c::compile "elf/bench/cat32000.wat"    "elf/out/cat32000.elf")
     (:c::compile "elf/bench/catx.wat"        "elf/out/catx.elf")
     (:c::compile "elf/bench/grow20000.wat"   "elf/out/grow20000.elf")
+    (:c::compile "elf/bench/pass20000.wat"   "elf/out/pass20000.elf")
     (:c::compile "elf/bench/grow200000.wat"  "elf/out/grow200000.elf")
     (:c::compile "elf/bench/grow2000000.wat" "elf/out/grow2000000.elf")
     (:c::compile "elf/native/fork.wat"     "elf/out/fork.elf")
