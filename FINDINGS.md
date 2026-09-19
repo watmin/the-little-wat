@@ -9851,6 +9851,69 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh`; `elf/bench/fib32.wat`; `tools/bootstrap.sh`.
 
 
+### C-147: inlining depth belongs to the callee, and the reload that never had to happen -- fib 26% faster
+
+- **Where:** `elf/compile.wat` (`:c::inl-depth-for`, `:c::Out/rax`, `:c::emit`, `:c::bind-each`,
+  the symbol read). **`tools/bootstrap.sh` green from the interpreter, fixpoint at 129,797
+  bytes; `tools/loop.sh`, `tools/mem.sh`, `tools/vs-c.sh` green; `threads4` 1000, `deep`
+  1,000,000.** Prompted by the builder: *"if we need to do more inlining, then we do more
+  inlining."*
+- **The first thing measured was that C-142's own answer had gone stale.** When inlining went
+  in, depth 3 bought a millisecond for 732 bytes and depth 4 bought nothing, so the limit was
+  set at 2 and the entry said so. Re-run after C-146 put `let` bindings in registers:
+
+  | depth | fib(32) | `fib32.elf` |
+  | --- | --- | --- |
+  | 2 | 19,978 µs | 1,119 B |
+  | 3 | 17,569 µs | 1,799 B |
+  | **4** | **14,880 µs** | 3,263 B |
+  | 5 | 17,169 µs | 6,191 B |
+
+  **The registers unlocked the depth.** Before them the extra bindings spilled to frame slots
+  and paid back exactly what the inlining saved; with three of them held, depth 4 is a 25% win,
+  and depth 5 loses it again to instruction cache at 6 KB. Two changes each close to worthless
+  alone -- which is the argument for re-measuring a closed decision when its neighbours move.
+- **But one depth for everything cost the compiler 21%** (275 → 333 ms), because the only things
+  it can inline are `:c::at-*` accessor chains, and expanding those four deep is bloat with no
+  call removed that matters. **So depth is a property of the callee.** A self-recursive callee
+  earns 4: its inlined copy contains another call to itself, so each level removes a
+  *multiplicative* number of calls. A leaf earns 1: inlining it removes exactly one call per
+  site, and more depth only expands *its* callees. Per-callee, `fib` keeps the whole 25% and the
+  compiler pays **nothing** (276 ms against depth 2's 275).
+- **The redundant reload.** Every binding emitted `mov %rax,%rbx` and then immediately
+  `mov %rbx,%rax` -- `:c::bind-each` writes the register and the body's first act is to read it
+  back. `:c::Out` now carries the name `rax` already holds; **`:c::emit` clears it
+  unconditionally and only `bind-each` sets it**, so the window is one instruction wide and any
+  emission whatever closes it. That is also what makes it sound against a jump landing on the
+  read: a branch target is a position some emission recorded, and any emission has already
+  cleared the field. Worth another 5% on fib and **11% on the compiler**, with both binaries
+  smaller.
+
+  | | before this entry | after |
+  | --- | --- | --- |
+  | `fib(32)` | 20,171 µs | **14,828 µs** |
+  | the compiler on itself | 275 ms | **245 ms** |
+  | against `gcc -O0` | 1.5x ahead | **2.0x ahead** (29,475 µs) |
+  | against `gcc -O2` | ~2.1x behind | **~1.7x behind** (8,514 µs) |
+
+- **C-136 re-tested, and left standing -- a negative result.** It withholds registers from the
+  parameters of non-looping functions because the prologue cost is per call and the benefit per
+  iteration. C-146 appeared to have changed that premise: a function with `let` registers is
+  already paying the pushes, and `fib` was reloading `n` from the frame three times a level with
+  all three registers pushed above it. Implemented, then A/B'd interleaved: **wash** -- 235, 242
+  and 272 ms against 241, 244 and 266, with fib neutral. The first reading, 275 against 245, was
+  noise measured across rounds rather than within one. Reverted: no churn for a number that
+  cannot be shown. **The ruling was right, and for a reason its own entry did not give** -- the
+  compiler's functions carry many pointer parameters, so registering three of them costs three
+  prologue loads per call and takes registers the `let` bindings were using better.
+- **On the honest size of the remaining gap:** `-O2`'s own time swings between 8,514 and 11,054
+  µs across rounds on this machine, so the 26% is the solid number and the ratio is approximate.
+  What is left is what C-142's disassembly showed: `-O2` inlines about six levels and turns part
+  of the recursion into iteration.
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh`; `elf/bench/fib32.wat`; `tools/bootstrap.sh`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
