@@ -50,16 +50,51 @@ that is not a symbol, keyword or string literal, and a tree walk meets those con
 ## The language the compiler accepts
 
 ```clojure
-(wat.core/defn user/main [] :- wat.type/nil  BODY...)
-(wat.kernel/println EXPR)          ; EXPR compiled to rax, then call print_i64
-(wat.kernel/println "literal")     ; written directly, string in the data tail
-(wat.core/+ a b ...)               ; n-ary, folded left
-(wat.core/- a b ...)
-(wat.core/* a b ...)
+(wat.core/defn user/NAME [p :- wat.type/i64 ...] :- T  BODY...)
+(wat.core/if COND THEN ELSE)          ; a real forward branch, patched
+(wat.core/let [a E b E] BODY...)      ; slots in the frame, innermost shadowing outward
+(user/NAME args...)                   ; a call, arguments on the stack, recursion included
+(wat.kernel/println EXPR)             ; EXPR to rax, then call print_i64
+(wat.kernel/println "literal")        ; written directly, string in the data tail
+(wat.core/+ - *)                      ; n-ary, folded left
+(wat.core/< > <= >= = not=)           ; cmp + setcc + movzx, so a bool is 0 or 1 in rax
 ```
 
 integer literals, negatives included, nested to any depth — and both spellings of every name
 (`wat.core/+` and `:wat::core::+`), because the reader keeps whichever the source used.
+
+`elf/src/fib.wat` is the program that shows it is real: two mutually independent recursive
+functions, a `let`, and arithmetic wide enough to need 64 bits.
+
+```clojure
+(wat.core/defn user/fib [n :- wat.type/i64] :- wat.type/i64
+  (wat.core/if (wat.core/< n 2)
+    n
+    (wat.core/+ (user/fib (wat.core/- n 1)) (user/fib (wat.core/- n 2)))))
+
+(wat.core/defn user/fact [n :- wat.type/i64] :- wat.type/i64
+  (wat.core/if (wat.core/<= n 1) 1 (wat.core/* n (user/fact (wat.core/- n 1)))))
+
+(wat.core/defn user/main [] :- wat.type/nil
+  (wat.kernel/println (user/fib 20))
+  (wat.kernel/println (user/fact 15))
+  (wat.core/let [x (user/fib 10)]
+    (wat.kernel/println (wat.core/+ x (user/fact 5)))))
+```
+
+659 bytes of native code; prints `6765`, `1307674368000`, `175`; agrees with the interpreter.
+
+## What compiling is worth
+
+`fib(27)`, the same source both ways:
+
+```
+interpreted  3391 ms    native   6 ms    565x
+```
+
+The 6 ms is mostly `execve`. This is the number NEXT.md §7's baseline was taken to make sense of,
+arriving from the other direction: the interpreter's per-operation cost is what a compiler
+removes, and it removes essentially all of it.
 
 Anything else is a compile error that **names the form**:
 
@@ -87,11 +122,23 @@ pushes, evaluates its right side, pops.
 e8 <rel32>      call print_i64     -- a real relocation, computed in pass two
 ```
 
-**Two passes, for the reason every assembler has two.** A `call` needs the distance to
-`print_i64`, which sits after the code, so its address is unknown until the code exists. Pass one
-compiles with the runtime at address zero purely to measure; pass two compiles again with the
-real address. Every immediate is fixed-width, so the passes are the same length — and the
-compiler *asserts* that, because it is the invariant the technique rests on.
+**Two passes over the whole program.** A call needs the callee's address, and a callee's address
+depends on the length of everything placed before it, so no function can be compiled without
+knowing about all of them. Pass one compiles every function with every address zero, purely to
+measure; the addresses follow from the lengths; pass two compiles again with the real table. Every
+immediate and displacement is fixed width, so the passes are the same length — and the compiler
+*asserts* that, function by function.
+
+**Forward branches are patched, not predicted.** `if` emits its `jz` with a zero operand,
+compiles the branch, and overwrites the operand once it knows how far it went. That is F-104
+again — no positional update — on a String this time, so the patch is a `subs` either side of the
+hole. Crafting Interpreters chapter 23 (C-106) is the same problem on a Vector.
+
+**The calling convention.** Arguments are pushed left to right and popped by the caller; inside
+the callee, argument *i* of *n* is at `[rbp + 16 + 8*(n-1-i)]` and `let` slots are below at
+`[rbp - 8*(slot+1)]`. The frame size is worked out before the body is compiled, by walking it for
+the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `call user/main`, then
+`exit(0)` — which is the only code in the output not compiled from a `defn`.
 
 ## The runtime
 
@@ -140,15 +187,21 @@ the differential check. Note the exec bit only has to be set **once**: `open-fil
 rather than replaces, so after the first `chmod +x` a wat program alone keeps producing runnable
 binaries at that path.
 
-## The obvious next steps, in order of what they would prove
+## What is still missing, in order of what it would prove
 
-1. **`let` and local variables** — a stack frame and an environment, which is the first thing
-   that makes the generated code larger than the source.
-2. **`if`** — a real forward jump, which the two-pass structure already supports.
-3. **Function calls** — a calling convention, and the point at which `main` stops being special.
-4. **Self-hosting** — the compiler compiling itself, which is what "wat builds wat" would
-   actually mean. It is a long way off: this compiler uses strings, records, vectors, `match` and
-   recursion, none of which it can compile.
+`let`, `if` and user functions are done. What stands between this and a compiler that could
+compile *itself*:
 
-The first three are days of work. The fourth is the real question, and this file is the evidence
-that the road to it exists.
+1. **Strings as values** — not just literals to print. Length, `subs`, concatenation; which means
+   a heap, or at least an arena, and a representation for a string that is not "bytes in the
+   data section".
+2. **Vectors and records** — every one of this compiler's data structures. Allocation, field
+   offsets, and something to free them or a decision not to.
+3. **`match`** — which is `if` with a tag test and destructuring, so the hard part is the data
+   representation rather than the control flow.
+4. **The wat runtime's verbs** — `read-string` itself, `ast->children`, `Bytes::from-hex`. A
+   self-hosting compiler either reimplements them or links against the substrate.
+
+That is the honest distance: the control flow and the calling convention are solved, and
+everything remaining is about **data**. This file is 430 lines of wat and compiles a language
+with no heap; compiling the language it is written in needs one.
