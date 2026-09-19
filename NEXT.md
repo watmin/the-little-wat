@@ -37,9 +37,12 @@ measurement lives, and why it was not done at the time.
    evaluation pushes to the stack, so `rsp`-relative offsets move and the emitter would have to
    track push depth. Evidence: the disassembly in C-147's follow-up, `mov %rax,-0x20(%rbp)`
    followed by three reloads.
-5. **Rematerialise instead of spilling.** The outer `n` survives a call only because `(- n 2)`
-   needs it; it could be recomputed as `n_inner + 1` for one `add` instead of a store and three
-   loads. Narrower than 4 and much cheaper to try.
+5. ~~**Rematerialise instead of spilling.**~~ **STRUCK 2026-09-19, and by its own neighbour.**
+   It was named as "one `add` instead of a store and three loads". Two of those three loads were
+   redundant reloads of a value already sitting in `rax`, and C-149 removed them: a spill now
+   costs **one store and one load**, while rematerialising costs **one load and one subtract per
+   read**. A tie at best and a loss when the value is read twice. Recorded rather than deleted,
+   because the arithmetic that killed it is the useful part.
 6. **Tail recursion modulo `+`, restricted.** `-O2` beats us partly by reassociating the
    additions, which is free in C (overflow is undefined) and unsound in wat (it traps) — see
    F-125. **But measure before building**: depth 2→4 removed four fifths of all calls for 26%,

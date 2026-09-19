@@ -678,10 +678,13 @@
 ;; That is F-104 again -- no positional update -- on a String this time, so the patch is a `subs`
 ;; either side of the hole. Crafting Interpreters chapter 23 (C-106) is the same problem, and
 ;; there it was a Vector.
+;; **A patch is a branch join, and a join must forget what rax held.** Two paths meet here and
+;; they do not agree; every `if` and every `cond` clause lands on one of these, so clearing the
+;; tracking in this one place covers all of them.
 (:wat::core::defn :c::patch [o <- :c::Out off <- :wat::core::i64 hex <- :wat::core::String] -> :c::Out
   (:wat::core::let [code (:c::Out/code o)
                     at (:wat::core::* off 2)]
-    (:wat::core::assoc o :code
+    (:wat::core::assoc (:wat::core::assoc o :rax "") :code
       (:wat::string::concat
         (:wat::string::subs code 0 at)
         hex
@@ -1848,12 +1851,25 @@
              p2 (:c::expr (:wat::core::nth cks 2) p1 env pg rt tb slot (:c::no-tail))]
             (:c::emit p2 (:wat::string::concat "4889c1" "58" "4839c8"))))
      o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
-     at (:wat::core::- (:c::codelen o3) 4)
-     o4 (:c::expr (:wat::core::nth ks 2) o3 env pg rt tb slot tc)
+     ;; **neither the compare nor the branch writes rax**, so whatever it held before them it
+     ;; still holds on BOTH arms -- the fall-through and the jump alike, which is what makes
+     ;; this sound rather than merely true on one path. Only when the right operand compiled to
+     ;; a bare compare: the general path pushes and evaluates into rax, which destroys it.
+     ;; Without this, every inlined `if` reloaded a value already sitting in the register.
+     o3k (:wat::core::if (:wat::core::not= fast "")
+           (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
+     at (:wat::core::- (:c::codelen o3k) 4)
+     o4 (:c::expr (:wat::core::nth ks 2) o3k env pg rt tb slot tc)
      o5 (:c::emit o4 "e900000000")
      jmp-at (:wat::core::- (:c::codelen o5) 4)
      o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 4)) 4))
-     o7 (:c::expr (:wat::core::nth ks 3) o6 env pg rt tb slot tc)]
+     ;; that patch pointed the branch AT the else arm; it is not a join. The else arm has
+     ;; exactly one predecessor -- the branch itself -- so it inherits what rax held there,
+     ;; the same as the fall-through did. (`:c::patch` clears conservatively because most of
+     ;; its uses ARE joins; this is the one place that knows better.)
+     o6k (:wat::core::if (:wat::core::not= fast "")
+           (:wat::core::assoc o6 :rax (:c::Out/rax o1)) o6)
+     o7 (:c::expr (:wat::core::nth ks 3) o6k env pg rt tb slot tc)]
     (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4))))
 
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
