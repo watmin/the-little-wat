@@ -3386,6 +3386,7 @@
     (:c::compile "elf/src/fileio.wat"  "elf/out/fileio.elf")
     (:c::compile "elf/src/asmbits.wat" "elf/out/asmbits.elf")
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
+    (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
     (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")

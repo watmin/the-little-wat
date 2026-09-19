@@ -25,6 +25,7 @@ gcc -O0 -static -o $B/out_fib_O0 $B/fib.c  || fail=1
 gcc -O2 -static -o $B/out_noop   $B/noop.c || fail=1
 gcc -O2         -o $B/out_noop_dyn $B/noop.c || fail=1
 gcc -O2 -static -o $B/out_spew   $B/spew.c || fail=1
+gcc -O2 -static -o $B/out_loopsum $B/loopsum.c || fail=1
 
 sz () { stat -c%s "$1"; }
 best () { local n=$1; shift; local b=99999999 s m
@@ -63,7 +64,31 @@ printf '  %-34s %6s ms   (4 KiB buffer, 70 bytes of runtime)\n' "ours" "$(best 5
 printf '  %-34s %6s ms   (glibc stdio, 4 KiB buffered)\n' "C, gcc -O2" "$(best 5 ./$B/out_spew)"
 
 echo
-echo "== 5. tail calls: 1000000 deep, which wat eliminates and so must we =="
+# fib(32) asks two questions at once -- how good is our straight-line code, and how expensive is
+# our CALL. This asks only the first: C-121 turns a self tail call into a `jmp` on the same frame,
+# so no call survives the loop. C-153 measured 26 instructions an iteration against gcc's 6, and
+# 1.34x the CYCLES, because the loop is latency-bound on its own accumulator and the machine has
+# issue width to spare. The first version of this benchmark was summed away in CLOSED FORM by
+# gcc -- 231,032 instructions for the whole program -- so the conditional subtraction is load
+# bearing.
+echo "== 5. straight-line code: a loop with no calls in it, 100M iterations, best of 3 =="
+a=$(./elf/out/loopsum.elf); b=$(./$B/out_loopsum)
+if [ "$a" = "$b" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours"     "$(best 3 ./elf/out/loopsum.elf)" "$a"
+  printf '  %-34s %6s ms\n' "C, gcc -O2"             "$(best 3 ./$B/out_loopsum)"
+else
+  echo "  FAIL: ours '$a', C '$b'"; fail=1
+fi
+if command -v perf >/dev/null && [ -r /proc/sys/kernel/perf_event_paranoid ]; then
+  ins () { taskset -c 2 perf stat -e cpu_core/instructions/ "$1" 2>&1 \
+           | awk '/instructions/{gsub(",","",$1); print $1}'; }
+  o=$(ins ./elf/out/loopsum.elf); c=$(ins ./$B/out_loopsum)
+  [ -n "$o" ] && [ -n "$c" ] && printf '  %-34s %s vs %s  (%s vs %s an iteration)\n' \
+    "instructions retired" "$o" "$c" "$((o/100000000))" "$((c/100000000))"
+fi
+
+echo
+echo "== 6. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?
 if [ "$o" = "$i" ] && [ $orc -eq $irc ]; then

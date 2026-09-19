@@ -10206,6 +10206,83 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/loop.sh`; `elf/bench/out_maxrss ./elf/out/compiler.elf`.
 
 
+### C-153: where the gap to `gcc -O2` actually is — hardware counters, and two experiments that said no
+
+- **Where:** `elf/bench/loopsum.wat` and `loopsum.c` (new), `tools/vs-c.sh` (a fifth section).
+  The builder installed `perf` for this; before it, every claim in this section of the ledger was
+  a stopwatch and a guess.
+- **fib(32), pinned to one P-core** (`taskset -c 2`, the machine is hybrid and unpinned counts
+  split across P and E cores into nonsense):
+
+  | | instructions | cycles | branches | IPC |
+  | --- | --- | --- | --- | --- |
+  | ours | 80,687,452 | 22,175,786 | 23,743,694 | 3.64 |
+  | gcc `-O2` | 51,422,383 | 10,044,616 | 7,402,486 | 5.12 |
+  | gcc `-O0` | 113,017,452 | 56,230,166 | 24,731,580 | 2.01 |
+
+  1.57x the instructions, **3.2x the branches**, 2.2x the cycles.
+- **First experiment: are the overflow checks the gap?** fib does three arithmetic operations per
+  call and C-148/C-150 give each a `jo`, so the arithmetic that F-125 made *correct* ought to be
+  most of that branch count. Compiled with every check removed — unsound, and purely to measure
+  the ceiling — fib32 is 828 bytes smaller, which is exactly the 138 `jo`s it contains:
+
+  | | instructions | cycles | branches |
+  | --- | --- | --- | --- |
+  | checks on | 80,687,458 | 22,086,941 | 23,743,700 |
+  | checks **off** | 70,113,721 | 21,133,187 | 13,169,963 |
+
+  **45% of our branches, 13% of our instructions — and 4.3% of our cycles.** A never-taken,
+  perfectly-predicted `jo` costs a decode slot and nothing else on an out-of-order core. An
+  interval analysis to prove the checks away was about to be built; it would have bought 4%.
+  **Trapping arithmetic is very nearly free, and that is the answer to whether wat can afford to
+  be correct here.**
+- **Second experiment: is it inlining depth?** `:c::inl-depth` is a global 4 and
+  `:c::inl-depth-for` a per-callee cap; raising only the cap changes nothing, because the global
+  start binds — which is itself worth knowing, since the first run of this experiment measured
+  four identical binaries and looked like a null result.
+
+  | depth | size | instructions | cycles |
+  | --- | --- | --- | --- |
+  | 4 (shipping) | 3,719 B | 80,687,452 | 22,175,786 |
+  | 5 | 6,935 B | 81,272,706 | 25,366,053 |
+  | 6 | 13,367 B | 74,386,240 | 21,346,370 |
+  | 8 | 51,959 B | 64,207,641 | 18,563,239 |
+
+  **14x the code for 16% of the cycles**, and depth 5 is *worse* than depth 4. C-147 said the
+  remaining call overhead was ~11% and that deeper inlining could not close 1.7x; this is that
+  claim measured rather than asserted, and it holds.
+- **So a benchmark with no calls in it at all.** `elf/bench/loopsum.wat` is a self tail call,
+  which C-121 turns into a `jmp` on the same frame, so the loop is arithmetic, a compare and a
+  branch. **The first version of it was summed away by gcc in CLOSED FORM** — 231,032
+  instructions for the whole program against our 1.8 billion — so the conditional subtraction
+  that defeats that is load-bearing, and the lesson is that a benchmark C can solve measures
+  nothing.
+
+  | 100M iterations | instructions | cycles | branches | per iteration |
+  | --- | --- | --- | --- | --- |
+  | ours | 2,600,000,501 | 406,300,747 | 800,000,336 | **26 insn, 4.06 cyc, 8 br** |
+  | gcc `-O2` | 600,231,241 | 303,823,410 | 100,059,687 | **6 insn, 3.04 cyc, 1 br** |
+
+- **And the surprise is which way that cuts.** We issue **4.3x the instructions for 1.34x the
+  cycles**, at an IPC of 6.40 against gcc's 1.98 — we are saturating a 6-wide machine while gcc
+  sits latency-bound on its own accumulator chain. **Our straight-line code is fat and the
+  out-of-order engine is hiding most of it.** It will stop hiding it the moment a loop is
+  throughput-bound rather than latency-bound, so the fat is a real debt, not a free pass.
+- **The fat, named, from the loop body.** Eighteen instructions where five would do, and every
+  one of them is a compiler task rather than a language limit:
+  - `mov %rbx,%rax` then `cmp $0x0,%rax` — a comparison against a register operand still routes
+    the LEFT side through rax. `test %rbx,%rbx` is one instruction and one byte shorter. C-133
+    took the right operand; the left one was never taken.
+  - `push %rax` / `pop %r12` **adjacent** — that is a `mov`, written as a store and a load.
+  - `mov %r12,%rax` then `mov %rax,%r9` — the scratch pool routes through rax to reach a
+    register it could have been given directly.
+  - `mov %rbx,%rax` emitted twice for the same value either side of a branch, because C-149's
+    tracking clears at a join and never learns what both paths agree on.
+  - every branch a `rel32` (NEXT.md 3c).
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` section 5; `taskset -c 2 perf stat -e cpu_core/instructions/ ./elf/out/loopsum.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

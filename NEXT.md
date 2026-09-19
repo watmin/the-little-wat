@@ -31,7 +31,28 @@ measurement lives, and why it was not done at the time.
    (C-139). A magic number where an `Option` belongs, and a record wearing a string. Both are
    internal and consistent; both are the shape C-139 was about.
 
-**Performance — the compute gap against `gcc -O2`, currently ~1.7x.**
+**Performance — and C-153 measured where the gap actually is, so this list is now evidence.**
+
+**What is NOT the gap, measured and struck:** the overflow checks are 45% of our branches and
+13% of our instructions and **4.3% of our cycles** — an interval analysis to prove them away was
+about to be built and would have bought 4%. Deeper inlining is **14x the code for 16%** and depth
+5 is worse than depth 4. Both are written up in C-153 with counters.
+
+**What IS the gap:** on a loop with no calls in it we issue **26 instructions an iteration
+against gcc's 6** — and only 1.34x the cycles, because that loop is latency-bound and a 6-wide
+machine hides the rest. It will stop hiding it on a throughput-bound loop. The fat is named
+instruction by instruction in C-153 and each item is a peephole:
+
+0a. **`cmp` against a register still routes the left operand through rax.** `mov %rbx,%rax` then
+   `cmp $0x0,%rax` where `test %rbx,%rbx` is one instruction and one byte shorter. C-133 took the
+   RIGHT operand of a binop from a register or the frame and never took the left.
+0b. **An adjacent `push X` / `pop Y` is a `mov`.** `:c::tail-store` emits exactly that pair for
+   the last argument of every self tail call — a store and a load per iteration.
+0c. **The scratch pool routes through rax** to reach a register it could be given directly:
+   `mov %r12,%rax` then `mov %rax,%r9`.
+0d. **C-149's rax tracking clears at a join** and never learns what both paths agree on, so
+   `mov %rbx,%rax` is emitted on both sides of a branch that did not change rbx.
+
 
 3a. ~~**A share count that can come down.**~~ **RE-SCOPED 2026-09-19 by C-152.** The chunk
    accumulator recovered 94% of F-127's price (444,556 → 162,908 KiB) with no ownership analysis
