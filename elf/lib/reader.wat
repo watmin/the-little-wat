@@ -25,14 +25,7 @@
    text <- :wat::core::String
    kids <- (:wat::core::Vector :- [:wat::core::i64])])
 
-;; **The arena is CHUNKED**, and that is the whole difference between reading a 2,600-line file
-;; in 745 MB and reading it in twenty. wat has no positional vector update (F-104), so appending
-;; to a flat Vector copies all of it -- n copies of an n-element arena, which is the quadratic
-;; C-140 measured and C-143 failed to remove from the compiler's side. A block list makes an
-;; append copy one BLOCK plus the spine, `b + n/b` words instead of `n`, and it needs nothing
-;; from the compiler: it is a data structure, in our own code.
-(:wat::core::typealias :rd::Block (:wat::core::Vector :- [:rd::Node]))
-(:wat::core::typealias :rd::Arena (:wat::core::Vector :- [:rd::Block]))
+(:wat::core::typealias :rd::Arena (:wat::core::Vector :- [:rd::Node]))
 (:wat::core::typealias :rd::Kids (:wat::core::Vector :- [:wat::core::i64]))
 
 ;; the reader's whole state: what has been built, where it is, what it just made, and the
@@ -118,43 +111,12 @@
 
 (wat.core/defn rd/empty-kids [] :- :rd::Kids (wat.core/Vector :- [wat.type/i64]))
 
-(wat.core/defn rd/bsize [] :- wat.type/i64 128)
-(wat.core/defn rd/empty-block [] :- :rd::Block (wat.core/Vector :- [:rd::Node]))
-
-;; how many nodes are in the arena: full blocks, plus whatever is in the last one
-(wat.core/defn rd/count [a :- :rd::Arena] :- wat.type/i64
-  (wat.core/if (wat.core/= (wat.core/length a) 0) 0
-    (wat.core/+ (wat.core/* (wat.core/- (wat.core/length a) 1) (rd/bsize))
-                (wat.core/length (wat.core/nth a (wat.core/- (wat.core/length a) 1))))))
-
-(wat.core/defn rd/at [a :- :rd::Arena n :- wat.type/i64] :- :rd::Node
-  (wat.core/nth (wat.core/nth a (wat.core/quot n (rd/bsize))) (wat.core/rem n (rd/bsize))))
-
-;; the spine without its last block, rebuilt -- `n/b` words
-(wat.core/defn rd/spine [a :- :rd::Arena i :- wat.type/i64 acc :- :rd::Arena] :- :rd::Arena
-  (wat.core/if (wat.core/>= i (wat.core/- (wat.core/length a) 1)) acc
-    (rd/spine a (wat.core/+ i 1) (wat.core/conj acc (wat.core/nth a i)))))
-
-;; a full last block, or none at all, starts a new one; otherwise the last block is rebuilt
-(wat.core/defn rd/push [a :- :rd::Arena nd :- :rd::Node] :- :rd::Arena
-  (wat.core/let [k (wat.core/length a)]
-    (wat.core/if (wat.core/or (wat.core/= k 0)
-                   (wat.core/>= (wat.core/length (wat.core/nth a (wat.core/- k 1))) (rd/bsize)))
-      (wat.core/conj a (wat.core/conj (rd/empty-block) nd))
-      (wat.core/conj (rd/spine a 0 (rd/empty-arena))
-                     (wat.core/conj (wat.core/nth a (wat.core/- k 1)) nd)))))
-
-;; `n` is passed rather than taken from `arena`, so that `arena` is read exactly once here --
-;; which was meant to let the compiler extend it in place (C-127). It never did: the arena is
-;; handed to this function as a bare parameter, `:c::push-args` counts that as a share, and the
-;; count is increment-only, so `conj` copied every time. **C-143 tried to fix that in the
-;; compiler and could not** -- a reference created without an increment is a hole in a
-;; whole-program invariant, and there turned out to be four kinds of them. `rd/push` sidesteps
-;; the question instead: a copy that is one block long is cheap however many times you do it.
+;; `n` is passed rather than taken from `arena`, so that `arena` is read exactly once here and
+;; the compiler can extend it in place instead of copying the whole thing (C-127)
 (wat.core/defn rd/add [arena :- :rd::Arena n :- wat.type/i64
                        kind :- wat.type/String text :- wat.type/String
                        kids :- :rd::Kids pos :- wat.type/i64] :- :rd::St
-  (:rd::St :arena (rd/push arena (:rd::Node :kind kind :text text :kids kids))
+  (:rd::St :arena (wat.core/conj arena (:rd::Node :kind kind :text text :kids kids))
            :pos pos :node n :kids (rd/empty-kids)))
 
 ;; ---------------------------------------------------------------- the parser
@@ -170,11 +132,11 @@
       ((wat.core/= (rd/ch src i) "{") (rd/seq src a i "}" "map"))
       ((wat.core/= (rd/ch src i) "\"")
         (wat.core/let [e (rd/str-end src (wat.core/+ i 1))]
-          (rd/add a (rd/count a) "string" (wat.string/subs src i e) (rd/empty-kids) e)))
+          (rd/add a (wat.core/length a) "string" (wat.string/subs src i e) (rd/empty-kids) e)))
       (:else
         (wat.core/let [e (rd/atom-end src i)
                        t (wat.string/subs src i e)]
-          (rd/add a (rd/count a) (rd/classify t) t (rd/empty-kids) e))))))
+          (rd/add a (wat.core/length a) (rd/classify t) t (rd/empty-kids) e))))))
 
 ;; children up to the closing delimiter; `kids` carries the indices back out
 (wat.core/defn rd/kids-of [src :- wat.type/String st :- :rd::St
@@ -196,7 +158,7 @@
                                             :kids (rd/empty-kids))
                                close (rd/empty-kids))
                  ra (:rd::St/arena r)]
-    (rd/add ra (rd/count ra) kind (wat.string/subs src i (:rd::St/pos r))
+    (rd/add ra (wat.core/length ra) kind (wat.string/subs src i (:rd::St/pos r))
             (:rd::St/kids r) (:rd::St/pos r))))
 
 (wat.core/defn rd/tops [src :- wat.type/String st :- :rd::St acc :- :rd::Kids] :- :rd::St
@@ -207,7 +169,7 @@
       (wat.core/let [r (rd/form src (:rd::St :arena a :pos i :node -1 :kids acc))]
         (rd/tops src r (wat.core/conj acc (:rd::St/node r)))))))
 
-(wat.core/defn rd/empty-arena [] :- :rd::Arena (wat.core/Vector :- [:rd::Block]))
+(wat.core/defn rd/empty-arena [] :- :rd::Arena (wat.core/Vector :- [:rd::Node]))
 
 ;; read another file into the SAME arena, so that node indices from every file a program is made
 ;; of live in one space. That is what `load-file!` needs: two arenas would give two node 7s.
@@ -220,11 +182,11 @@
 ;; ---------------------------------------------------------------- the surface it replaces
 
 (wat.core/defn rd/kind [st :- :rd::St n :- wat.type/i64] :- wat.type/String
-  (:rd::Node/kind (rd/at (:rd::St/arena st) n)))
+  (:rd::Node/kind (wat.core/nth (:rd::St/arena st) n)))
 (wat.core/defn rd/text [st :- :rd::St n :- wat.type/i64] :- wat.type/String
-  (:rd::Node/text (rd/at (:rd::St/arena st) n)))
+  (:rd::Node/text (wat.core/nth (:rd::St/arena st) n)))
 (wat.core/defn rd/kids [st :- :rd::St n :- wat.type/i64] :- :rd::Kids
-  (:rd::Node/kids (rd/at (:rd::St/arena st) n)))
+  (:rd::Node/kids (wat.core/nth (:rd::St/arena st) n)))
 
 ;; ---------------------------------------------------------------- what it read
 

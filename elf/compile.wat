@@ -250,20 +250,58 @@
 ;; the three tests failing falls through to the copying `vec_conj` below.
 (:wat::core::defn :c::rt-vec-conj-own [] -> :wat::core::String
   (:wat::string::concat
-    "49b901000000010000004c3948f87439488378f80175a04c8b004a8d54c0"
-    "084c39fa74054989c9eb564d89fb4983c3084d3b5e087605e8f5fbffff49"
-    "890f4d89df498d5001488910c34c8b004989c94a8d14c50f000000480fbd"
-    "ca48c7c20200000048d3e24e8d1cc5180000004939d3770d4e894cc00849"
-    "8d5001488910c34c8b004a8d14c517000000480fbdca48c7c20200000048"
-    "d3e24d89fb4901d34d3b5e087605e887fbffff48ba010000000100000049"
-    "89174d8d5708498d5001498912498d7a08488d70084c89c1f348a54c890f"
-    "4d89df4c89d0c3"))
+    "488378f0000f8587ffffff49b901000000010000004c3948f8743d488378"
+    "f8010f856cffffff4c8b004a8d54c0084c39fa74054989c9eb564d89fb49"
+    "83c3084d3b5e087605e8c2f9ffff49890f4d89df498d5001488910c34c8b"
+    "004989c94a8d14c517000000480fbdca48c7c20200000048d3e24e8d1cc5"
+    "200000004939d3770d4e894cc008498d5001488910c34c8b004a8d14c51f"
+    "000000480fbdca48c7c20200000048d3e24d89fb4901d34d3b5e087605e8"
+    "54f9ffff49c7070000000048ba0100000001000000498957084d8d571049"
+    "8d5001498912498d7a08488d70084c89c1f348a54c890f4d89df4c89d0c3"))
+
+(:wat::core::defn :c::rt-varr-new [] -> :wat::core::String
+  (:wat::string::concat
+    "488d0cc5180000004d89fb4901cb4d3b5e087605e860fcffff49c7070000"
+    "000049c74708010000004d8d57104989024d89df4c89d0c3"))
+
+(:wat::core::defn :c::rt-node-new [] -> :wat::core::String
+  (:wat::string::concat
+    "4d89fb4981c3100100004d3b5e087605e82efcffff49c707010000004d8d"
+    "570849c70220000000498d7a0848c7c1200000004831c0f348ab4d89df4c"
+    "89d0c3"))
+
+(:wat::core::defn :c::rt-node-copy [] -> :wat::core::String
+  (:wat::string::concat
+    "534889c3e8b8ffffff488d7808488d730848c7c120000000f348a55bc3"))
+
+(:wat::core::defn :c::rt-tree-get [] -> :wat::core::String
+  (:wat::string::concat
+    "5256574889ca488b7008488b78104885f674184889d04889f148d3e84883"
+    "e01f488b7cc7084883ee05ebe34889d04883e01f488b44c7085f5e5ac3"))
+
+(:wat::core::defn :c::rt-tree-push [] -> :wat::core::String
+  (:wat::string::concat
+    "53415441554989cc4c8b28488b50084c8b481049c7c2200000004889d149"
+    "d3e24d39ea7510e83fffffff4c8948084989c14883c205524c89c8e86aff"
+    "ffff4989c04889c34885d274344c89e84889d148d3e84883e01f4989c14a"
+    "8b44cb084885c07407e840ffffffeb05e8fafeffff4a8944cb084889c348"
+    "83ea05ebc74c89e84883e01f4c8964c3085a4d89fb4983c3284d3b5e0876"
+    "05e810fbffff49c7070100000049c7470801000000498d4710498d4d0148"
+    "8908488950084c8940104d89df415d415c5bc3"))
+
+(:wat::core::defn :c::rt-tree-from-arr [] -> :wat::core::String
+  (:wat::string::concat
+    "53415441554889c34c8b2b4d31e4e88ffeffff4989c14d89fb4983c3284d"
+    "3b5e087605e8bdfaffff49c7070100000049c7470801000000498d471048"
+    "c7000000000048c74008000000004c8948104d89df4d39ec730f4a8b4ce3"
+    "08e8d9feffff49ffc4ebec415d415c5bc3"))
 
 (:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
   (:wat::string::concat
-    "4989ca4c8b004a8d14c5180000004d89fb4901d34d3b5e087605e85afcff"
-    "ff49c707010000004d8d4f08498d5001498911498d7908488d70084c89c1"
-    "f348a54c89174d89df4c89c8c3"))
+    "488378f0000f85c3feffff4c8b004983f808720c51e87bffffff59e9aefe"
+    "ffff4989ca4a8d14c5200000004d89fb4901d34d3b5e087605e83efaffff"
+    "49c7070000000049c74708010000004d8d4f10498d5001498911498d7908"
+    "488d70084c89c1f348a54c89174d89df4c89c8c3"))
 
 ;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax`, 49 bytes: a copy with one slot
 ;; replaced. This is `assoc`, for a record field and a vector index alike, since they are the
@@ -272,7 +310,7 @@
 (:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
   (:wat::string::concat
     "534c8b004989ca4889d34d89fb4a8d14c5100000004901d34d3b5e087605"
-    "e834fbffff49c707010000004d8d4f084d8901498d7908488d70084c89c1"
+    "e8f9f8ffff49c707010000004d8d4f084d8901498d7908488d70084c89c1"
     "f348a54d89df4c89c84a895cd0085bc3"))
 
 ;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
@@ -384,7 +422,7 @@
     "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
     "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
     "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d480f480f"
-    "bdc948c7c60200000048d3e64c01c6493b76087605e8b8f9ffff4989f749"
+    "bdc948c7c60200000048d3e64c01c6493b76087605e87df7ffff4989f749"
     "c700010000004d8d5008498902498d7a084c89e64885d2742e480fb60648"
     "89c148c1e804e88ffeffff880748ffc74889c84883e00fe87efeffff8807"
     "48ffc748ffc648ffca75d24c89d0415cc3"))
@@ -396,7 +434,7 @@
     "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
     "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
     "89c70f054c89ca4c29e24d8d41074983e0f8488d4a0f480fbdc948c7c602"
-    "00000048d3e64c01c6493b76087605e8dbf8ffff4989f749c70001000000"
+    "00000048d3e64c01c6493b76087605e8a0f6ffff4989f749c70001000000"
     "4d8d5008498912498d7a084c89e64889d1f3a44c89d0415cc3"))
 
 (:wat::core::defn :c::rt-at [lvl <- :wat::core::i64 n <- :wat::core::i64
@@ -425,14 +463,20 @@
     (:c::rt-at lvl 12 (:c::rt-str-contains))
     (:c::rt-at lvl 13 (:c::rt-str-eq))
     (:c::rt-at lvl 14 (:c::rt-vec-new))
-    (:c::rt-at lvl 15 (:c::rt-vec-conj))
-    (:c::rt-at lvl 16 (:c::rt-vec-conj-own))
-    (:c::rt-at lvl 17 (:c::rt-slot-set))
-    (:c::rt-at lvl 18 (:c::rt-hexval))
-    (:c::rt-at lvl 19 (:c::rt-hexchar))
-    (:c::rt-at lvl 20 (:c::rt-prim-write-hex))
-    (:c::rt-at lvl 21 (:c::rt-prim-read-hex))
-    (:c::rt-at lvl 22 (:c::rt-io-read-file))))
+    (:c::rt-at lvl 15 (:c::rt-varr-new))
+    (:c::rt-at lvl 16 (:c::rt-node-new))
+    (:c::rt-at lvl 17 (:c::rt-node-copy))
+    (:c::rt-at lvl 18 (:c::rt-tree-get))
+    (:c::rt-at lvl 19 (:c::rt-tree-push))
+    (:c::rt-at lvl 20 (:c::rt-tree-from-arr))
+    (:c::rt-at lvl 21 (:c::rt-vec-conj))
+    (:c::rt-at lvl 22 (:c::rt-vec-conj-own))
+    (:c::rt-at lvl 23 (:c::rt-slot-set))
+    (:c::rt-at lvl 24 (:c::rt-hexval))
+    (:c::rt-at lvl 25 (:c::rt-hexchar))
+    (:c::rt-at lvl 26 (:c::rt-prim-write-hex))
+    (:c::rt-at lvl 27 (:c::rt-prim-read-hex))
+    (:c::rt-at lvl 28 (:c::rt-io-read-file))))
 
 ;; hex is two characters a byte
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -468,8 +512,20 @@
   (:wat::core::+ (:c::at-contains rt) (:c::hexlen (:c::rt-str-contains))))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-streq rt) (:c::hexlen (:c::rt-str-eq))))
-(:wat::core::defn :c::at-vconj [rt <- :wat::core::i64] -> :wat::core::i64
+;; a record is built by `vec_new` and a Vector by `varr_new`; the difference is the arm word,
+;; and the compiler knows statically which it is constructing
+(:wat::core::defn :c::at-varr [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-vnew rt) (:c::hexlen (:c::rt-vec-new))))
+;; node_new and node_copy are reached only from inside the tree routines, so they need no entry
+;; point of their own -- only their lengths, so that what follows them lands where it should
+(:wat::core::defn :c::at-tget [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-varr rt)
+    (:wat::core::+ (:c::hexlen (:c::rt-varr-new))
+      (:wat::core::+ (:c::hexlen (:c::rt-node-new)) (:c::hexlen (:c::rt-node-copy))))))
+(:wat::core::defn :c::at-vconj [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-tget rt)
+    (:wat::core::+ (:c::hexlen (:c::rt-tree-get))
+      (:wat::core::+ (:c::hexlen (:c::rt-tree-push)) (:c::hexlen (:c::rt-tree-from-arr))))))
 (:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-vconj rt) (:c::hexlen (:c::rt-vec-conj))))
 (:wat::core::defn :c::at-slot [rt <- :wat::core::i64] -> :wat::core::i64
@@ -1368,8 +1424,22 @@
               (:c::fail "nth: operand is not a Vector or record" a pg)
               (:wat::core::let
                 [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
-                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::emit o2 (:wat::string::concat "4889c1" "58" "488b44c808")))))
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
+                 o3 (:c::emit o2 (:wat::string::concat "4889c1" "58"))]
+                (:wat::core::if
+                  (:wat::string::starts-with? (:c::type-of (:wat::core::nth ks 1) env pg) "rec:")
+                  ;; a record never conj's, so it is the array arm for ever: one load, no test
+                  (:c::emit o3 "488b44c808")
+                  ;; a Vector asks. The array arm is the same single load it always was; the
+                  ;; tree arm is a walk, and the branch predicts because a vector stays in one
+                  ;; arm for its whole life.
+                  (:c::call
+                    (:c::emit o3 (:wat::string::concat
+                      "488378f000"                  ;; cmp qword [rax-16], 0   -- which arm?
+                      "0f8507000000"                ;; jne +7                  -- the tree
+                      "488b44c808"                  ;; mov rax,[rax+rcx*8+8]   -- the array
+                      "eb05"))                      ;; jmp +5                  -- over the call
+                    (:c::at-tget rt))))))
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
               (:wat::core::let
@@ -1950,7 +2020,7 @@
     (:wat::core::let
       [n (:wat::core::- (:wat::core::length ks) 3)
        o1 (:c::push-elems ks 3 o env pg rt tb slot)
-       o2 (:c::call (:c::emit o1 (:c::mov-rax n)) (:c::at-vnew rt))]
+       o2 (:c::call (:c::emit o1 (:c::mov-rax n)) (:c::at-varr rt))]
       (:c::pop-slots (:wat::core::- n 1) o2))))
 
 ;; a record constructor names its fields, so the pairs are popped back into the slot the
@@ -2663,10 +2733,10 @@
 (:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :wat::core::String text <- :wat::core::String
                               kids <- :rd::Kids] -> :c::NodeR
   (:wat::core::let [st (:c::Prog/src pg)]
-    (:c::NodeR :node (rd/count (:rd::St/arena st))
+    (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
                :pg (:wat::core::assoc pg :src
                      (:wat::core::assoc st :arena
-                       (rd/push (:rd::St/arena st)
+                       (:wat::core::conj (:rd::St/arena st)
                          (:rd::Node :kind kind :text text :kids kids)))))))
 
 (:wat::core::defn :c::fn-of [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
@@ -2949,6 +3019,9 @@
 
 (:wat::core::defn :c::lvl-head [s <- :wat::core::String hs <- :wat::core::bool pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::cond
+    ;; `nth` on a Vector reaches tree_get; this scan reads names, not types, so it cannot tell
+    ;; a Vector's nth from a record's and carries the tree for both
+    ((:c::is? s "wat.core/nth" ":wat::core::nth") 18)
     ((:c::lvl-zero? s) 0)
     ((:c::lvl-os? s) 0)
     ((:c::lvl-bool? s) 3)
@@ -2965,16 +3038,16 @@
     ((:c::is? s "wat.i64/to-string" ":wat::i64::to-string") 10)
     ((:c::is? s "wat.string/starts-with?" ":wat::string::starts-with?") 11)
     ((:c::is? s "wat.string/contains?" ":wat::string::contains?") 12)
-    ((:c::is? s "wat.core/Vector" ":wat::core::Vector") 14)
-    ((:c::is? s "wat.core/conj" ":wat::core::conj") 16)
-    ((:c::is? s "wat.core/assoc" ":wat::core::assoc") 17)
-    ((:c::is? s "prim/write-hex" ":prim::write-hex") 20)
-    ((:c::is? s "prim/read-hex" ":prim::read-hex") 21)
-    ((:c::is? s "wat.io/read-file" ":wat::io::read-file") 22)
+    ((:c::is? s "wat.core/Vector" ":wat::core::Vector") 15)
+    ((:c::is? s "wat.core/conj" ":wat::core::conj") 22)
+    ((:c::is? s "wat.core/assoc" ":wat::core::assoc") 23)
+    ((:c::is? s "prim/write-hex" ":prim::write-hex") 26)
+    ((:c::is? s "prim/read-hex" ":prim::read-hex") 27)
+    ((:c::is? s "wat.io/read-file" ":wat::io::read-file") 28)
     ;; a record constructor allocates, which is vec_new
     ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) s 0) 0) 14)
     ;; **the safety net**: a built-in nothing above names takes all of it
-    ((:c::builtin? s) 22)
+    ((:c::builtin? s) 28)
     (:else 0)))
 
 (:wat::core::defn :c::lvl-node [pg <- :c::Prog a <- :wat::core::i64 hs <- :wat::core::bool] -> :wat::core::i64
@@ -2996,7 +3069,7 @@
 ;; twice: the first pass answers whether the program has Strings in it at all, which is what
 ;; decides whether `=` means str_eq
 (:wat::core::defn :c::rt-level [pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::let [n (rd/count (:rd::St/arena (:c::Prog/src pg)))
+  (:wat::core::let [n (:wat::core::length (:rd::St/arena (:c::Prog/src pg)))
                     base (:c::lvl-scan pg 0 n false 0)]
     (:c::lvl-scan pg 0 n (:wat::core::>= base 6) base)))
 

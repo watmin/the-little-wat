@@ -424,7 +424,7 @@ str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
 # So `length` is a peek at the header for a String, a Vector and a record alike, and `nth` and a
 # field access are the same indexed load.
 
-vec_new:                         # rax = count  ->  rax = vector, slots uninitialised
+vec_new:                         # rax = count  ->  rax = record, slots uninitialised
     leaq 16(,%rax,8), %rcx       # 8 rc + 8 count + 8n, EXACTLY -- see the note above vec_conj
     movq %r15, %r11
     addq %rcx, %r11
@@ -439,19 +439,231 @@ vec_new:                         # rax = count  ->  rax = vector, slots uninitia
     ret
 
 
-vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
-    movq %rcx, %r10              # the element, before rcx becomes a shift count
-    movq (%rax), %r8
-    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1), exactly
+# ---- A VECTOR is one of two things, and the word at [p-16] says which.
+#
+# `conj` copies the whole backing store -- here and in wat's own interpreter alike (F-124) --
+# so building a vector by repeated `conj` is O(n^2). wat's answer is `PVec`, the promoting
+# vector, and this is that design in machine code: an ARRAY while it is small or bulk-built, a
+# 32-way TREE once persistent conj has pushed it past the threshold. Promotion is one-way.
+#
+#   array:  [arm=0][rc][count][slot]...            p -> count
+#   tree:   [arm=1][rc][count][shift][root]        p -> count
+#
+# **`count` sits at offset 0 in BOTH**, so `length` is the same single `movq (%rax), %rax` for
+# either arm, and for a record and a String besides. Only `nth` asks which arm it has, and it
+# asks about vectors only -- the compiler knows statically that a record is an array and emits
+# the bare indexed load with no test at all.
+#
+# The arm cannot live in the rc word. That word is a SHARE COUNT that `incq` walks upward, and
+# it already carries C-140's `0x100000001`; an arm must survive sharing, so the two would
+# collide. A record keeps the old two-word header exactly -- it never conj's, so it is an array
+# for ever and pays nothing for any of this.
+
+varr_new:                        # rax = count  ->  rax = array-arm vector, slots uninitialised
+    leaq 24(,%rax,8), %rcx       # 8 arm + 8 rc + 8 count + 8n
     movq %r15, %r11
-    addq %rdx, %r11
+    addq %rcx, %r11
     cmpq 8(%r14), %r11
     jbe 1f
     call oom
-1:  movq $1, (%r15)              # rc = 1
-    leaq 8(%r15), %r9
+1:  movq $0, (%r15)              # arm = array
+    movq $1, 8(%r15)             # rc = 1
+    leaq 16(%r15), %r10
+    movq %rax, (%r10)
+    movq %r11, %r15
+    movq %r10, %rax
+    ret
+
+
+# A tree node is thirty-two slots, and is itself an ordinary `[rc][count][slot]...` object --
+# the same shape a record has, so nothing new has to know how to read one.
+node_new:                        # -> rax = a node of 32 zeroed slots
+    movq %r15, %r11
+    addq $272, %r11              # 8 rc + 8 count + 8*32
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)
+    leaq 8(%r15), %r10
+    movq $32, (%r10)
+    leaq 8(%r10), %rdi
+    movq $32, %rcx
+    xorq %rax, %rax
+    rep stosq                    # an absent child is a zero, which the walk tests for
+    movq %r11, %r15
+    movq %r10, %rax
+    ret
+
+
+node_copy:                       # rax = node  ->  rax = a fresh copy of it
+    push %rbx
+    movq %rax, %rbx
+    call node_new
+    leaq 8(%rax), %rdi
+    leaq 8(%rbx), %rsi
+    movq $32, %rcx
+    rep movsq
+    pop %rbx
+    ret
+
+
+# `shift` is 5 per level below the leaves, so the walk is one masked shift a level: at most
+# three loads for 32,768 elements, four for a million.
+#
+# **It clobbers rax and rcx and NOTHING else**, and that is a contract, not an accident.
+# C-137 parks expression temporaries in r8-r11 whenever a subtree "emits no call", and `nth` is
+# on that whitelist -- which was true until a Vector's `nth` could reach this routine. What the
+# pool actually requires is not "no call" but "no scratch register disturbed", so the cheapest
+# correct answer is for the routine to disturb none: the three it needs go on the stack. The
+# array arm still reaches no call at all.
+tree_get:                        # rax = tree, rcx = index  ->  rax = element
+    push %rdx
+    push %rsi
+    push %rdi
+    movq %rcx, %rdx              # the index; rcx is about to be a shift count
+    movq 8(%rax), %rsi           # shift
+    movq 16(%rax), %rdi          # root
+1:  testq %rsi, %rsi
+    jz 2f
+    movq %rdx, %rax
+    movq %rsi, %rcx
+    shrq %cl, %rax
+    andq $31, %rax
+    movq 8(%rdi,%rax,8), %rdi    # descend
+    subq $5, %rsi
+    jmp 1b
+2:  movq %rdx, %rax
+    andq $31, %rax
+    movq 8(%rdi,%rax,8), %rax
+    pop %rdi
+    pop %rsi
+    pop %rdx
+    ret
+
+
+# Persistent append: copy the path from the root to the new leaf and share everything else.
+# That is `depth` nodes copied, not `n` slots -- which is the whole point.
+tree_push:                       # rax = tree, rcx = element  ->  rax = a new tree
+    push %rbx
+    push %r12
+    push %r13
+    movq %rcx, %r12              # the element
+    movq (%rax), %r13            # n -- and the index the element lands at
+    movq 8(%rax), %rdx           # shift
+    movq 16(%rax), %r9           # root
+    movq $32, %r10               # full at this shift? then the tree gains a level
+    movq %rdx, %rcx
+    shlq %cl, %r10
+    cmpq %r13, %r10
+    jne 1f
+    call node_new
+    movq %r9, 8(%rax)            # the old root becomes child zero of the new one
+    movq %rax, %r9
+    addq $5, %rdx
+1:  pushq %rdx                   # the shift the header will carry
+    movq %r9, %rax
+    call node_copy
+    movq %rax, %r8               # the new root
+    movq %rax, %rbx              # and the cursor walking down it
+2:  testq %rdx, %rdx
+    jz 3f
+    movq %r13, %rax
+    movq %rdx, %rcx
+    shrq %cl, %rax
+    andq $31, %rax
+    movq %rax, %r9               # which slot at this level -- **r9, not r10**: `node_new` uses
+    movq 8(%rbx,%r9,8), %rax     # r10 for the object it is building, so an index parked there
+    testq %rax, %rax             # comes back as a pointer and the child is linked into orbit
+    jz 4f
+    call node_copy               # a child there: copy it
+    jmp 5f
+4:  call node_new                # none yet: a fresh one
+5:  movq %rax, 8(%rbx,%r9,8)
+    movq %rax, %rbx
+    subq $5, %rdx
+    jmp 2b
+3:  movq %r13, %rax
+    andq $31, %rax
+    movq %r12, 8(%rbx,%rax,8)    # the element, in the leaf
+    popq %rdx
+    movq %r15, %r11              # the header: [arm=1][rc=1][count][shift][root]
+    addq $40, %r11
+    cmpq 8(%r14), %r11
+    jbe 6f
+    call oom
+6:  movq $1, (%r15)
+    movq $1, 8(%r15)
+    leaq 16(%r15), %rax
+    leaq 1(%r13), %rcx
+    movq %rcx, (%rax)
+    movq %rdx, 8(%rax)
+    movq %r8, 16(%rax)
+    movq %r11, %r15
+    pop %r13
+    pop %r12
+    pop %rbx
+    ret
+
+
+# The one-way promotion. It happens once per vector, at the threshold, so the cost of walking
+# the array into the tree is paid against every append that follows it.
+tree_from_arr:                   # rax = array-arm vector  ->  rax = the same elements, as a tree
+    push %rbx
+    push %r12
+    push %r13
+    movq %rax, %rbx              # the source
+    movq (%rbx), %r13            # n
+    xorq %r12, %r12
+    call node_new
+    movq %rax, %r9
+    movq %r15, %r11
+    addq $40, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)              # an empty tree: count 0, shift 0, one leaf
+    movq $1, 8(%r15)
+    leaq 16(%r15), %rax
+    movq $0, (%rax)
+    movq $0, 8(%rax)
+    movq %r9, 16(%rax)
+    movq %r11, %r15
+2:  cmpq %r13, %r12
+    jae 3f
+    movq 8(%rbx,%r12,8), %rcx
+    call tree_push
+    incq %r12
+    jmp 2b
+3:  pop %r13
+    pop %r12
+    pop %rbx
+    ret
+
+
+# `vec_conj` is the SHARED path -- the compiler could not prove the container dead, so the value
+# must survive. That is the path F-124 measured as quadratic, and the one that promotes.
+vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer vector
+    cmpq $0, -16(%rax)
+    jne tree_push                # already a tree: a path copy, O(log n)
+    movq (%rax), %r8
+    cmpq $8, %r8                 # PROMOTION_THRESHOLD, as wat's own PVec uses
+    jb 1f
+    pushq %rcx
+    call tree_from_arr
+    popq %rcx
+    jmp tree_push
+1:  movq %rcx, %r10              # still small: copying it is cheaper than a tree
+    leaq 32(,%r8,8), %rdx        # 8 arm + 8 rc + 8 count + 8(n+1)
+    movq %r15, %r11
+    addq %rdx, %r11
+    cmpq 8(%r14), %r11
+    jbe 2f
+    call oom
+2:  movq $0, (%r15)              # arm = array
+    movq $1, 8(%r15)             # rc = 1
+    leaq 16(%r15), %r9
     leaq 1(%r8), %rdx
-    movq %rdx, (%r9)             # new count
+    movq %rdx, (%r9)             # the new count
     leaq 8(%r9), %rdi
     leaq 8(%rax), %rsi
     movq %r8, %rcx
@@ -462,35 +674,20 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
     ret
 
 
-# ---- Vectors come in two block shapes, and the count word below the pointer says which.
-#
-# A String's block is always the next power of two at or above its header plus its bytes, so
-# its spare room needs no header field. Doing the same for every vector made the compiler's own
-# peak WORSE by 349 MB: `vec_new` and `slot_set` allocate blocks of a known, final size -- every
-# record, and every `assoc` on one -- and rounding those up wastes as much as half of each of
-# the millions the compiler builds, for slack that is never used, because a record never grows.
-#
-# So slack is given out only where it is earned, and the rule is ADAPTIVE. An accumulator that
-# is still the top of the heap is extended by one bump, exactly as before and with no waste at
-# all. Only when it has been DISPLACED -- something else allocated since, which is the case that
-# used to fall back to a full copy every time and made the whole thing quadratic -- is it
-# promoted into a power-of-two block, and marked `0x100000001` in the count word below the
-# pointer. The reachable values are 0 (a literal), 1 (unique, exact block), and 2, 3, ... from
-# the increment-only share rule, so the marker cannot collide, and `incq` on a marked vector
-# lands on neither 1 nor the marker -- shared, which is what it has then become.
-#
 # `vec_conj_own` is `conj` where the COMPILER has proved the container is a last use -- no later
-# read of that variable can observe a change. That plus a reference count of 1 (never stored
-# anywhere durable) plus being the top of the heap is enough to extend in place, which is what
-# turns an accumulator loop from O(n^2) into O(n). It is Rust's `Vec::push` and Clojure's
-# transient, arrived at from the two halves neither implementation has alone: the count rules out
-# aliases, last-use rules out later reads.
+# read of that variable can observe a change. That plus a reference count of 1 is enough to
+# extend in place, which is what turns an accumulator loop from O(n^2) into O(n). It is Rust's
+# `Vec::push` and Clojure's transient, arrived at from two halves neither has alone: the count
+# rules out aliases, last-use rules out later reads. A tree is handed straight to the persistent
+# path -- that is already O(log n), so there is nothing to win by mutating it.
 vec_conj_own:                    # rax = vector (proved dead after this), rcx = element
+    cmpq $0, -16(%rax)
+    {disp32} jne vec_conj        # 32-bit, so it still reaches when the layout changes
     movabsq $0x100000001, %r9    # the marker: unique, and already in a power-of-two block
     cmpq %r9, -8(%rax)
     je 2f
     cmpq $1, -8(%rax)            # unique, in a block of exactly its own size?
-    jne vec_conj                 # 0 is a literal, >1 was stored somewhere durable
+    {disp32} jne vec_conj        # 0 is a literal, >1 was stored somewhere durable
     movq (%rax), %r8
     leaq 8(%rax,%r8,8), %rdx     # one past the last slot
     cmpq %r15, %rdx              # still the top of the heap?
@@ -509,11 +706,11 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
     ret
 2:  movq (%rax), %r8             # marked: the slack is derivable from the count alone
     movq %rcx, %r9               # park the element: rcx is about to be a shift count
-    leaq 15(,%r8,8), %rdx
+    leaq 23(,%r8,8), %rdx
     bsrq %rdx, %rcx
     movq $2, %rdx
     shlq %cl, %rdx               # the block it was given
-    leaq 24(,%r8,8), %r11        # what one more slot would need
+    leaq 32(,%r8,8), %r11        # what one more slot would need
     cmpq %rdx, %r11
     ja 9f
     movq %r9, 8(%rax,%r8,8)      # it fits: write the slot and bump the count
@@ -521,7 +718,7 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
     movq %rdx, (%rax)
     ret
 9:  movq (%rax), %r8             # grow: copy into a power-of-two block, and mark it
-    leaq 23(,%r8,8), %rdx        # (8 count + 8 mark + 8(n+1)) - 1
+    leaq 31(,%r8,8), %rdx        # (8 arm + 8 rc + 8 count + 8(n+1)) - 1
     bsrq %rdx, %rcx
     movq $2, %rdx
     shlq %cl, %rdx
@@ -530,9 +727,10 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
     cmpq 8(%r14), %r11
     jbe 3f
     call oom
-3:  movabsq $0x100000001, %rdx
-    movq %rdx, (%r15)
-    leaq 8(%r15), %r10
+3:  movq $0, (%r15)              # arm = array
+    movabsq $0x100000001, %rdx
+    movq %rdx, 8(%r15)
+    leaq 16(%r15), %r10
     leaq 1(%r8), %rdx
     movq %rdx, (%r10)            # the new count
     leaq 8(%r10), %rdi
