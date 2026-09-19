@@ -724,8 +724,14 @@
   (:c::buf-add (:c::buf0) s))
 
 (:wat::core::defrecord :c::Out
+;; **`sp` is how many bytes the stack has been pushed since the body began; `fk` is the distance
+;; from rsp to where rbp points.** Neither matters while there is a frame pointer -- a local is
+;; `[rbp-8]` however deep the stack happens to be -- and both matter the moment rbp stops being
+;; one, because then a local is `[rsp + d + fk + sp]` and the emitter is the only thing that
+;; knows the depth. Tracking them while still addressing through rbp is how the tracking gets
+;; tested: every binary has to come out byte for byte identical.
   [base <- :wat::core::i64  code <- :c::Buf  tail <- :c::Buf
-   rax <- :wat::core::String])
+   rax <- :wat::core::String  sp <- :wat::core::i64  fk <- :wat::core::i64])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
   (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
@@ -733,6 +739,29 @@
 
 (:wat::core::defn :c::codelen [o <- :c::Out] -> :wat::core::i64
   (:wat::core::/ (:c::buf-len (:c::Out/code o)) 2))
+
+;; Every instruction that moves rsp goes through one of these and nothing else may move it.
+;; **They take the hex the site was already emitting**, rather than splitting it: an emit split
+;; in two is a second chunk in the `:c::Buf` and a second call, and one such split in the `poke`
+;; clause cost the compiler 168 MB -> 1.85 GB (F-128).
+(:wat::core::defn :c::push [o <- :c::Out hex <- :wat::core::String n <- :wat::core::i64] -> :c::Out
+  (:wat::core::assoc (:c::emit o hex) :sp (:wat::core::+ (:c::Out/sp o) n)))
+(:wat::core::defn :c::popn [o <- :c::Out hex <- :wat::core::String n <- :wat::core::i64] -> :c::Out
+  (:wat::core::assoc (:c::emit o hex) :sp (:wat::core::- (:c::Out/sp o) n)))
+
+;; the displacement that reaches what `[rbp + d]` reaches, measured from rsp
+(:wat::core::defn :c::fp [o <- :c::Out d <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ d (:wat::core::+ (:c::Out/fk o) (:c::Out/sp o))))
+
+;; a body has to end at the depth it began, or every displacement after it is wrong by whatever
+;; leaked. This is the whole test for the tracking, and it runs on every function of every
+;; program the compiler builds.
+(:wat::core::defn :c::at-depth0 [o <- :c::Out hex <- :wat::core::String] -> :c::Out
+  (:wat::core::if (:wat::core::not= (:c::Out/sp o) 0)
+    (:wat::kernel::assertion-failed!
+      :message (:wat::string::concat "compile: a function body left "
+                 (:wat::i64::to-string (:c::Out/sp o)) " bytes on the stack"))
+    (:c::emit o hex)))
 
 ;; the virtual address of the next instruction, which is what a relocation needs
 (:wat::core::defn :c::here [o <- :c::Out] -> :wat::core::i64
@@ -1366,7 +1395,7 @@
   (:wat::core::if (:wat::core::>= k n) o
     (:wat::core::let [i (:wat::core::- (:wat::core::- n 1) k)]
       (:c::tail-store (:wat::core::+ k 1) n
-        (:c::emit o
+        (:c::popn o
           ;; **k = 0 is the LAST argument, and it never went to the stack.** It used to be
           ;; pushed by `:c::push-args` and popped back by the very next instruction -- a `mov`
           ;; written as a store and a load, once per iteration of every tail-recursive loop
@@ -1375,7 +1404,9 @@
             (:wat::core::if (:wat::core::< i nr) (:c::reg-mov-from i)
               (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))
             (:wat::core::if (:wat::core::< i nr) (:c::reg-pop i)
-              (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k)))))))
+              (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))))
+          ;; ...so k = 0 moves the stack by nothing, and every other k by one slot
+          (:wat::core::if (:wat::core::= k 0) 0 8))
         nr))))
 
 ;; every argument but the last pushed; the last computed into rax and LEFT there, because the
@@ -1388,8 +1419,8 @@
       (:c::share (:wat::core::nth ks i) env pg
         (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)))
       (:c::push-but-last ks (:wat::core::+ i 1)
-        (:c::emit (:c::share (:wat::core::nth ks i)  env pg
-                    (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+        (:c::push (:c::share (:wat::core::nth ks i)  env pg
+                    (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50" 8)
         env pg rt tb slot))))
 
 ;; ---------------------------------------------------------------- expressions
@@ -1461,9 +1492,9 @@
               ;; the status is computed first, parked on the stack while the buffer is written,
               ;; and taken back -- because a flush clobbers rax, rcx, rdx, rsi and rdi
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::call o1 (:c::at-flush rt))]
-                (:c::emit o2 (:wat::string::concat "58" (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05")))))
+                (:c::popn o2 (:wat::string::concat "58" (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05") 8))))
 ;; mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
           ;; -- the only way to get writable memory, since the one PT_LOAD is read+execute
           ((:c::mmap? head)
@@ -1482,9 +1513,9 @@
           ;; a child in wait's sense, and this compiler has no futex.
           ((:c::clone? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "clone arity" a pg)
-              (:c::emit (:c::emit (:c::call
-                          (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
-                          (:c::at-flush rt)) "58")       ;; the child shares the buffer: empty it first
+              (:c::emit (:c::popn (:c::call
+                          (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
+                          (:c::at-flush rt)) "58" 8)     ;; the child shares the buffer: empty it first
                 (:wat::string::concat
                   (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 1809))
                   (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0) (:c::mov-r8 0))
@@ -1496,9 +1527,9 @@
           ((:c::poke? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "poke arity" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::emit o2 (:wat::string::concat "4889c1" "58" "488908")))))
+                (:c::popn o2 (:wat::string::concat "4889c1" "58" "488908") 8))))
           ;; wait4(-1, &status, 0, NULL) -- reap any one child and answer its raw STATUS, which is
           ;; more useful than the pid: `(rem (quot st 256) 256)` is the exit code. Sixteen bytes
           ;; of scratch are taken off rsp for the status word and given straight back.
@@ -1541,16 +1572,16 @@
           ((:c::subs? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "subs arity" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
-                 o2 (:c::emit (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
+                 o2 (:c::push (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)) "50" 8)
                  o3 (:c::expr (:wat::core::nth ks 3) o2 env pg rt tb slot (:c::no-tail))]
-                (:c::call (:c::emit o3 (:wat::string::concat "4889c2" "59" "58")) (:c::at-subs rt)))))
+                (:c::call (:c::popn o3 (:wat::string::concat "4889c2" "59" "58") 16) (:c::at-subs rt)))))
           ((:wat::core::or (:c::starts? head) (:c::contains? head))
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "string test arity" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+                (:c::call (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)
                   (:wat::core::if (:c::starts? head) (:c::at-starts rt) (:c::at-contains rt))))))
           ((:c::tostr? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "to-string arity" a pg)
@@ -1574,9 +1605,9 @@
           ((:c::wrhex? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "write-hex arity" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58")) (:c::at-wrhex rt)))))
+                (:c::call (:c::popn o2 (:wat::string::concat "4889c1" "58") 8) (:c::at-wrhex rt)))))
           ((:c::rdfile? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "read-file arity" a pg)
               (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
@@ -1591,9 +1622,9 @@
                               (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 1) env pg))))
               (:c::fail "nth: operand is not a Vector or record" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-                 o3 (:c::emit o2 (:wat::string::concat "4889c1" "58"))]
+                 o3 (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)]
                 (:wat::core::if
                   (:wat::string::starts-with? (:c::type-of (:wat::core::nth ks 1) env pg) "rec:")
                   ;; a record never conj's, so it is the array arm for ever: one load, no test
@@ -1611,7 +1642,7 @@
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                  o2 (:c::share (:wat::core::nth ks 2) env pg
                       (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)))
                  ;; when the container is a parameter this function reads at most once on every
@@ -1619,7 +1650,7 @@
                  ;; allowed to try extending it in place instead of copying
                  own? (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
                         (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0))]
-                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+                (:c::call (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)
                   (:wat::core::if own? (:c::at-vconj-own rt) (:c::at-vconj rt))))))
           ((:c::assoc? head) (:c::assoc-form ks a o env pg rt tb slot))
           ;; a record constructor, and a record field read -- the two forms `defrecord` makes
@@ -1641,9 +1672,9 @@
                (:wat::core::and (:wat::core::= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
                                 (:wat::core::= (:c::type-of (:wat::core::nth ks 2) env pg) "str"))))
             (:wat::core::let
-              [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+              [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
                o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-               o3 (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58")) (:c::at-streq rt))]
+               o3 (:c::call (:c::popn o2 (:wat::string::concat "4889c1" "58") 8) (:c::at-streq rt))]
               (:wat::core::if (:wat::core::= op "not=")
                 (:c::emit o3 "4883f001")                ;; xor rax, 1
                 o3)))
@@ -1960,10 +1991,10 @@
         (:else
           (:wat::core::let
           [o0 (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
-           o1 (:c::emit o0 "50")                              ;; push rax
+           o1 (:c::push o0 "50" 8)                            ;; push rax
            o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
            o3 (:c::emit o2 "4889c1")                          ;; mov rcx, rax
-           o4 (:c::emit o3 "58")                              ;; pop rax
+           o4 (:c::popn o3 "58" 8)                            ;; pop rax
            o5 (:c::arith-emit op o4 rt)]
           (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1)))))))
 
@@ -1974,10 +2005,10 @@
                                 own? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
-      [o1 (:c::emit o "50")                                   ;; push rax
+      [o1 (:c::push o "50" 8)                                 ;; push rax
        o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
        o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
-       o4 (:c::emit o3 "58")                                  ;; pop rax
+       o4 (:c::popn o3 "58" 8)                                ;; pop rax
        o5 (:c::call o4 (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))]
       ;; after the first step the accumulator is a temporary this expression made, so nothing
       ;; else can be holding it and every later step may extend in place
@@ -2056,9 +2087,9 @@
             (:c::cmp-only (:wat::core::nth cks 2) env pg))
      o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
           (:wat::core::let
-            [p1 (:c::emit o1 "50")
+            [p1 (:c::push o1 "50" 8)
              p2 (:c::expr (:wat::core::nth cks 2) p1 env pg rt tb slot (:c::no-tail))]
-            (:c::emit p2 (:wat::string::concat "4889c1" "58" "4839c8"))))
+            (:c::popn p2 (:wat::string::concat "4889c1" "58" "4839c8") 8)))
      o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
      ;; **neither the compare nor the branch writes rax**, so whatever it held before them it
      ;; still holds on BOTH arms -- the fall-through and the jump alike, which is what makes
@@ -2236,16 +2267,16 @@
                                   slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-elems ks (:wat::core::+ i 1)
-      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+      (:c::push (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50" 8)
       env pg rt tb slot)))
 
 ;; and popped back off into the slots, last first, because the last one is on top
 (:wat::core::defn :c::pop-slots [k <- :wat::core::i64 o <- :c::Out] -> :c::Out
   (:wat::core::if (:wat::core::< k 0) o
     (:c::pop-slots (:wat::core::- k 1)
-      (:c::emit o (:wat::string::concat "59"                     ;; pop rcx
-        (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 k))))))))
+      (:c::popn o (:wat::string::concat "59"                    ;; pop rcx
+        (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 k)))) 8))))
 
 ;; `:c::Bind/name` -> the slot index of `name` in the record `:c::Bind`, or -1 if the head is
 ;; not an accessor at all. `user/main` has a slash too, which is why the prefix has to be a
@@ -2276,10 +2307,10 @@
                 (:wat::string::subs kws 1 (:wat::string::length kws)) 0))]
         (:wat::core::if (:wat::core::< fi 0) (:c::fail "assoc field" a pg)
           (:wat::core::let
-            [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+            [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
              o2 (:c::share (:wat::core::nth ks 3) env pg
                   (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))]
-            (:c::call (:c::emit o2 (:wat::string::concat "4889c2" "58" (:c::mov-rcx fi)))
+            (:c::call (:c::popn o2 (:wat::string::concat "4889c2" "58" (:c::mov-rcx fi)) 8)
               (:c::at-slot rt)))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
       ;; (PersistentMap :- [K V]), or :wat::core::Record" -- which is F-104 in the language
@@ -2299,9 +2330,9 @@
   (:wat::core::let
     [str? (:wat::core::and (:wat::core::= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
                            (:wat::core::= (:c::type-of (:wat::core::nth ks 2) env pg) "str"))
-     o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+     o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
      o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-     o3 (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+     o3 (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)
      o4 (:wat::core::if str? (:c::call o3 (:c::at-streq rt)) (:c::emit o3 (:c::op-hex "=")))
      o5 (:c::emit (:c::emit o4 "4885c0") "0f8500000000")      ;; test ; jnz over the diagnostic
      at (:wat::core::- (:c::codelen o5) 4)
@@ -2331,8 +2362,8 @@
        fi (:c::field-index (:c::Rec/fields r) kw 0)]
       (:wat::core::if (:wat::core::< fi 0) (:c::fail "record field" a pg)
         (:c::rec-pop ks (:wat::core::- i 2) r
-          (:c::emit o (:wat::string::concat "59"
-            (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 fi))))) a pg)))))
+          (:c::popn o (:wat::string::concat "59"
+            (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 fi)))) 8) a pg)))))
 
 (:wat::core::defn :c::rec-form [ks <- :c::Kids a <- :wat::core::i64 r <- :c::Rec o <- :c::Out
                                 env <- :c::Env pg <- :c::Prog rt <- :wat::core::i64
@@ -2351,8 +2382,8 @@
                                 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::rec-vals ks (:wat::core::+ i 2)
-      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+      (:c::push (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50" 8)
       env pg rt tb slot)))
 
 ;; ---------------------------------------------------------------- cond, and, or
@@ -2594,10 +2625,10 @@
       [a (:wat::core::nth ks i)
        drop? (:wat::core::and (:wat::core::< i (:wat::core::- (:wat::core::length ks) 1))
                               (:c::releasable? a pg))
-       o1 (:wat::core::if drop? (:c::emit o "41574157") o)
+       o1 (:wat::core::if drop? (:c::push o "41574157" 16) o)
        last? (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
        o2 (:c::expr a o1 env pg rt tb slot (:wat::core::if last? tc (:c::no-tail)))
-       o3 (:wat::core::if drop? (:c::emit o2 "415f415f") o2)]
+       o3 (:wat::core::if drop? (:c::popn o2 "415f415f" 16) o2)]
       (:c::seq ks (:wat::core::+ i 1) o3 env pg rt tb slot tc))))
 
 ;; ---------------------------------------------------------------- println
@@ -2662,8 +2693,8 @@
                                  slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-args ks (:wat::core::+ i 1)
-      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+      (:c::push (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50" 8)
       env pg rt tb slot)))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
@@ -2680,7 +2711,7 @@
       (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
                         o2 (:c::call o1 (:c::fn-addr pg head 0))]
         (:wat::core::if (:wat::core::= n 0) o2
-          (:c::emit o2 (:c::add-rsp (:wat::core::* 8 n))))))))
+          (:c::popn o2 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))))
 
 ;; ---------------------------------------------------------------- compiling one function
 
@@ -2805,7 +2836,10 @@
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
-     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "")
+     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0
+                 ;; rbp sits `frame` bytes plus the saved registers above rsp once the prologue
+                 ;; has run, which is the distance every `[rbp + d]` has to cross
+                 :fk (:wat::core::+ frame (:wat::core::* 8 (:wat::core::+ nr nlr))))
      ;; push rbp / mov rbp,rsp / make room / save the registers this function will use / load
      ;; the parameters into them. The saves come AFTER the frame so that a `let` slot at
      ;; [rbp-8k] does not land on a saved register.
@@ -2832,7 +2866,7 @@
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
                   :target (:wat::core::+ base (:c::codelen o1))))
      o2 (:c::seq ks start o1 env pg rt tb 0 tc)]
-    (:c::emit o2 (:wat::string::concat
+    (:c::at-depth0 o2 (:wat::string::concat
       (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "") "c9c3"))))
 
 ;; ---------------------------------------------------------------- the driver
@@ -2987,7 +3021,7 @@
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
-    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "")
+    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0)
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
