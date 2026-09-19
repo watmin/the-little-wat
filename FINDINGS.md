@@ -9553,6 +9553,64 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh`; `tools/bootstrap.sh`; `elf/bench/fib32.wat`.
 
 
+### C-143: moves work, and the increment-only count cannot carry them -- 660x on the shape, refused by the compiler
+
+- **Where:** `elf/src/moved.wat` (kept), `elf/compile.wat` (`:c::share`, written and reverted).
+  Prompted by the builder choosing the memory over the register work: *"do we work on memory or
+  let next?"*
+- **The claim under test, from C-140:** storing a value that is dead afterwards is a MOVE, not a
+  share, so `:c::push-args` need not increment. That is the 745 MB the reader spends, and it is
+  Rust's rule.
+- **`elf/src/moved.wat` was written before a line of analysis existed**, which is the C-127
+  pattern: a program that fails loudly. `user/thread` is the reader's shape -- a vector carried
+  in a record, read out, handed to a helper that conj's it, never looked at again.
+  `user/leak` reads the container after the call; `user/alias` binds to a function that answers
+  its own argument. Both must keep printing 304, never 404.
+- **It worked, on the shape.** With the analysis in place:
+
+  | | peak |
+  | --- | --- |
+  | `moved.wat` before | 1,563,948 KiB |
+  | `moved.wat` after | **2,364 KiB** |
+
+  **660x**, with `leak` and `alias` still answering 304 and 3, and all twenty differential
+  programs in agreement. Two pieces were needed that are worth keeping in mind: the "is this the
+  last use" test has to be an **evaluation-order walk**, not a comparison of arena indices,
+  because C-142's inliner appends synthesised nodes at the end and a rewritten body has no usable
+  index order left; and the container's uniqueness is a question only the runtime can answer, so
+  it compiles to a `cmp qword [rcx-8], 1` -- **on a register**, because C-136 puts the parameters
+  of exactly the looping functions this rule is for into rbx, r12 and r13, and the first version
+  bailed out on that path and measured no change at all.
+- **The compiler refused it.** Every test passed except the one that matters: compiled by a
+  compiler that applies the rule, the compiler stopped reproducing itself. Four distinct holes
+  came out of four bisections, each a real defect in the rule and none of them the last one:
+  - **`conj` and `concat` are not fresh.** On the in-place path (C-127, C-128) they answer the
+    *same pointer* they were given, so a name bound to one aliases its first operand. This
+    compiler threads `(:c::Out/code o)` through `concat` on every instruction it emits.
+  - **An expression argument aliases too.** `(f (:R/v b))` hands the callee a second reference
+    to something `b` still points at, and nothing ever counted it. Symbols were never the whole
+    story; they were the only case anyone had written down.
+  - **Provenance chains have to bottom out.** `(:rd::St/arena (:c::Prog/src pg))` is two links,
+    and a count of 1 on the middle one says nothing -- it was never incremented when it was read
+    out of the outer one either.
+  - **An already-pushed sibling argument holds a reference no source walk can see.** In
+    `(f x (g x))` the pointer for `x` is on the machine stack before `g` runs, so "no occurrence
+    after this point" is measured in the wrong place.
+- **And the conservative direction is not free either.** Adding the increments that correctness
+  requires -- the expression case -- and then turning the moves *off* made the compiler exhaust a
+  1.9 GB heap where it used to finish in 1.02 GB.
+- **The conclusion, and it is not "try harder at the analysis".** Every one of those four is the
+  same fact: **a reference created without an increment is a hole in a whole-program invariant.**
+  Reading a field creates a reference and does not increment. That is sound today only because
+  every *onward* store does increment -- and a move is precisely the decision not to. The fix is
+  therefore not a smarter `:c::share`; it is **decrementing**, so that a reference which dies
+  gives its count back, which is what `Arc` does and what C-126 deliberately did not build:
+  *"it is never decremented, so it answers exactly one question."* The reader's 745 MB is the
+  bill for that choice, and this is the first measurement of how large it is.
+- **Class:** IMPROVE.
+- **Repro:** `./elf/out/moved.elf`; `elf/bench/out_maxrss ./elf/out/moved.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
