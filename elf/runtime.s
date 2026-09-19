@@ -18,6 +18,43 @@
 # the lengths, so the internal calls only line up if nothing is reordered.
 #
 .text
+
+flush:                           # write whatever is buffered, and empty it
+    movq (%r14), %rdx
+    testq %rdx, %rdx
+    jz 1f
+    leaq 16(%r14), %rsi
+    movq $1, %rdi
+    movq $1, %rax
+    syscall
+    movq $0, (%r14)
+1:  ret
+
+
+buf_put:                         # rsi = bytes, rdx = count
+    movq (%r14), %rax            # how much is already in the buffer
+    leaq (%rax,%rdx), %rcx
+    cmpq $4096, %rcx
+    jbe 2f
+    push %rsi
+    push %rdx
+    call flush
+    pop %rdx
+    pop %rsi
+    cmpq $4096, %rdx
+    jbe 1f
+    movq $1, %rdi                # too big for an empty buffer: write it straight out
+    movq $1, %rax
+    syscall
+    ret
+1:  xorq %rax, %rax
+2:  leaq 16(%r14), %rdi
+    addq %rax, %rdi
+    addq %rdx, (%r14)
+    movq %rdx, %rcx
+    rep movsb
+    ret
+
 # ---- r14 = [used:8][heap_limit:8][4096 bytes] ;  r15 = heap bump pointer
 #
 # The heap limit lives beside the output buffer because there is no third callee-saved register
@@ -54,74 +91,64 @@ print_i64:                       # rax = value
     leave
     ret
 
-# `str_cat_own` is `concat` where the compiler has proved the left operand is a last use -- the
-# same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
-#
-# A String is `[rc:8][len:8][bytes]` inside a block whose size is ALWAYS the next power of two
-# at or above `16 + len`. That makes the spare room derivable from the length alone, with no
-# header field to carry it, so appending in place is legal whenever the new length still fits
-# the block -- WHEREVER the string sits in the heap. The rule before this one also demanded the
-# string be the TOP of the heap, which is what a bump allocator needs to EXTEND an object; that
-# made the fast path conditional on nothing else having allocated since, which is true of a
-# microbenchmark and false of `:c::emit`. elf/bench/catx.wat is the measurement: one growing
-# accumulator 2,180 KiB, the same appends with a second one beside it 1,855,368 KiB.
-str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->  rax
-    cmpq $1, -8(%rax)            # ever stored anywhere? a literal is 0, a shared value is > 1
-    jne str_cat
-    movq %rcx, %r9               # park b: rcx is about to be a shift count
-    movq (%rax), %r8             # len a
-    movq (%r9), %r10             # len b
-    movq %r8, %r11
-    addq %r10, %r11              # the new length
-    leaq 15(%r8), %rdx           # (16 + len a) - 1
-    bsrq %rdx, %rcx
-    movq $2, %rdi
-    shlq %cl, %rdi               # 2 << bsr(n-1) is the next power of two at or above n
-    leaq 16(%r11), %rdx
-    cmpq %rdi, %rdx              # does the new length still fit a's block?
-    ja 8f
-    movq %r11, (%rax)            # it does: the new length, and the bytes straight on the end
-    leaq 8(%rax,%r8), %rdi
-    leaq 8(%r9), %rsi
-    movq %r10, %rcx
-    rep movsb
-    ret
-8:  movq %r9, %rcx               # it does not: copy into a block of the next size up
-    jmp str_cat
 
-# `str_cat(rax = a, rcx = b) -> rax`: the two lengths added, a header written at the heap top,
-# both payloads copied, r15 bumped past the whole block. The block is the next power of two at
-# or above `16 + len`, which is what gives the in-place path above room to grow into. The slack
-# is never more than the string itself, and it is what turns an append loop into O(n).
-str_cat:                         # rax = a, rcx = b  ->  rax
-    movq (%rax), %r8             # len a
-    movq (%rcx), %r9             # len b
-    leaq 8(%rax), %r10           # a's bytes
-    leaq 8(%rcx), %r11           # b's bytes
-    movq %r8, %rax
-    addq %r9, %rax               # the new length
-    leaq 15(%rax), %rdx
-    bsrq %rdx, %rcx
-    movq $2, %rdx
-    shlq %cl, %rdx               # 8 rc + 8 len + bytes, rounded up to a power of two
-    movq %r15, %rcx
-    addq %rdx, %rcx
-    cmpq 8(%r14), %rcx           # check BEFORE writing anything
-    jbe 1f
-    call oom
-1:  movq $1, (%r15)              # rc = 1
-    leaq 8(%r15), %rdx           # the pointer is the word after the rc
-    movq %rax, (%rdx)            # the new length
-    movq %rcx, %r15              # the whole block is reserved, slack included
-    leaq 8(%rdx), %rdi
-    movq %r10, %rsi
-    movq %r8, %rcx
-    rep movsb                    # a's bytes
-    movq %r11, %rsi
-    movq %r9, %rcx
-    rep movsb                    # then b's
-    movq %rdx, %rax
+print_bool:                      # rax = 0 or 1
+    push %rbp
+    movq %rsp, %rbp
+    subq $16, %rsp
+    testq %rax, %rax
+    jz 1f
+    movl $0x65757274, -8(%rbp)   # "true"
+    movb $0x0a, -4(%rbp)
+    movq $5, %rdx
+    jmp 2f
+1:  movl $0x736c6166, -8(%rbp)   # "fals"
+    movw $0x0a65, -4(%rbp)       # "e\n"
+    movq $6, %rdx
+2:  leaq -8(%rbp), %rsi
+    call buf_put
+    leave
     ret
+
+
+oom:                             # no memory left: say so on stderr rather than fault
+    call flush                   # whatever stdout had buffered is still worth having
+    subq $32, %rsp
+    movabsq $0x616568203a746177, %rax    # "wat: hea"
+    movq %rax, (%rsp)
+    movabsq $0x7375616878652070, %rax    # "p exhaus"
+    movq %rax, 8(%rsp)
+    movl $0x0a646574, %eax               # "ted\n"
+    movl %eax, 16(%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $20, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall
+
+
+die:                             # rax = String  ->  it on stderr, then exit 70
+    movq %rax, %r10
+    call flush                   # anything stdout had buffered is still worth having
+    movq (%r10), %rdx
+    leaq 8(%r10), %rsi
+    movq $2, %rdi
+    movq $1, %rax
+    syscall
+    subq $8, %rsp
+    movb $10, (%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $1, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall
+
 
 print_str:                       # rax = string, rendered as EDN
     movq %rax, %r8
@@ -180,58 +207,211 @@ print_str:                       # rax = string, rendered as EDN
     call buf_put
     ret
 
-print_bool:                      # rax = 0 or 1
+
+# `str_cat(rax = a, rcx = b) -> rax`: the two lengths added, a header written at the heap top,
+# both payloads copied, r15 bumped past the whole block. The block is the next power of two at
+# or above `16 + len`, which is what gives the in-place path above room to grow into. The slack
+# is never more than the string itself, and it is what turns an append loop into O(n).
+str_cat:                         # rax = a, rcx = b  ->  rax
+    movq (%rax), %r8             # len a
+    movq (%rcx), %r9             # len b
+    leaq 8(%rax), %r10           # a's bytes
+    leaq 8(%rcx), %r11           # b's bytes
+    movq %r8, %rax
+    addq %r9, %rax               # the new length
+    leaq 15(%rax), %rdx
+    bsrq %rdx, %rcx
+    movq $2, %rdx
+    shlq %cl, %rdx               # 8 rc + 8 len + bytes, rounded up to a power of two
+    movq %r15, %rcx
+    addq %rdx, %rcx
+    cmpq 8(%r14), %rcx           # check BEFORE writing anything
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %rdx           # the pointer is the word after the rc
+    movq %rax, (%rdx)            # the new length
+    movq %rcx, %r15              # the whole block is reserved, slack included
+    leaq 8(%rdx), %rdi
+    movq %r10, %rsi
+    movq %r8, %rcx
+    rep movsb                    # a's bytes
+    movq %r11, %rsi
+    movq %r9, %rcx
+    rep movsb                    # then b's
+    movq %rdx, %rax
+    ret
+
+
+# `str_cat_own` is `concat` where the compiler has proved the left operand is a last use -- the
+# same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
+#
+# A String is `[rc:8][len:8][bytes]` inside a block whose size is ALWAYS the next power of two
+# at or above `16 + len`. That makes the spare room derivable from the length alone, with no
+# header field to carry it, so appending in place is legal whenever the new length still fits
+# the block -- WHEREVER the string sits in the heap. The rule before this one also demanded the
+# string be the TOP of the heap, which is what a bump allocator needs to EXTEND an object; that
+# made the fast path conditional on nothing else having allocated since, which is true of a
+# microbenchmark and false of `:c::emit`. elf/bench/catx.wat is the measurement: one growing
+# accumulator 2,180 KiB, the same appends with a second one beside it 1,855,368 KiB.
+str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->  rax
+    cmpq $1, -8(%rax)            # ever stored anywhere? a literal is 0, a shared value is > 1
+    {disp32} jne str_cat        # 32-bit, so it still reaches when the layout changes
+    movq %rcx, %r9               # park b: rcx is about to be a shift count
+    movq (%rax), %r8             # len a
+    movq (%r9), %r10             # len b
+    movq %r8, %r11
+    addq %r10, %r11              # the new length
+    leaq 15(%r8), %rdx           # (16 + len a) - 1
+    bsrq %rdx, %rcx
+    movq $2, %rdi
+    shlq %cl, %rdi               # 2 << bsr(n-1) is the next power of two at or above n
+    leaq 16(%r11), %rdx
+    cmpq %rdi, %rdx              # does the new length still fit a's block?
+    ja 8f
+    movq %r11, (%rax)            # it does: the new length, and the bytes straight on the end
+    leaq 8(%rax,%r8), %rdi
+    leaq 8(%r9), %rsi
+    movq %r10, %rcx
+    rep movsb
+    ret
+8:  movq %r9, %rcx               # it does not: copy into a block of the next size up
+    {disp32} jmp str_cat
+
+
+# ---- the string verbs a reader needs. All of them work on [rc:8][len:8][bytes], so none of them
+# needs to know anything the rest of the runtime does not already know.
+
+str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a new String
+    movq %rdx, %r8
+    subq %rcx, %r8               # the new length
+    leaq 8(%rax,%rcx), %rdi      # the source bytes, taken before rcx becomes a shift count
+    leaq 15(%r8), %rdx
+    bsrq %rdx, %rcx
+    movq $2, %r9
+    shlq %cl, %r9                # 8 rc + 8 len + bytes, rounded up to a power of two
+    movq %r15, %r11
+    addq %r9, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)
+    leaq 8(%r15), %r10
+    movq %r8, (%r10)
+    movq %rdi, %rsi
+    leaq 8(%r10), %rdi
+    movq %r11, %r15
+    movq %r8, %rcx
+    rep movsb
+    movq %r10, %rax
+    ret
+
+
+i64_to_str:                      # rax = n  ->  rax = a new String
     push %rbp
     movq %rsp, %rbp
-    subq $16, %rsp
+    subq $32, %rsp
+    movq %rbp, %rsi              # digits are written backwards from here
+    xorq %r8, %r8
     testq %rax, %rax
-    jz 1f
-    movl $0x65757274, -8(%rbp)   # "true"
-    movb $0x0a, -4(%rbp)
-    movq $5, %rdx
-    jmp 2f
-1:  movl $0x736c6166, -8(%rbp)   # "fals"
-    movw $0x0a65, -4(%rbp)       # "e\n"
-    movq $6, %rdx
-2:  leaq -8(%rbp), %rsi
-    call buf_put
+    jns 1f
+    negq %rax
+    movq $1, %r8
+1:  movq $10, %rcx
+2:  xorq %rdx, %rdx
+    divq %rcx
+    addb $48, %dl
+    decq %rsi
+    movb %dl, (%rsi)
+    testq %rax, %rax
+    jnz 2b
+    testq %r8, %r8
+    jz 3f
+    decq %rsi
+    movb $45, (%rsi)
+3:  movq %rbp, %r9
+    subq %rsi, %r9               # how many characters that was
+    leaq 15(%r9), %r10
+    bsrq %r10, %rcx
+    movq $2, %r10
+    shlq %cl, %r10               # 8 rc + 8 len + bytes, rounded up to a power of two
+    movq %r15, %r11
+    addq %r10, %r11
+    cmpq 8(%r14), %r11
+    jbe 4f
+    call oom
+4:  movq $1, (%r15)
+    leaq 8(%r15), %r10
+    movq %r9, (%r10)
+    leaq 8(%r10), %rdi
+    movq %r11, %r15
+    movq %r9, %rcx
+    rep movsb
+    movq %r10, %rax
     leave
     ret
 
-buf_put:                         # rsi = bytes, rdx = count
-    movq (%r14), %rax            # how much is already in the buffer
-    leaq (%rax,%rdx), %rcx
-    cmpq $4096, %rcx
-    jbe 2f
-    push %rsi
-    push %rdx
-    call flush
-    pop %rdx
-    pop %rsi
-    cmpq $4096, %rdx
-    jbe 1f
-    movq $1, %rdi                # too big for an empty buffer: write it straight out
-    movq $1, %rax
-    syscall
+
+str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
+    movq (%rcx), %r8
+    cmpq (%rax), %r8
+    jg 9f                        # a prefix longer than the string is never one
+    leaq 8(%rax), %rsi
+    leaq 8(%rcx), %rdi
+    movq %r8, %rcx
+    testq %rcx, %rcx
+    jz 8f                        # the empty prefix always matches
+    repe cmpsb
+    jne 9f
+8:  movq $1, %rax
     ret
-1:  xorq %rax, %rax
-2:  leaq 16(%r14), %rdi
-    addq %rax, %rdi
-    addq %rdx, (%r14)
-    movq %rdx, %rcx
-    rep movsb
+9:  xorq %rax, %rax
     ret
 
-flush:                           # write whatever is buffered, and empty it
-    movq (%r14), %rdx
-    testq %rdx, %rdx
-    jz 1f
-    leaq 16(%r14), %rsi
-    movq $1, %rdi
-    movq $1, %rax
-    syscall
-    movq $0, (%r14)
-1:  ret
+
+str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
+    movq (%rax), %r8
+    movq (%rcx), %r9
+    movq %r8, %r10
+    subq %r9, %r10               # the last index worth trying
+    js 9f
+    leaq 8(%rax), %r11
+    leaq 8(%rcx), %rdx
+    xorq %rax, %rax              # the index, and then the answer
+2:  cmpq %r10, %rax
+    jg 9f
+    movq %r11, %rsi
+    addq %rax, %rsi
+    movq %rdx, %rdi
+    movq %r9, %rcx
+    testq %rcx, %rcx
+    jz 8f
+    repe cmpsb
+    je 8f
+    incq %rax
+    jmp 2b
+8:  movq $1, %rax
+    ret
+9:  xorq %rax, %rax
+    ret
+
+
+str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
+    movq (%rax), %r8
+    cmpq (%rcx), %r8             # different lengths cannot be equal
+    jne 9f
+    leaq 8(%rax), %rsi
+    leaq 8(%rcx), %rdi
+    movq %r8, %rcx
+    testq %rcx, %rcx
+    jz 8f                        # two empty strings are
+    repe cmpsb
+    jne 9f
+8:  movq $1, %rax
+    ret
+9:  xorq %rax, %rax
+    ret
+
 
 # ---- every heap object carries a reference count in the word BELOW the pointer, so that all the
 # payload offsets stay where they were: `[rc:8]` at [p-8], then [count:8] at [p], then the slots.
@@ -257,6 +437,30 @@ vec_new:                         # rax = count  ->  rax = vector, slots uninitia
     movq %r11, %r15
     movq %r10, %rax
     ret
+
+
+vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
+    movq %rcx, %r10              # the element, before rcx becomes a shift count
+    movq (%rax), %r8
+    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1), exactly
+    movq %r15, %r11
+    addq %rdx, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %r9
+    leaq 1(%r8), %rdx
+    movq %rdx, (%r9)             # new count
+    leaq 8(%r9), %rdi
+    leaq 8(%rax), %rsi
+    movq %r8, %rcx
+    rep movsq
+    movq %r10, (%rdi)            # and the new element on the end
+    movq %r11, %r15
+    movq %r9, %rax
+    ret
+
 
 # ---- Vectors come in two block shapes, and the count word below the pointer says which.
 #
@@ -340,27 +544,6 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
     movq %r10, %rax
     ret
 
-vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
-    movq %rcx, %r10              # the element, before rcx becomes a shift count
-    movq (%rax), %r8
-    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1), exactly
-    movq %r15, %r11
-    addq %rdx, %r11
-    cmpq 8(%r14), %r11
-    jbe 1f
-    call oom
-1:  movq $1, (%r15)              # rc = 1
-    leaq 8(%r15), %r9
-    leaq 1(%r8), %rdx
-    movq %rdx, (%r9)             # new count
-    leaq 8(%r9), %rdi
-    leaq 8(%rax), %rsi
-    movq %r8, %rcx
-    rep movsq
-    movq %r10, (%rdi)            # and the new element on the end
-    movq %r11, %r15
-    movq %r9, %rax
-    ret
 
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     push %rbx                    # rbx, r12 and r13 hold the caller's parameters now
@@ -386,171 +569,6 @@ slot_set:                        # rax = vector/record, rcx = index, rdx = value
     pop %rbx
     ret
 
-oom:                             # no memory left: say so on stderr rather than fault
-    call flush                   # whatever stdout had buffered is still worth having
-    subq $32, %rsp
-    movabsq $0x616568203a746177, %rax    # "wat: hea"
-    movq %rax, (%rsp)
-    movabsq $0x7375616878652070, %rax    # "p exhaus"
-    movq %rax, 8(%rsp)
-    movl $0x0a646574, %eax               # "ted\n"
-    movl %eax, 16(%rsp)
-    movq $2, %rdi
-    movq %rsp, %rsi
-    movq $20, %rdx
-    movq $1, %rax
-    syscall
-    movq $70, %rdi
-    movq $60, %rax
-    syscall
-
-# ---- the string verbs a reader needs. All of them work on [rc:8][len:8][bytes], so none of them
-# needs to know anything the rest of the runtime does not already know.
-
-str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a new String
-    movq %rdx, %r8
-    subq %rcx, %r8               # the new length
-    leaq 8(%rax,%rcx), %rdi      # the source bytes, taken before rcx becomes a shift count
-    leaq 15(%r8), %rdx
-    bsrq %rdx, %rcx
-    movq $2, %r9
-    shlq %cl, %r9                # 8 rc + 8 len + bytes, rounded up to a power of two
-    movq %r15, %r11
-    addq %r9, %r11
-    cmpq 8(%r14), %r11
-    jbe 1f
-    call oom
-1:  movq $1, (%r15)
-    leaq 8(%r15), %r10
-    movq %r8, (%r10)
-    movq %rdi, %rsi
-    leaq 8(%r10), %rdi
-    movq %r11, %r15
-    movq %r8, %rcx
-    rep movsb
-    movq %r10, %rax
-    ret
-
-str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
-    movq (%rcx), %r8
-    cmpq (%rax), %r8
-    jg 9f                        # a prefix longer than the string is never one
-    leaq 8(%rax), %rsi
-    leaq 8(%rcx), %rdi
-    movq %r8, %rcx
-    testq %rcx, %rcx
-    jz 8f                        # the empty prefix always matches
-    repe cmpsb
-    jne 9f
-8:  movq $1, %rax
-    ret
-9:  xorq %rax, %rax
-    ret
-
-str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
-    movq (%rax), %r8
-    movq (%rcx), %r9
-    movq %r8, %r10
-    subq %r9, %r10               # the last index worth trying
-    js 9f
-    leaq 8(%rax), %r11
-    leaq 8(%rcx), %rdx
-    xorq %rax, %rax              # the index, and then the answer
-2:  cmpq %r10, %rax
-    jg 9f
-    movq %r11, %rsi
-    addq %rax, %rsi
-    movq %rdx, %rdi
-    movq %r9, %rcx
-    testq %rcx, %rcx
-    jz 8f
-    repe cmpsb
-    je 8f
-    incq %rax
-    jmp 2b
-8:  movq $1, %rax
-    ret
-9:  xorq %rax, %rax
-    ret
-
-i64_to_str:                      # rax = n  ->  rax = a new String
-    push %rbp
-    movq %rsp, %rbp
-    subq $32, %rsp
-    movq %rbp, %rsi              # digits are written backwards from here
-    xorq %r8, %r8
-    testq %rax, %rax
-    jns 1f
-    negq %rax
-    movq $1, %r8
-1:  movq $10, %rcx
-2:  xorq %rdx, %rdx
-    divq %rcx
-    addb $48, %dl
-    decq %rsi
-    movb %dl, (%rsi)
-    testq %rax, %rax
-    jnz 2b
-    testq %r8, %r8
-    jz 3f
-    decq %rsi
-    movb $45, (%rsi)
-3:  movq %rbp, %r9
-    subq %rsi, %r9               # how many characters that was
-    leaq 15(%r9), %r10
-    bsrq %r10, %rcx
-    movq $2, %r10
-    shlq %cl, %r10               # 8 rc + 8 len + bytes, rounded up to a power of two
-    movq %r15, %r11
-    addq %r10, %r11
-    cmpq 8(%r14), %r11
-    jbe 4f
-    call oom
-4:  movq $1, (%r15)
-    leaq 8(%r15), %r10
-    movq %r9, (%r10)
-    leaq 8(%r10), %rdi
-    movq %r11, %r15
-    movq %r9, %rcx
-    rep movsb
-    movq %r10, %rax
-    leave
-    ret
-
-str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
-    movq (%rax), %r8
-    cmpq (%rcx), %r8             # different lengths cannot be equal
-    jne 9f
-    leaq 8(%rax), %rsi
-    leaq 8(%rcx), %rdi
-    movq %r8, %rcx
-    testq %rcx, %rcx
-    jz 8f                        # two empty strings are
-    repe cmpsb
-    jne 9f
-8:  movq $1, %rax
-    ret
-9:  xorq %rax, %rax
-    ret
-
-die:                             # rax = String  ->  it on stderr, then exit 70
-    movq %rax, %r10
-    call flush                   # anything stdout had buffered is still worth having
-    movq (%r10), %rdx
-    leaq 8(%r10), %rsi
-    movq $2, %rdi
-    movq $1, %rax
-    syscall
-    subq $8, %rsp
-    movb $10, (%rsp)
-    movq $2, %rdi
-    movq %rsp, %rsi
-    movq $1, %rdx
-    movq $1, %rax
-    syscall
-    movq $70, %rdi
-    movq $60, %rax
-    syscall
 
 # ---- the last mile: a file, as bytes.
 #
@@ -576,12 +594,14 @@ hexval:                          # rax = one ascii hex digit  ->  rax = 0..15
     subq $39, %rax               # 'a' lands on 10
 1:  ret
 
+
 hexchar:                         # rax = 0..15  ->  al = one ascii hex digit
     cmpq $10, %rax
     jb 1f
     addq $39, %rax
 1:  addq $48, %rax
     ret
+
 
 prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes written
     push %rbx
@@ -633,6 +653,7 @@ prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes writte
     pop %r12
     pop %rbx
     ret
+
 
 prim_read_hex:                   # rax = path  ->  rax = a String of hex
     push %r12
@@ -702,6 +723,7 @@ prim_read_hex:                   # rax = path  ->  rax = a String of hex
 5:  movq %r10, %rax
     pop %r12
     ret
+
 
 io_read_file:                    # rax = path  ->  rax = a String of the file's bytes
     push %r12

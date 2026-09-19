@@ -55,5 +55,17 @@ for name, body in pieces:
         changed += 1
 
 open(sys.argv[3], 'w').write(src)
-print('rt-embed: %d routines, %d bytes, %d rewritten' % (len(pieces), total, changed))
+# The prefix property the compiler relies on: elf/compile.wat carries only as much of this blob
+# as a program can reach, which is sound ONLY while every cross-routine reference points
+# backward and :c::runtime concatenates the routines in the assembled order.
+order = [n for _, n in syms]
+conc = re.search(r'\(:wat::core::defn :c::runtime \[lvl(.*?)\n\n', src, re.S)
+if not conc:
+    sys.exit('rt-embed: no :c::runtime to check the order against')
+named = re.findall(r':c::rt-([a-z0-9-]+)\)', conc.group(1))
+named = [n.replace('-', '_') for n in named]
+if named != order:
+    sys.exit('rt-embed: :c::runtime order does not match the assembled order\n  assembled: %s\n  concat:    %s'
+             % (' '.join(order), ' '.join(named)))
+print('rt-embed: %d routines, %d bytes, %d rewritten; :c::runtime order matches' % (len(pieces), total, changed))
 PY
