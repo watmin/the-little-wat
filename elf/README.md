@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 866 bytes this compiler embeds itself.
+libc, and no runtime but the 952 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -440,8 +440,41 @@ Eight bytes an element at two million — the vector and nothing else. The inter
 in *time* here (F-123) and this is linear, so at n=20,000 it is **1400× faster and 78× smaller**.
 Unlike the other benchmark wins, this one is a change of complexity class rather than a constant.
 
-**What it still does not do** is reclaim a value that simply stops being used: the count never
-falls, so there is no `free`. This buys the loop, not the general case.
+`concat` got the same treatment, and needed it more: it is the accumulator `:c::emit` is built
+out of, and it **died at 8000 appends** — a compiler that cannot append to a string eight
+thousand times cannot compile itself.
+
+| | before | after |
+| --- | --- | --- |
+| 2000 concats | 38 ms · 31,764 KiB | — |
+| 8000 concats | **heap exhausted** | — |
+| 32000 concats | **heap exhausted** | 4 ms · 968 KiB |
+
+`concat` is n-ary and folds left, so only the *first* operand came from somewhere else — every
+step after it works on a temporary this expression just made. The last-use proof is required
+once and free thereafter.
+
+### And a test that proves memory comes back
+
+Everything above shows memory is not freed too *early*. `elf/src/freed.wat` shows it is freed
+**at all**: it allocates about **650 MB — ten times the whole heap —** and completes, which it can
+only do if the space is being reused. Peak RSS is **7,880 KiB**, one round of 6.5 MB rather than
+the total.
+
+The shape defeats both optimisations on purpose. `user/copies` reads its string twice on its path,
+so it is not linear and every concat is a real 64 KB copy. `user/burn` calls it as a **discarded
+statement**, so each round is released at the boundary and the next round reuses the addresses.
+
+Compile the release out and the same program stops after its first line:
+
+```
+with the release:     65536 100 6553700 65536
+without it:           65536 wat: heap exhausted        (exit 70)
+```
+
+**What is still missing** is reclamation of a value that stops being used *mid*-statement: the
+share count never falls, so there is no per-object `free`. The next honest step is decrements and
+a free list — and the workload that would justify it is the compiler compiling itself.
 
 ### Do we need a collector?
 
@@ -609,13 +642,14 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Eleven routines, 866 bytes — the only part of the output not computed from the source, and the
+Twelve routines, 952 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
 | --- | --- | --- |
 | `print_i64` | 87 | sign handling, a divide-by-ten loop building digits backwards **on the stack** (so the segment never needs to be writable), and one `write`. Checked against a negative, a small value, zero and `i64::MAX` before it was embedded. |
-| `str_cat` | 97 | two lengths added, a header written at the heap top, two byte-at-a-time copy loops, `r15` bumped past the result. |
+| `str_cat_own` | 86 | `concat` where the compiler proved the left operand is a last use: append into the padding, bump only when it runs out. |
+| `str_cat` | 128 | two lengths added, a header written at the heap top, two byte-at-a-time copy loops, `r15` bumped past the result. |
 | `print_str` | 147 | a quote, a byte loop emitting one byte or two, a quote, a newline, one `write` — **wat's EDN escaping, in machine code**. |
 | `print_bool` | 64 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
 | `buf_put` | 70 | **the thing libc calls stdio** — a 4 KiB buffer at `r14`, one syscall per buffer instead of one per `println`. |

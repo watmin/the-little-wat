@@ -34,7 +34,7 @@ chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
-for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear; do
+for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear freed; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$("$WAT" "$src" 2>&1); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
@@ -56,6 +56,8 @@ echo "         (deep is 1000000 tail calls -- wat eliminates them and so does th
 echo "          compiler, on the same frame: C-121)"
 echo "         (linear proves BOTH halves of the in-place conj guard: remove the share"
 echo "          increment and base comes back with 4 elements instead of 3: C-127)"
+echo "         (freed allocates 650 MB -- ten heaps -- and completes, which it can only do"
+echo "          if the space is reused; without the release it dies at round ten: C-128)"
 echo
 echo "== native-only: syscalls the interpreter has no implementation of (F-119) =="
 check_native () {   # name, expected output (newline separated)
@@ -105,8 +107,8 @@ refuses elf/refuse-nonascii.wat 'not encodable' \
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- twenty native binaries, eighteen of them compiled from wat source."
-  echo "         Fourteen agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "elf-run: ok -- twenty-one native binaries, nineteen of them compiled from wat source."
+  echo "         Fifteen agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi

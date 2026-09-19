@@ -50,7 +50,27 @@ done
 echo "  Before the in-place path this was 4n^2: 63,548 KiB at n=4000 and heap exhaustion at 8000."
 
 echo
-echo "== 4. and the two proofs the in-place path needs =="
+echo "== 4. does it free at all? 650 MB allocated against a 64 MiB heap =="
+got=$(./elf/out/freed.elf 2>&1 | tr '\n' ' ')
+want="65536 100 6553700 65536 "
+if [ "$got" = "$want" ]; then
+  printf '  yes: completed, peak %s KiB -- about ONE round of 6.5 MB, not the 650 MB total\n' \
+         "$(./$RSS ./elf/out/freed.elf)"
+  echo "  (compile the statement release out and the same program stops after the first line"
+  echo "   with 'wat: heap exhausted', exit 70)"
+else
+  echo "  FAIL: freed.elf printed '$got'"; fail=1
+fi
+
+echo
+echo "== 5. the accumulators that used to be quadratic =="
+for n in 32000; do
+  printf '  concat x%-7s %7s KiB   -> %s   (was: heap exhausted at 8000)\n' "$n" \
+         "$(./$RSS ./elf/out/cat$n.elf)" "$(./elf/out/cat$n.elf 2>&1)"
+done
+
+echo
+echo "== 6. and the two proofs the in-place path needs =="
 i=$("$WAT" elf/src/linear.wat 2>&1); n=$(./elf/out/linear.elf 2>&1)
 if [ "$i" = "$n" ]; then
   echo "  linear.wat agrees. It fails loudly without EITHER half: drop the share increment and"

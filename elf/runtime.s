@@ -54,6 +54,38 @@ print_i64:                       # rax = value
     leave
     ret
 
+# `str_cat_own` is `concat` where the compiler has proved the left operand is a last use -- the
+# same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of. A String
+# is `[rc:8][len:8][bytes, padded to 8]`, so appending in place costs nothing at all while the
+# padding has room, and one bump when it does not.
+str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->  rax
+    cmpq $1, -8(%rax)            # ever stored anywhere?
+    jne str_cat
+    movq (%rax), %r8             # len a
+    leaq 7(%r8), %rdx
+    andq $-8, %rdx               # its bytes, rounded up to eight
+    leaq 8(%rax,%rdx), %r9
+    cmpq %r15, %r9               # is this object still the top of the heap?
+    jne str_cat
+    movq (%rcx), %r10            # len b
+    movq %r8, %r11
+    addq %r10, %r11              # the new length
+    leaq 7(%r11), %rdi
+    andq $-8, %rdi
+    subq %rdx, %rdi              # how many more bytes that needs, often zero
+    movq %r15, %rdx
+    addq %rdi, %rdx
+    cmpq 8(%r14), %rdx
+    jbe 1f
+    call oom
+1:  movq %rdx, %r15
+    movq %r11, (%rax)            # the new length
+    leaq 8(%rax,%r8), %rdi       # append straight after the old bytes
+    leaq 8(%rcx), %rsi
+    movq %r10, %rcx
+    rep movsb
+    ret
+
 str_cat:                         # rax = a, rcx = b  ->  rax
     movq (%rax), %r8
     movq (%rcx), %r9

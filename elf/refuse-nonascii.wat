@@ -168,7 +168,7 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Eleven routines, 866 bytes, assembled as ONE block so they can call each other -- which is why
+;; Twelve routines, 952 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -178,7 +178,17 @@
   (:wat::string::concat
     "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
     "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e855010000c9c3"))
+    "85c0740648ffcec6062d488d55ff4829f248ffc2e8ab010000c9c3"))
+
+;; `str_cat_own`, 86 bytes -- `concat` where the compiler has proved the left operand is a last
+;; use. The same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
+;; A String is `[rc:8][len:8][bytes, padded to 8]`, so appending in place costs NOTHING while the
+;; padding has room and one bump when it does not.
+(:wat::core::defn :c::rt-str-cat-own [] -> :wat::core::String
+  (:wat::string::concat
+    "488378f801754f4c8b00498d50074883e2f84c8d4c10084d39f9753a4c8b"
+    "114d89c34d01d3498d7b074883e7f84829d74c89fa4801fa493b56087605"
+    "e8c70200004989d74c89184a8d7c0008488d71084c89d1f3a4c3"))
 
 ;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
 ;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
@@ -277,7 +287,7 @@
     "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
-  (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)
+  (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
                         (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
                         (:c::rt-slot-set) (:c::rt-oom)))
@@ -288,8 +298,10 @@
 
 ;; the six entry points, at `rt`, in the order they were assembled in
 (:wat::core::defn :c::at-i64 [rt <- :wat::core::i64] -> :wat::core::i64 rt)
-(:wat::core::defn :c::at-cat [rt <- :wat::core::i64] -> :wat::core::i64
+(:wat::core::defn :c::at-cat-own [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ rt (:c::hexlen (:c::rt-print-i64))))
+(:wat::core::defn :c::at-cat [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-cat-own rt) (:c::hexlen (:c::rt-str-cat-own))))
 (:wat::core::defn :c::at-str [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-cat rt) (:c::hexlen (:c::rt-str-cat))))
 (:wat::core::defn :c::at-bool [rt <- :wat::core::i64] -> :wat::core::i64
@@ -958,7 +970,11 @@
           ((:c::concat? head)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "concat arity" a)
               (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-                env pg rt tb slot)))
+                env pg rt tb slot
+                ;; the FIRST operand came from somewhere else, so it needs the same last-use
+                ;; proof `conj` does; a non-variable operand is a temporary and always qualifies
+                (:wat::core::or (:wat::core::not= (:c::kind (:wat::core::nth ks 1)) "symbol")
+                  (:c::linear? pg (:wat::core::ast->source (:wat::core::nth ks 1)) 0)))))
           ;; one instruction answers the length of a String, a Vector and a record alike,
           ;; because all three are `[count:8][payload...]`
           ((:wat::core::or (:c::strlen? head) (:c::len? head))
@@ -1019,15 +1035,18 @@
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64
+                                own? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [o1 (:c::emit o "50")                                   ;; push rax
        o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
        o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
        o4 (:c::emit o3 "58")                                  ;; pop rax
-       o5 (:c::call o4 (:c::at-cat rt))]
-      (:c::cat-fold ks (:wat::core::+ i 1) o5 env pg rt tb slot))))
+       o5 (:c::call o4 (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))]
+      ;; after the first step the accumulator is a temporary this expression made, so nothing
+      ;; else can be holding it and every later step may extend in place
+      (:c::cat-fold ks (:wat::core::+ i 1) o5 env pg rt tb slot true))))
 
 ;; ---------------------------------------------------------------- if
 
