@@ -34,6 +34,6 @@
            "  (wat.core/if (wat.core/= x 0) nil [1 -2 \"a\\\"b\" :kw true]))\n")
      st (rd/read src)]
     (wat.core/do
-      (wat.kernel/println (wat.core/length (:rd::St/arena st)))
+      (wat.kernel/println (rd/count (:rd::St/arena st)))
       (wat.kernel/println (wat.core/length (:rd::St/kids st)))
       (rd/show-tops st 0))))

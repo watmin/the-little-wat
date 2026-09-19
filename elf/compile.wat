@@ -2655,10 +2655,10 @@
 (:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :wat::core::String text <- :wat::core::String
                               kids <- :rd::Kids] -> :c::NodeR
   (:wat::core::let [st (:c::Prog/src pg)]
-    (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
+    (:c::NodeR :node (rd/count (:rd::St/arena st))
                :pg (:wat::core::assoc pg :src
                      (:wat::core::assoc st :arena
-                       (:wat::core::conj (:rd::St/arena st)
+                       (rd/push (:rd::St/arena st)
                          (:rd::Node :kind kind :text text :kids kids)))))))
 
 (:wat::core::defn :c::fn-of [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
@@ -2988,7 +2988,7 @@
 ;; twice: the first pass answers whether the program has Strings in it at all, which is what
 ;; decides whether `=` means str_eq
 (:wat::core::defn :c::rt-level [pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::let [n (:wat::core::length (:rd::St/arena (:c::Prog/src pg)))
+  (:wat::core::let [n (rd/count (:rd::St/arena (:c::Prog/src pg)))
                     base (:c::lvl-scan pg 0 n false 0)]
     (:c::lvl-scan pg 0 n (:wat::core::>= base 6) base)))
 
