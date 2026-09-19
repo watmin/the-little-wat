@@ -9611,6 +9611,46 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `./elf/out/moved.elf`; `elf/bench/out_maxrss ./elf/out/moved.elf`.
 
 
+### C-144: the gigabyte was a data structure, not an ownership model -- 1,023,672 KiB to 142,008
+
+- **Where:** `elf/lib/reader.wat` (`:rd::Block`, `rd/push`, `rd/at`, `rd/count`, `rd/spine`),
+  `elf/compile.wat` (`:c::mknode`, `:c::rt-level`). Follows C-143 directly.
+  **`tools/bootstrap.sh` green from the interpreter -- 42 binaries byte-identical, fixpoint at
+  121,103 bytes; `tools/loop.sh`, `tools/mem.sh`, `tools/vs-c.sh` green; `elf/conform.wat`
+  agrees with wat's own reader on 16,349 nodes of `elf/compile.wat`.**
+- **C-143 closed off the compiler's side of it.** The arena's share count climbs because
+  `:c::push-args` counts every pass as a share and the count is increment-only; turning that
+  into a move needs an invariant that four separate kinds of uncounted reference break, and the
+  repair for *those* is decrements -- which need to know when a heap object dies, which a bump
+  allocator that frees by rewinding `r15` does not. That is a memory model, not a patch.
+- **So this stops asking the compiler.** wat has no positional vector update (F-104), so
+  appending to a flat Vector copies all of it: n copies of an n-element arena. A **block list**
+  makes an append copy one block plus the spine -- `b + n/b` words instead of `n` -- and b is
+  128, which is about the square root of the 16,349 nodes `elf/compile.wat` reads to. Nodes are
+  still addressed by a single index; `rd/at` divides it.
+
+  | | before | after |
+  | --- | --- | --- |
+  | reading `elf/compile.wat` | 744,952 KiB | **45,076 KiB** |
+  | the compiler compiling itself | 1,023,672 KiB | **142,008 KiB** |
+  | the same, wall clock | 310–480 ms | 288–293 ms |
+
+  **7.2x less memory and no slower** -- a gigabyte for 2,600 lines becomes 138 MB, which is
+  finally the same order as a C compiler rather than twenty times worse.
+- **What it is, said plainly: a workaround, and the right one.** `elf/src/moved.wat` still costs
+  1.5 GB, because C-143's limitation is still exactly true for any user program that threads a
+  collection through a call. We routed around it in the one place we own; we did not fix it. The
+  two findings belong together -- C-143 is why this is a data structure change and not a
+  compiler change.
+- **Two things fell out of it.** The comment over `rd/add` had claimed since C-130 that passing
+  `n` separately let the compiler extend the arena in place; it never did, and nobody had
+  measured it. And `tools/bootstrap.sh`'s seed check (C-141) earned itself: a read-only probe
+  binary left in `elf/out/compiler.elf` was caught with *"the seed ran but did not compile"*
+  rather than silently reporting a green fixpoint over stale binaries.
+- **Class:** FIX.
+- **Repro:** `tools/bootstrap.sh`; `elf/bench/out_maxrss ./elf/out/compiler.elf`; `elf/conform.wat`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
