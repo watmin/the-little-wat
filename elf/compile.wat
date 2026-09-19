@@ -1302,10 +1302,16 @@
                 (:wat::core::or (:wat::core::not= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
                   (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0)))))
           ;; one instruction answers the length of a String, a Vector and a record alike,
-          ;; because all three are `[count:8][payload...]`
+          ;; because all three are `[count:8][payload...]` -- and the type pass is REQUIRED to
+          ;; say which, rather than merely happening to know. Measured before it was demanded:
+          ;; every `length` and `nth` operand in all forty programs, this compiler's own 3,000
+          ;; lines included, already resolves. Demanding it is what lets a Vector change
+          ;; representation without a record or a String paying for the test (F-124).
           ((:wat::core::or (:c::strlen? head) (:c::len? head))
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "length arity" a pg)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "488b00")))
+              (:wat::core::if (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 1) env pg)))
+                (:c::fail "length: operand is not a String, Vector or record" a pg)
+                (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "488b00"))))
           ;; the string verbs a reader needs: `subs` alone is sixteen of the occurrences
           ;; between this compiler and compiling itself
           ((:c::subs? head)
@@ -1357,7 +1363,9 @@
                 (:c::at-rdhex rt))))
           ((:c::vector? head) (:c::vec-form ks a o env pg rt tb slot))
           ((:c::nth? head)
-            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "nth arity" a pg)
+            (:wat::core::if (:wat::core::or (:wat::core::not= (:wat::core::length ks) 3)
+                              (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 1) env pg))))
+              (:c::fail "nth: operand is not a Vector or record" a pg)
               (:wat::core::let
                 [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
