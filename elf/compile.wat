@@ -160,7 +160,7 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Twelve routines, 952 bytes, assembled as ONE block so they can call each other -- which is why
+;; Sixteen routines, 1254 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -278,11 +278,45 @@
     "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
     "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
+;; `str_subs(rax = s, rcx = from, rdx = to) -> rax`, 66 bytes: a new String of the bytes in
+;; between. Sixteen of the 117 occurrences the census counts are this one verb.
+(:wat::core::defn :c::rt-str-subs [] -> :wat::core::String
+  (:wat::string::concat
+    "4989d04929c84d8d48174983e1f84d89fb4d01cb4d3b5e087605e888ffff"
+    "ff49c707010000004d8d57084d8902498d7a08488d7408084d89df4c89c1"
+    "f3a44c89d0c3"))
+
+;; `str_starts(rax = s, rcx = prefix) -> 0 or 1`, 40 bytes, `repe cmpsb`.
+(:wat::core::defn :c::rt-str-starts [] -> :wat::core::String
+  (:wat::string::concat
+    "4c8b014c3b007f1c488d7008488d79084c89c14885c97404f3a6750848c7"
+    "c001000000c34831c0c3"))
+
+;; `str_contains(rax = s, rcx = needle) -> 0 or 1`, 68 bytes: the naive search, which is what
+;; the interpreter's is too at this size.
+(:wat::core::defn :c::rt-str-contains [] -> :wat::core::String
+  (:wat::string::concat
+    "4c8b004c8b094d89c24d29ca78324c8d5808488d51084831c04c39d07f22"
+    "4c89de4801c64889d74c89c94885c97409f3a6740548ffc0ebe148c7c001"
+    "000000c34831c0c3"))
+
+;; `i64_to_str(rax = n) -> rax`, 84 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
+;; instead of the output buffer.
+(:wat::core::defn :c::rt-i64-to-str [] -> :wat::core::String
+  (:wat::string::concat
+    "554889e54883ec204889ee4d31c04885c0790a48f7d849c7c00100000048"
+    "c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d85c07406"
+    "48ffcec6062d4989e94929f14d8d51174983e2f84d89fb4d01d34d3b5e08"
+    "7605e898feffff49c707010000004d8d57084d890a498d7a084d89df4c89"
+    "c9f3a44c89d0c9c3"))
+
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
                         (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
-                        (:c::rt-slot-set) (:c::rt-oom)))
+                        (:c::rt-slot-set) (:c::rt-oom)
+                        (:c::rt-str-subs) (:c::rt-str-starts) (:c::rt-str-contains)
+                        (:c::rt-i64-to-str)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -302,6 +336,14 @@
   (:wat::core::+ (:c::at-bool rt) (:c::hexlen (:c::rt-print-bool))))
 (:wat::core::defn :c::at-flush [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-put rt) (:c::hexlen (:c::rt-buf-put))))
+(:wat::core::defn :c::at-subs [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-oom rt) (:c::hexlen (:c::rt-oom))))
+(:wat::core::defn :c::at-starts [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-subs rt) (:c::hexlen (:c::rt-str-subs))))
+(:wat::core::defn :c::at-contains [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-starts rt) (:c::hexlen (:c::rt-str-starts))))
+(:wat::core::defn :c::at-tostr [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-contains rt) (:c::hexlen (:c::rt-str-contains))))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
 (:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
@@ -310,6 +352,8 @@
   (:wat::core::+ (:c::at-vconj-own rt) (:c::hexlen (:c::rt-vec-conj-own))))
 (:wat::core::defn :c::at-slot [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-vconj rt) (:c::hexlen (:c::rt-vec-conj))))
+(:wat::core::defn :c::at-oom [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-slot rt) (:c::hexlen (:c::rt-slot-set))))
 
 ;; ---------------------------------------------------------------- instructions
 
@@ -485,6 +529,14 @@
   (:c::is? s "wat.core/not" ":wat::core::not"))
 (:wat::core::defn :c::concat? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/concat" ":wat::string::concat"))
+(:wat::core::defn :c::subs? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/subs" ":wat::string::subs"))
+(:wat::core::defn :c::starts? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/starts-with?" ":wat::string::starts-with?"))
+(:wat::core::defn :c::contains? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/contains?" ":wat::string::contains?"))
+(:wat::core::defn :c::tostr? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.i64/to-string" ":wat::i64::to-string"))
 (:wat::core::defn :c::strlen? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/length" ":wat::string::length"))
 (:wat::core::defn :c::if? [s <- :wat::core::String] -> :wat::core::bool
@@ -714,6 +766,8 @@
             (:wat::core::let [tv (:wat::core::ast->children (:wat::core::nth ks 2))]
               (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
                 (:wat::string::concat "vec:" (:c::ty-of-node (:wat::core::nth tv 0) pg))))))
+        ((:wat::core::or (:c::subs? head) (:c::tostr? head)) "str")
+        ((:wat::core::or (:c::starts? head) (:c::contains? head)) "bool")
         ((:c::nth? head)
           (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
             (:c::elem-ty (:c::type-of (:wat::core::nth ks 1) env pg))))
@@ -972,6 +1026,26 @@
           ((:wat::core::or (:c::strlen? head) (:c::len? head))
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "length arity" a)
               (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "488b00")))
+          ;; the string verbs a reader needs: `subs` alone is sixteen of the occurrences
+          ;; between this compiler and compiling itself
+          ((:c::subs? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "subs arity" a)
+              (:wat::core::let
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                 o2 (:c::emit (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)) "50")
+                 o3 (:c::expr (:wat::core::nth ks 3) o2 env pg rt tb slot (:c::no-tail))]
+                (:c::call (:c::emit o3 (:wat::string::concat "4889c2" "59" "58")) (:c::at-subs rt)))))
+          ((:wat::core::or (:c::starts? head) (:c::contains? head))
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "string test arity" a)
+              (:wat::core::let
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
+                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+                  (:wat::core::if (:c::starts? head) (:c::at-starts rt) (:c::at-contains rt))))))
+          ((:c::tostr? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "to-string arity" a)
+              (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                (:c::at-tostr rt))))
           ((:c::vector? head) (:c::vec-form ks a o env pg rt tb slot))
           ((:c::nth? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "nth arity" a)
@@ -1146,7 +1220,12 @@
 (:wat::core::defn :c::share [a <- :wat::WatAST env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
   (:wat::core::if (:wat::core::and (:wat::core::= (:c::kind a) "symbol")
                     (:c::ptr-ty? (:c::type-of a env pg)))
-    (:c::emit o "48ff40f8")                         ;; incq [rax-8]
+    ;; **guarded, because a string LITERAL lives in the read-only segment.** Its count is zero
+    ;; by construction, which already means "never eligible for in-place" -- so skipping the
+    ;; increment costs nothing, and writing it would be a fault. `elf/src/strverbs.wat` found
+    ;; this the moment a String parameter was passed on through a recursive call: three
+    ;; segmentation faults, all of them a literal reaching a variable and then being shared.
+    (:c::emit o "488378f800740448ff40f8")          ;; cmp [rax-8],0 ; je +4 ; incq [rax-8]
     o))
 
 ;; ---------------------------------------------------------------- vectors and records
@@ -1742,6 +1821,7 @@
     (:c::compile "elf/src/memory.wat"  "elf/out/memory.elf")
     (:c::compile "elf/src/linear.wat"  "elf/out/linear.elf")
     (:c::compile "elf/src/freed.wat"   "elf/out/freed.elf")
+    (:c::compile "elf/src/strverbs.wat" "elf/out/strverbs.elf")
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/cat32000.wat"    "elf/out/cat32000.elf")

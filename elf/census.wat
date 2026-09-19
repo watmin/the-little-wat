@@ -24,6 +24,9 @@
   (:wat::core::Vector :- [:wat::core::String]
     "wat.core/defn" "wat.core/if" "wat.core/let" "wat.core/do"
     "wat.core/cond" "wat.core/and" "wat.core/or" "wat.core/not" ":wat::core::/"
+    "wat.string/subs" "wat.string/starts-with?" "wat.string/contains?" "wat.i64/to-string"
+    ":wat::string::subs" ":wat::string::starts-with?" ":wat::string::contains?"
+    ":wat::i64::to-string"
     "wat.core/nth" "wat.core/length" "wat.core/conj" "wat.core/assoc" "wat.core/Vector"
     "wat.core/defrecord" "wat.core/typealias"
     ":wat::core::nth" ":wat::core::length" ":wat::core::conj" ":wat::core::assoc"

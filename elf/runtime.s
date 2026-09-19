@@ -350,3 +350,111 @@ oom:                             # no memory left: say so on stderr rather than 
     movq $70, %rdi
     movq $60, %rax
     syscall
+
+# ---- the string verbs a reader needs. All of them work on [rc:8][len:8][bytes], so none of them
+# needs to know anything the rest of the runtime does not already know.
+
+str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a new String
+    movq %rdx, %r8
+    subq %rcx, %r8               # the new length
+    leaq 23(%r8), %r9
+    andq $-8, %r9                # 8 rc + 8 len + bytes, rounded
+    movq %r15, %r11
+    addq %r9, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq $1, (%r15)
+    leaq 8(%r15), %r10
+    movq %r8, (%r10)
+    leaq 8(%r10), %rdi
+    leaq 8(%rax,%rcx), %rsi      # the source bytes start at s + 8 + from
+    movq %r11, %r15
+    movq %r8, %rcx
+    rep movsb
+    movq %r10, %rax
+    ret
+
+str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
+    movq (%rcx), %r8
+    cmpq (%rax), %r8
+    jg 9f                        # a prefix longer than the string is never one
+    leaq 8(%rax), %rsi
+    leaq 8(%rcx), %rdi
+    movq %r8, %rcx
+    testq %rcx, %rcx
+    jz 8f                        # the empty prefix always matches
+    repe cmpsb
+    jne 9f
+8:  movq $1, %rax
+    ret
+9:  xorq %rax, %rax
+    ret
+
+str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
+    movq (%rax), %r8
+    movq (%rcx), %r9
+    movq %r8, %r10
+    subq %r9, %r10               # the last index worth trying
+    js 9f
+    leaq 8(%rax), %r11
+    leaq 8(%rcx), %rdx
+    xorq %rax, %rax              # the index, and then the answer
+2:  cmpq %r10, %rax
+    jg 9f
+    movq %r11, %rsi
+    addq %rax, %rsi
+    movq %rdx, %rdi
+    movq %r9, %rcx
+    testq %rcx, %rcx
+    jz 8f
+    repe cmpsb
+    je 8f
+    incq %rax
+    jmp 2b
+8:  movq $1, %rax
+    ret
+9:  xorq %rax, %rax
+    ret
+
+i64_to_str:                      # rax = n  ->  rax = a new String
+    push %rbp
+    movq %rsp, %rbp
+    subq $32, %rsp
+    movq %rbp, %rsi              # digits are written backwards from here
+    xorq %r8, %r8
+    testq %rax, %rax
+    jns 1f
+    negq %rax
+    movq $1, %r8
+1:  movq $10, %rcx
+2:  xorq %rdx, %rdx
+    divq %rcx
+    addb $48, %dl
+    decq %rsi
+    movb %dl, (%rsi)
+    testq %rax, %rax
+    jnz 2b
+    testq %r8, %r8
+    jz 3f
+    decq %rsi
+    movb $45, (%rsi)
+3:  movq %rbp, %r9
+    subq %rsi, %r9               # how many characters that was
+    leaq 23(%r9), %r10
+    andq $-8, %r10
+    movq %r15, %r11
+    addq %r10, %r11
+    cmpq 8(%r14), %r11
+    jbe 4f
+    call oom
+4:  movq $1, (%r15)
+    leaq 8(%r15), %r10
+    movq %r9, (%r10)
+    leaq 8(%r10), %rdi
+    movq %r11, %r15
+    movq %r9, %rcx
+    rep movsb
+    movq %r10, %rax
+    leave
+    ret

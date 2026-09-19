@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 952 bytes this compiler embeds itself.
+libc, and no runtime but the 1254 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -88,6 +88,10 @@ integer literals, negatives included, nested to any depth — and both spellings
 ```clojure
 (wat.string/concat A B ...)           ; n-ary, folded left through `str_cat`
 (wat.string/length S)                 ; a peek at the header
+(wat.string/subs S A B)               ; a new String of the bytes between
+(wat.string/starts-with? S P)         ; repe cmpsb
+(wat.string/contains? S N)            ; the naive search
+(wat.i64/to-string N)                 ; the divide-by-ten loop, into the heap
 ;; a self call in tail position becomes a jmp, not a call -- wat has TCO and so does this
 nil, true, false                      ; a machine zero, a one, a zero
 "a literal"                           ; a pointer to [len:8][bytes...] in the data tail
@@ -642,7 +646,7 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Twelve routines, 952 bytes — the only part of the output not computed from the source, and the
+Sixteen routines, 1254 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
@@ -657,6 +661,10 @@ part a C toolchain would call libc for.
 | `vec_new` | 38 | bump `r15` past a header and n slots. |
 | `vec_conj_own` | 52 | `conj` where the compiler proved the container is a last use: extend in place if the count is 1 and it is the top of the heap, else fall through. |
 | `vec_conj` | 73 | a longer copy, `rep movsq` plus the new element. |
+| `str_subs` | 66 | a new String of the bytes between two indices. |
+| `str_starts` | 40 | `repe cmpsb`. |
+| `str_contains` | 68 | the naive search. |
+| `i64_to_str` | 84 | the divide-by-ten loop, landing in the heap. |
 | `slot_set` | 66 | a copy with one slot replaced — `assoc`, for a record field and a vector index alike. |
 | `oom` | 89 | flush, `wat: heap exhausted` on stderr, exit 70. |
 
@@ -729,14 +737,14 @@ using the same `read-string` walk the compiler uses.
 ```
 $ wat elf/census.wat
   rank  count  form
-  1   28       :wat::core::ast->source
-  2   17       :wat::core::ast->children
-  3   16       :wat::string::subs
-  4   7        :wat::kernel::assertion-failed!
-  5   5        :wat::string::contains?
-  6   5        :wat::test::assert-eq
+  1   33       :wat::core::ast->source
+  2   21       :wat::core::ast->children
+  3   7        :wat::kernel::assertion-failed!
+  4   5        :wat::test::assert-eq
+  5   4        int
+  6   3        :wat::core::match
   ...
-  26 distinct forms, 106 occurrences -- that is the distance to self-hosting
+  22 distinct forms, 89 occurrences -- that is the distance to self-hosting
 ```
 
 The first count was **56 forms, 297 occurrences**. What the table said to build first was not
