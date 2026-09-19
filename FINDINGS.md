@@ -10009,6 +10009,50 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `objdump -b binary -m i386:x86-64 -D elf/out/fib32.elf`; `tools/bootstrap.sh`.
 
 
+### F-126 / C-150: `idiv` faults rather than flagging, and two places needed a magnitude i64 has not got
+
+- **Where:** `elf/runtime.s` (`divzero`, `i64_quot`, `i64_rem`), `elf/compile.wat`
+  (`:c::arith-emit`, `:c::to-int`, `:c::neg-digits-val`), `elf/lib/asm.wat` (`:asm::le-neg`),
+  `elf/src/extremes.wat`, `elf/bad/divzero.wat`, `tools/elf-run.sh`. Closes the part of F-125
+  that C-148 left open. **`tools/bootstrap.sh` green from the interpreter, fixpoint at 136,134
+  bytes; `loop`, `mem`, `vs-c`, `elf-run` green.**
+- **A division did not diverge quietly — it crashed.** `(quot 1 0)` compiled to a bare `idiv`
+  took **SIGFPE: core dumped, exit 136**, with nothing printed, where the interpreter answers
+  `DivisionByZero: division by zero` and stops. C-148 could use `jo` because `add` *flags*
+  overflow; `idiv` **faults**, so the divisor has to be tested before the instruction runs
+  rather than after.
+- **The two faults, and the two answers.** Zero divisor → `divzero`, which flushes what stdout
+  had buffered and names the fault. `MIN / -1` → **`neg rax; jo ovf`**: `a / -1` *is* `-a`, and
+  it overflows in exactly the same place, so the one case `idiv` cannot do is an instruction
+  that already reports it. `rem` by `-1` is `xor rax, rax` — zero for every dividend, including
+  the one `quot` must refuse. They are **routines, not inline guards**: a division is rare and
+  seven instructions at every site is not.
+- **Then trapping arithmetic found two more, both wrong since C-116 and both hidden by wrapping.**
+  - **`:c::to-int` refused `-9223372036854775808`** — a literal wat accepts and prints. It parsed
+    as `0 - digits-val("9223372036854775808")`, and that magnitude is 2^63. Before C-148 it
+    wrapped **twice** and arrived at the right answer by luck; when arithmetic stopped wrapping,
+    the luck became **a valid program the compiler refused**. Negative literals accumulate
+    negatively now, reaching the bound without ever exceeding it.
+  - **`:asm::le` encoded that same value wrongly**, for the same reason — it negated to get a
+    magnitude to complement. **The compiler's own read-back check is what caught it**: it wrote
+    the binary, read the file back, and the bytes disagreed. It steps with floor division now
+    (wat's `rem` takes the sign of its dividend, so a negative byte borrows from the next step),
+    and never holds a value the range cannot represent. Verified byte for byte against Python's
+    two's complement for `-1`, `-7`, `-256`, MIN and a positive.
+- **One fact underneath both: i64's range is ASYMMETRIC.** There is a `-9223372036854775808` and
+  no `+9223372036854775808`, so **any code that reaches a negative by negating its magnitude is
+  wrong at exactly one input** — and both places that did it were invisible for as long as
+  arithmetic wrapped. That is the same shape as F-125 itself: the defect was always there, and
+  what was missing was anything that would ask.
+- **The tests, which is where this belongs.** `elf/src/extremes.wat` pins thirteen values both
+  ways — both literals, arithmetic reaching the edge without crossing it, truncation toward zero
+  on mixed signs, `quot MIN 2`, `rem MIN -1`, `quot MIN 1`. The two that genuinely stop cannot
+  live in a differential that compares output, so `elf/bad/divzero.wat` joins
+  `elf/bad/overflow.wat` and the harness checks that both sides stop and agree on why.
+- **Class:** FIX.
+- **Repro:** `tools/elf-run.sh`; `./elf/out/extremes.elf`; `./elf/out/divzero.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

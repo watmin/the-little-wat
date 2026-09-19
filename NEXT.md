@@ -16,10 +16,11 @@ measurement lives, and why it was not done at the time.
 
 **Correctness first — these are defects, not improvements.**
 
-1. **`quot` and `rem` do not trap** (F-125/C-148). `+`, `-` and `*` now carry `jo` to the
-   overflow handler; `idiv` FAULTS on `MIN / -1` rather than setting a flag, so it needs a
-   different mechanism — a signal handler or a guard before the divide. The interpreter traps;
-   we do not. Same class as the bug C-148 fixed, and the only part of it left open.
+1. ~~**`quot` and `rem` do not trap**~~ **DONE 2026-09-19, F-126/C-150.** `+`, `-` and `*` now carry `jo` to the
+   overflow handler; Guarded routines now test the divisor before the
+   instruction. It turned up two more of its own: `:c::to-int` and `:asm::le` both reached a
+   negative by negating its magnitude, which is wrong at exactly one input, since i64's range is
+   asymmetric.
 2. **`:c::cat-fold`'s `own?` rule treats any non-symbol operand as a temporary** (flagged in
    C-140, twice). That is false for a field read like `(:c::Out/tail o)` — the container still
    points at it. It has not bitten because the shapes that would expose it do not occur in the
