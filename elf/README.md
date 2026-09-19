@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 360 bytes this compiler embeds itself.
+libc, and no runtime but the 435 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -69,6 +69,7 @@ integer literals, negatives included, nested to any depth — and both spellings
 ```clojure
 (wat.string/concat A B ...)           ; n-ary, folded left through `str_cat`
 (wat.string/length S)                 ; a peek at the header
+nil, true, false                      ; a machine zero, a one, a zero
 "a literal"                           ; a pointer to [len:8][bytes...] in the data tail
 ```
 
@@ -187,6 +188,65 @@ functions, a `let`, and arithmetic wide enough to need 64 bits.
 
 659 bytes of native code; prints `6765`, `1307674368000`, `175`; agrees with the interpreter.
 
+## Why a bump allocator can free
+
+It leaks, and for a while that did not matter: every compiled program was short and the heap is a
+megabyte. `elf/src/churn.wat` is the program that does not get away with it — a 32-byte string
+allocated per level, its length taken, the string thrown away, fifty thousand levels. That is
+2.4 MB against a 1 MiB heap. The interpreter printed `50000`; the binary died with
+**`Segmentation fault`, exit 139**.
+
+The fix is eight bytes per statement. A sequence's last form is its value; every form *before* it
+has its value discarded, so whatever it allocated is garbage the instant it finishes — and with a
+bump allocator, freeing all of it is putting the pointer back:
+
+```
+push r15 ; push r15        mark   (twice, to keep the frame 16-byte aligned)
+<the statement>
+pop  r15 ; pop  r15        release
+```
+
+The marks live on the stack, so it nests with no bookkeeping at all.
+
+**Why that is sound** is the interesting half. The release is safe only if nothing outliving the
+statement can hold a pointer into what it allocated, and in this language there are exactly two
+ways to store a pointer: a `let` slot — written inside the statement, and out of scope when it
+ends, because `let` does not carry its environment back out past its body — and **`poke`**, which
+can hand an address to anyone. So a statement containing a `poke` anywhere inside it is not
+released. The test is a substring of the statement's own source, which is crude in the direction
+that costs nothing: a false positive only declines to free memory.
+
+A returned value is never released, because the final form is never marked. That is what keeps
+`(defn f [] :- wat.type/String (wat.string/concat ...))` working.
+
+**And where it stops.** Anything whose allocation *escapes upward* still accumulates —
+`(user/stars 40 "")` in `strings.wat` is the deliberate example, since each level's result is the
+next level's argument and every intermediate string is live until the outermost one is. Scope
+cannot free those. Reachability can. The next step in the same direction is a caller-side release
+after every call whose return type is not a pointer, sound for the same reason one level up;
+after that it is a collector, which is a different program.
+
+### Scope of a name is not lifetime of a value
+
+`elf/src/shadow.wat`:
+
+```clojure
+(wat.core/defn u/fn [x :- wat.type/String] :- wat.type/String
+  (wat.core/do
+    (wat.core/let [x "useless"] nil)
+    x))
+```
+
+`"not-useless"`. The compiler gets that right by not carrying the `let`'s environment past its
+body — one line, and the whole of lexical scope. It is also the case where scope-based freeing
+has nothing to do: the shadowed binding is a **literal**, which lives in the read-only data tail
+and was never on the heap.
+
+That file also pins down four printable types, because three of them would otherwise diverge in
+silence: `(println (> 3 2))` is `true` and not `1`, and `(println nil)` is `nil` and not `0`. The
+type pass is the only thing that knows, so `println` dispatches on all four and `elf/src` has a
+program for each.
+
 ## Two negative tests
 
 `elf/bad/unsupported.wat` is refused for a **form** the compiler has no translation for;
@@ -255,7 +315,7 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Three routines, 360 bytes — the only part of the output not computed from the source, and the
+Four routines, 435 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
@@ -263,6 +323,7 @@ part a C toolchain would call libc for.
 | `print_i64` | 105 | sign handling, a divide-by-ten loop building digits backwards **on the stack** (so the segment never needs to be writable), and one `write`. Checked against a negative, a small value, zero and `i64::MAX` before it was embedded. |
 | `str_cat` | 97 | two lengths added, a header written at the heap top, two byte-at-a-time copy loops, `r15` bumped past the result. |
 | `print_str` | 158 | a quote, a byte loop emitting one byte or two, a quote, a newline, one `write` — **wat's EDN escaping, in machine code**. |
+| `print_bool` | 75 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
 
 `print_i64` was hand-assembled. `str_cat` and `print_str` were hand-encoded too, and then checked
 against `as` and `objdump` byte for byte before being embedded — 97 bytes and 158 bytes, both

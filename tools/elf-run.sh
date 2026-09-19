@@ -34,7 +34,7 @@ chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
-for name in four arith greet branch fib bench strings; do
+for name in four arith greet branch fib bench strings shadow churn; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$("$WAT" "$src" 2>&1); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
@@ -48,6 +48,10 @@ for name in four arith greet branch fib bench strings; do
   fi
 done
 
+# churn allocates 2.4 MB out of a 1 MiB heap and gives all of it back; before the compiler
+# learned to release at statement boundaries it died here with a segmentation fault.
+echo "         (churn allocates 2.4 MB against a 1 MiB heap -- it only agrees because the"
+echo "          compiler releases what a discarded statement allocated: C-120)"
 echo
 echo "== native-only: syscalls the interpreter has no implementation of (F-119) =="
 check_native () {   # name, expected output (newline separated)
@@ -97,8 +101,8 @@ refuses elf/refuse-nonascii.wat 'not encodable' \
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- twelve native binaries, ten of them compiled from wat source."
-  echo "         Seven agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "elf-run: ok -- fourteen native binaries, twelve of them compiled from wat source."
+  echo "         Nine agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi

@@ -29,6 +29,7 @@
 ;;   (wat.core/< > <= >= = not=)           cmp + setcc + movzx, so a bool is 0 or 1 in rax
 ;;   (wat.string/concat A B ...)           n-ary, folded left through `str_cat`
 ;;   (wat.string/length S)                 a peek at the string's header
+;;   nil, true, false                      a machine zero, a one and a zero
 ;;   integer literals, negatives included, nested to any depth
 ;;   string literals, as VALUES: a pointer to [len:8][bytes...] in the data tail
 ;;
@@ -111,7 +112,7 @@
 ;;
 ;; ## The runtime
 ;;
-;; Three routines, 360 bytes, the only part of the output not computed from the source, and the
+;; Four routines, 435 bytes, the only part of the output not computed from the source, and the
 ;; part a C toolchain would call libc for:
 ;;
 ;;   `print_i64`  105 bytes   sign handling, a divide-by-ten loop building digits backwards on
@@ -120,6 +121,7 @@
 ;;   `str_cat`     97 bytes   two lengths added, a header written at the heap top, two copy
 ;;                            loops, r15 bumped.
 ;;   `print_str`  158 bytes   wat's EDN escaping, in machine code.
+;;   `print_bool`  75 bytes   `true` and `false` built on the stack, so it needs no relocation.
 ;;
 ;; That last one is the interesting one. `println` renders a String as EDN, so agreeing with the
 ;; interpreter means reproducing its escaping exactly -- and every escape in it was found by
@@ -187,8 +189,18 @@
     "c6072248ffc7c6070a48ffc74889fa4c29d24c89d648c7c70100000048c7"
     "c0010000000f05c3"))
 
+;; `print_bool(rax)`, 75 bytes. `true` and `false` are built on the stack a word at a time --
+;; "true" is one `mov` of 0x65757274 and a newline byte -- so this routine needs no data section
+;; and no relocation, the same trick `print_i64` uses for its digit buffer.
+(:wat::core::defn :c::rt-print-bool [] -> :wat::core::String
+  (:wat::string::concat
+    "554889e54883ec104885c07414c745f874727565c645fc0a48c7c205000000"
+    "eb14c745f866616c7366c745fc650a48c7c206000000488d75f848c7c00100"
+    "000048c7c7010000000f05c9c3"))
+
 (:wat::core::defn :c::runtime [] -> :wat::core::String
-  (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)))
+  (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)
+                        (:c::rt-print-bool)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -200,6 +212,8 @@
   (:wat::core::+ rt (:c::hexlen (:c::rt-print-i64))))
 (:wat::core::defn :c::at-str [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-cat rt) (:c::hexlen (:c::rt-str-cat))))
+(:wat::core::defn :c::at-bool [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-str rt) (:c::hexlen (:c::rt-print-str))))
 
 ;; ---------------------------------------------------------------- instructions
 
@@ -427,13 +441,22 @@
   (:wat::core::let [src (:wat::core::ast->source a)]
     (:wat::core::cond
       ((:wat::string::contains? src "String") "str")
+      ((:wat::string::contains? src "bool") "bool")
       ((:wat::string::contains? src "nil") "nil")
       (:else "i64"))))
+
+;; a comparison answers a bool; everything else `:c::binop` names answers a machine word
+(:wat::core::defn :c::cmp? [op <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= op "<") (:wat::core::= op ">")
+    (:wat::core::or (:wat::core::= op "<=") (:wat::core::= op ">=")
+      (:wat::core::or (:wat::core::= op "=") (:wat::core::= op "not=")))))
 
 (:wat::core::defn :c::type-of [a <- :wat::WatAST env <- :c::Env fns <- :c::Fns] -> :wat::core::String
   (:wat::core::let [k (:c::kind a)]
     (:wat::core::cond
       ((:wat::core::= k "string") "str")
+      ((:wat::core::= k "nil") "nil")
+      ((:wat::core::= k "bool") "bool")
       ((:wat::core::= k "symbol") (:c::lookup-ty env (:wat::core::ast->source a)
                                     (:wat::core::- (:wat::core::length env) 1)))
       ((:wat::core::= k "list") (:c::type-of-form (:wat::core::ast->children a) env fns))
@@ -453,6 +476,7 @@
         ((:c::let? head)
           (:c::type-of last
             (:c::ty-bind (:wat::core::ast->children (:wat::core::nth ks 1)) 0 env fns) fns))
+        ((:c::cmp? (:c::binop head)) "bool")
         ((:wat::core::>= (:c::fn-addr fns head 0) 0) (:c::fn-ret fns head 0))
         (:else "i64")))))
 
@@ -544,6 +568,12 @@
       ((:wat::core::= k "symbol")
         (:wat::core::let [d (:c::lookup env (:wat::core::ast->source a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::if (:wat::core::= d 999999) (:c::fail "name" a) (:c::emit o (:c::load d)))))
+      ;; nil is a machine zero and a bool is 0 or 1, which is already what a comparison leaves
+      ;; in rax -- so both are literals, and only `println` has to know which is which
+      ((:wat::core::= k "nil") (:c::emit o (:c::mov-rax 0)))
+      ((:wat::core::= k "bool")
+        (:c::emit o (:c::mov-rax
+          (:wat::core::if (:wat::core::= (:wat::core::ast->source a) "true") 1 0))))
       ((:wat::core::= k "string") (:c::str-lit a o tb))
       ((:wat::core::= k "list") (:c::form a o env fns rt tb slot))
       (:else (:c::fail "expression" a)))))
@@ -700,25 +730,90 @@
           ;; the bindings go out of scope with the body, so the env is not carried back out
           (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r) fns rt tb (:c::BindR/slot r)))))))
 
-;; a sequence of forms; the last one's value is the value of the whole
+;; ---------------------------------------------------------------- sequences, and the heap
+;;
+;; ## Why a bump allocator can free
+;;
+;; A sequence's last form is its value; every form BEFORE it has its value thrown away. So
+;; whatever a non-final form allocated is garbage the instant it finishes -- and with a bump
+;; allocator, freeing all of it is one instruction: put r15 back where it was.
+;;
+;;   push r15 ; push r15        mark
+;;   <the statement>
+;;   pop r15 ; pop r15          release
+;;
+;; Twice, because the frame is kept 16-byte aligned and one push would tip it. Eight bytes of
+;; code per statement, and it nests without any bookkeeping, because the marks live on the stack.
+;;
+;; ## Why this is sound, and exactly where it stops
+;;
+;; The release is only safe if nothing that outlives the statement can be holding a pointer into
+;; what it allocated. In this language there are exactly two ways a pointer can be stored:
+;;
+;;   * a `let` slot -- written inside the statement, and out of scope when it ends, because
+;;     `:c::let-form` does not carry its environment back out past its body. Safe.
+;;   * `poke` -- an arbitrary address, which the statement can hand to anyone. NOT safe.
+;;
+;; So a statement containing a `poke` anywhere inside it is not released. The test is a substring
+;; of the statement's own source, which is crude in the direction that costs nothing: a false
+;; positive only declines to free memory.
+;;
+;; A returned value is never released, because the final form is never marked -- which is what
+;; makes `(defn f [] :- wat.type/String (wat.string/concat ...))` keep working.
+;;
+;; ## What it does not do
+;;
+;; Anything whose allocation ESCAPES upward still accumulates, and `(user/stars 40 "")` in
+;; elf/src/strings.wat is a deliberate example: each level's result is the next level's argument,
+;; so every intermediate string is live until the outermost one is. Freeing those needs
+;; reachability, not scope -- a collector, or a caller-side release at every call whose return
+;; type is not a pointer. The second is the next thing to build and is the same idea one level
+;; up; the first is a different program.
+
+(:wat::core::defn :c::releasable? [a <- :wat::WatAST] -> :wat::core::bool
+  (:wat::core::not (:wat::string::contains? (:wat::core::ast->source a) "poke")))
+
+;; a sequence of forms; the last one's value is the value of the whole, and every form before it
+;; gives its allocations back
 (:wat::core::defn :c::seq [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env fns <- :c::Fns
                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
-    (:c::seq ks (:wat::core::+ i 1) (:c::expr (:wat::core::nth ks i) o env fns rt tb slot)
-      env fns rt tb slot)))
+    (:wat::core::let
+      [a (:wat::core::nth ks i)
+       drop? (:wat::core::and (:wat::core::< i (:wat::core::- (:wat::core::length ks) 1))
+                              (:c::releasable? a))
+       o1 (:wat::core::if drop? (:c::emit o "41574157") o)
+       o2 (:c::expr a o1 env fns rt tb slot)
+       o3 (:wat::core::if drop? (:c::emit o2 "415f415f") o2)]
+      (:c::seq ks (:wat::core::+ i 1) o3 env fns rt tb slot))))
 
 ;; ---------------------------------------------------------------- println
 
 (:wat::core::defn :c::print-form [ks <- :c::Kids a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
                                   rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "println arity" a)
-    (:wat::core::let [arg (:wat::core::nth ks 1)]
+    (:wat::core::let [arg (:wat::core::nth ks 1)
+                      ty (:c::type-of arg env fns)]
       (:wat::core::cond
         ;; a literal is its own EDN rendering, so it goes out as bytes with no runtime at all
         ((:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb))
-        ((:wat::core::= (:c::type-of arg env fns) "str")
-          (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-str rt)))
+        ((:wat::core::= ty "str") (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-str rt)))
+        ;; `(println (> 3 2))` prints `true`, not `1`. The type pass is the only thing standing
+        ;; between the compiler and a SILENT disagreement with the interpreter here, which is why
+        ;; every one of these four paths has a program in elf/src that exercises it.
+        ((:wat::core::= ty "bool") (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-bool rt)))
+        ((:wat::core::= ty "nil") (:c::print-nil (:c::expr arg o env fns rt tb slot)))
         (:else (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-i64 rt)))))))
+
+;; nil renders as four bytes and never varies, so it is written straight out of the stack rather
+;; than costing the output a runtime routine: `mov dword [rsp], "nil\n"` and one write.
+(:wat::core::defn :c::print-nil [o <- :c::Out] -> :c::Out
+  (:c::emit o (:wat::string::concat
+    (:c::sub-rsp 16)
+    "c704246e696c0a"                                   ;; mov dword [rsp], 0x0a6c696e
+    (:wat::string::concat "4889e6" (:c::mov-rdx 4))     ;; rsi = rsp ; rdx = 4
+    (:wat::string::concat (:c::mov-rax 1) (:c::mov-rdi 1) "0f05")
+    (:c::add-rsp 16))))
 
 ;; `:wat::kernel::println` renders a String as EDN -- `(println "a\nb")` writes `"a\nb"` and a
 ;; newline, quotes kept and the escape NOT expanded -- so the faithful compilation of a string
@@ -924,6 +1019,8 @@
     (:c::compile "elf/src/fib.wat"    "elf/out/fib.elf")
     (:c::compile "elf/src/bench.wat"  "elf/out/bench.elf")
     (:c::compile "elf/src/strings.wat" "elf/out/strings.elf")
+    (:c::compile "elf/src/shadow.wat"  "elf/out/shadow.elf")
+    (:c::compile "elf/src/churn.wat"   "elf/out/churn.elf")
     (:c::compile "elf/native/fork.wat"     "elf/out/fork.elf")
     (:c::compile "elf/native/thread.wat"   "elf/out/thread.elf")
     (:c::compile "elf/native/threads4.wat" "elf/out/threads4.elf")
