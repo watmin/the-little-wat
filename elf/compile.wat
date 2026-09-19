@@ -842,6 +842,10 @@
   (:wat::core::cond ((:wat::core::= r 0) "53") ((:wat::core::= r 1) "4154") (:else "4155")))
 (:wat::core::defn :c::reg-pop [r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond ((:wat::core::= r 0) "5b") ((:wat::core::= r 1) "415c") (:else "415d")))
+;; `mov <reg>, rax` -- a `let` binding landing in a register instead of a frame slot
+(:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4") (:else "4989c5")))
+
 (:wat::core::defn :c::reg-load [r <- :wat::core::i64 d <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= r 0) (:c::rbp-at "488b5d" "488b9d" d))
@@ -908,6 +912,11 @@
   [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
    linear <- (:wat::core::Vector :- [:wat::core::String])
    pokers <- (:wat::core::Vector :- [:wat::core::String])
+   ;; the callee-saved registers this function hands to `let`: how many, and the first index
+   ;; a parameter has not already taken (C-136). Per-function, so it rides here rather than
+   ;; threading a new argument through every expression form.
+   nlr <- :wat::core::i64
+   regbase <- :wat::core::i64
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -944,6 +953,7 @@
             :aliases (:wat::core::Vector :- [:c::Alias])
             :linear (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
+            :nlr 0 :regbase 0
             :src (rd/read "")))
 
 (:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
@@ -2126,10 +2136,12 @@
        o1 (:c::share (:wat::core::nth bs (:wat::core::+ i 1)) env pg
             (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env pg rt tb slot (:c::no-tail)))
        disp (:wat::core::* -8 (:wat::core::+ slot 1))
-       o2 (:c::emit o1 (:c::store disp))]
+       r (:wat::core::if (:wat::core::< slot (:c::Prog/nlr pg))
+           (:wat::core::+ (:c::Prog/regbase pg) slot) -1)
+       o2 (:c::emit o1 (:wat::core::if (:wat::core::>= r 0) (:c::reg-mov-from r) (:c::store disp)))]
       (:c::bind-each bs (:wat::core::+ i 2) o2
         (:wat::core::conj env
-          (:c::Bind :name name :disp disp :reg -1
+          (:c::Bind :name name :disp disp :reg r
                     :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env pg)))
         pg rt tb (:wat::core::+ slot 1)))))
 
@@ -2485,6 +2497,13 @@
      env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs?)
      start (:c::body-start ks 3 pg)
      slots (:c::slots-body ks start 0 pg)
+     ;; **the registers a parameter did not take, `let` can have.** C-142's inlining turns every
+     ;; inlined call into a `let`, and each of those bindings was round-tripping through a frame
+     ;; slot -- a store and a load per read -- where gcc keeps the value in a register. Excluded
+     ;; for a function that clones, for C-136's reason exactly: the child inherits the frame, so
+     ;; a value moved out of it is a value the child cannot see.
+     nlr (:wat::core::if (:c::has-clone? node pg) 0
+           (:c::imin (:wat::core::- (:c::nregs) nr) slots))
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
@@ -2493,7 +2512,8 @@
      ;; the parameters into them. The saves come AFTER the frame so that a `let` slot at
      ;; [rbp-8k] does not land on a saved register.
      o1 (:c::emit o0 (:wat::string::concat "55" "4889e5" (:c::sub-rsp frame)
-                       (:c::reg-saves 0 nr "") (:c::reg-loads pv 0 n nr pg "")))
+                       (:c::reg-saves 0 (:wat::core::+ nr nlr) "")
+                       (:c::reg-loads pv 0 n nr pg "")))
      ;; the top of the body is wherever the prologue ended -- which is NOT a constant any more,
      ;; now that `sub rsp` is one byte of displacement when it fits and nothing at all when the
      ;; frame is empty. It used to be hardcoded as eleven, and the first build after the short
@@ -2506,14 +2526,16 @@
      ;; overwrote `i` while four children were still reading it, and the answer fell from 1000
      ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
      ;; break invariants the rest of the compiler is entitled to assume about wat.
-     pg (:wat::core::assoc pg :linear (:c::linear-of pv 0 ks start
+     pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc pg :nlr nlr) :regbase nr)
+                           :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
      tc (:wat::core::if (:c::has-clone? node pg)
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
                   :target (:wat::core::+ base (:c::codelen o1))))
      o2 (:c::seq ks start o1 env pg rt tb 0 tc)]
-    (:c::emit o2 (:wat::string::concat (:c::reg-restores (:wat::core::- nr 1) "") "c9c3"))))
+    (:c::emit o2 (:wat::string::concat
+      (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "") "c9c3"))))
 
 ;; ---------------------------------------------------------------- the driver
 ;;
