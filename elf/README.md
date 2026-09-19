@@ -746,6 +746,22 @@ A wat program, compiled to a 96,793-byte static ELF by a compiler written in wat
 same compiler to the same 96,793 bytes. 235 functions, 73,736 bytes of code, 20,878 of data, no
 libc and no interpreter.
 
+### Iterating on it
+
+`tools/loop.sh` is the edit-test cycle, and it is **4.1 seconds**:
+
+```
+tools/bootstrap.sh --fast     the compiler already built compiles the new source to stage 2,
+                              stage 2 compiles it again to stage 3, and stage 2 == stage 3
+SKIP_BUILD=1 tools/elf-run.sh every program in elf/src/ both ways, against a cached oracle
+```
+
+Stage 2 differing from the *seed* is expected — that is what a change to the code generator
+means. Stage 2 differing from stage 3 is the bug. Run `tools/bootstrap.sh` without `--fast`
+before committing: only that proves the chain still starts from source a human can read.
+
+It used to be three to five minutes, and 99% of that was the interpreter.
+
 ### The two bugs that only this could find
 
 **`syscall` destroys `rcx` and `r11`** — the instruction uses them to save `rip` and `rflags`.

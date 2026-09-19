@@ -17,8 +17,11 @@ WAT="${WAT:-../wat-rs/target/release/wat}"
 [ -x "$WAT" ] || { echo "elf-run: no wat binary at $WAT"; exit 2; }
 fail=0
 
+# SKIP_BUILD=1 uses whatever is already in elf/out/ instead of rebuilding it through the
+# interpreter. tools/bootstrap.sh --fast sets it, because it has just built everything with a
+# compiled compiler and rebuilding the same bytes at 150x the cost proves nothing.
 echo "== hand-written: elf/hello.wat =="
-"$WAT" elf/hello.wat || exit 1
+if [ -z "${SKIP_BUILD:-}" ]; then "$WAT" elf/hello.wat || exit 1; fi
 chmod +x elf/out/hello.elf elf/out/exit42.elf
 out=$(./elf/out/hello.elf); rc=$?
 [ "$out" = "hello from wat" ] && [ $rc -eq 0 ] || { echo "FAIL hello.elf: '$out' exit $rc"; fail=1; }
@@ -29,14 +32,30 @@ echo "exit42.elf  exited $rc, which wat computed as 6 * 7"
 
 echo
 echo "== compiled from wat source: elf/compile.wat =="
-"$WAT" elf/compile.wat || exit 1
+if [ -z "${SKIP_BUILD:-}" ]; then "$WAT" elf/compile.wat || exit 1; fi
 chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
+# The interpreter's answer depends only on the source and on which wat binary is asking, so it
+# is cached. A change to the COMPILER -- which is most changes -- then costs no interpreter runs
+# at all, and the suite goes from thirty-odd seconds to about one.
+ORACLE="elf/out/.oracle"; mkdir -p "$ORACLE"
+WATID=$(stat -c%s,%Y "$WAT" 2>/dev/null | tr ',' '-')
+oracle () {   # source path -> its output on stdout, its exit status as the return
+  local src="$1" key out
+  key="$ORACLE/$(basename "$src" .wat).$(sha256sum "$src" | cut -c1-16).$WATID"
+  if [ -f "$key" ]; then
+    tail -n +2 "$key"; return "$(head -1 "$key")"
+  fi
+  out=$("$WAT" "$src" 2>&1); local rc=$?
+  { echo "$rc"; printf '%s\n' "$out"; } > "$key"
+  printf '%s\n' "$out"; return $rc
+}
+
 for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear freed strverbs reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
-  interp=$("$WAT" "$src" 2>&1); irc=$?
+  interp=$(oracle "$src"); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
   if [ "$interp" = "$native" ] && [ $irc -eq $nrc ]; then
     printf '%-8s agree (exit %d, %4s bytes native)  %s\n' "$name" "$nrc" "$(stat -c%s "$bin")" \
@@ -79,11 +98,15 @@ check_native thread   "$(printf '11\n22')"
 check_native threads4 "1000"
 
 echo
+# a measurement, not a test, and the interpreted half of it is four seconds -- which is most of
+# what tools/loop.sh would otherwise pay per iteration
+if [ -z "${SKIP_BUILD:-}" ]; then
 echo "== what compiling is worth: fib(27), the same source both ways =="
 s=$(date +%s%N); "$WAT" elf/src/bench.wat >/dev/null 2>&1; i=$(( ($(date +%s%N)-s)/1000000 ))
 s=$(date +%s%N); ./elf/out/bench.elf  >/dev/null 2>&1; n=$(( ($(date +%s%N)-s)/1000000 ))
 [ "$n" -lt 1 ] && n=1
 printf 'interpreted %5s ms    native %3s ms    %sx\n' "$i" "$n" "$(( i / n ))"
+fi
 
 echo
 echo "== and the compiler refuses what it cannot translate =="

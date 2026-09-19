@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# tools/bootstrap.sh: the compiler compiles itself, and the result compiles itself again.
+# tools/bootstrap.sh [--fast]: the compiler compiles itself, and the result compiles itself again.
+#
+# --fast seeds the chain from the compiler binary already in elf/out/ instead of from the
+# interpreter, which is the whole point of having bootstrapped: stage 0 through `wat` is 65-85 s
+# and the compiled compiler does the same work in half a second. After a change to
+# elf/compile.wat the old binary compiles the new source to stage 2, stage 2 compiles it again to
+# stage 3, and **stage 2 == stage 3 is the fixpoint for the NEW compiler**. Stage 2 differing
+# from the seed is expected -- that is what a change to the code generator means.
+#
+# Use --fast while iterating. Use the full run before committing, because only it proves the
+# chain still starts from source a human can read rather than from a binary nobody can.
 #
 # Three things are checked, in order of how much they say:
 #
@@ -15,19 +25,35 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 WAT="${WAT:-../wat-rs/target/release/wat}"
-[ -x "$WAT" ] || { echo "bootstrap: no wat binary at $WAT"; exit 2; }
+FAST=""; [ "${1:-}" = "--fast" ] && FAST=1
+[ -n "$FAST" ] || [ -x "$WAT" ] || { echo "bootstrap: no wat binary at $WAT"; exit 2; }
 SNAP=$(mktemp -d); trap 'rm -rf "$SNAP"' EXIT
 fail=0
 ms () { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
 
-echo "== stage 0: the interpreter runs the compiler =="
-s=$(date +%s%N)
-"$WAT" elf/compile.wat > "$SNAP/stage0.log" 2>&1 || { echo "FAIL: stage 0"; tail -3 "$SNAP/stage0.log"; exit 1; }
-t0=$(ms $s)
-chmod +x elf/out/*.elf
-cp elf/out/*.elf "$SNAP/"
-printf '   %s binaries in %s ms, the compiler among them (%s bytes)\n' \
-       "$(ls elf/out/*.elf | wc -l)" "$t0" "$(stat -c%s elf/out/compiler.elf)"
+if [ -n "$FAST" ]; then
+  [ -x elf/out/compiler.elf ] || { echo "bootstrap --fast: no elf/out/compiler.elf to seed from."
+                                   echo "                  run tools/bootstrap.sh once without --fast."; exit 2; }
+  cp elf/out/compiler.elf elf/out/seed.elf; chmod +x elf/out/seed.elf
+  echo "== stage 0: skipped; seeding from the compiler already built ($(stat -c%s elf/out/seed.elf) bytes) =="
+  s=$(date +%s%N)
+  ./elf/out/seed.elf > "$SNAP/stage0.log" 2>&1 || { echo "FAIL: the seed could not compile this source."
+                                                    tail -3 "$SNAP/stage0.log"
+                                                    echo "      (a new form may need the interpreter: run without --fast)"; exit 1; }
+  t0=$(ms $s)
+  chmod +x elf/out/*.elf
+  cp elf/out/*.elf "$SNAP/"
+  printf '   %s binaries in %s ms\n' "$(ls elf/out/*.elf | wc -l)" "$t0"
+else
+  echo "== stage 0: the interpreter runs the compiler =="
+  s=$(date +%s%N)
+  "$WAT" elf/compile.wat > "$SNAP/stage0.log" 2>&1 || { echo "FAIL: stage 0"; tail -3 "$SNAP/stage0.log"; exit 1; }
+  t0=$(ms $s)
+  chmod +x elf/out/*.elf
+  cp elf/out/*.elf "$SNAP/"
+  printf '   %s binaries in %s ms, the compiler among them (%s bytes)\n' \
+         "$(ls elf/out/*.elf | wc -l)" "$t0" "$(stat -c%s elf/out/compiler.elf)"
+fi
 
 cp elf/out/compiler.elf elf/out/stage1.elf
 chmod +x elf/out/stage1.elf
@@ -38,7 +64,11 @@ s=$(date +%s%N)
 ./elf/out/stage1.elf > "$SNAP/stage1.log" 2>&1 || { echo "FAIL: stage 1 did not finish"; tail -3 "$SNAP/stage1.log"; exit 1; }
 t1=$(ms $s)
 [ "$t1" -lt 1 ] && t1=1
-printf '   the same work in %s ms -- %sx faster than the interpreter\n' "$t1" "$(( t0 / t1 ))"
+if [ -n "$FAST" ]; then
+  printf '   the same work in %s ms\n' "$t1"
+else
+  printf '   the same work in %s ms -- %sx faster than the interpreter\n' "$t1" "$(( t0 / t1 ))"
+fi
 
 echo
 echo "== every binary, from both =="
@@ -53,7 +83,7 @@ if [ $d -eq 0 ]; then echo "   $n binaries, all byte-identical"; else echo "   $
 echo
 echo "== the fixpoint =="
 if cmp -s elf/out/stage1.elf elf/out/compiler.elf; then
-  echo "   stage1 == stage2, byte for byte ($(stat -c%s elf/out/stage1.elf) bytes)"
+  echo "   stage$( [ -n "$FAST" ] && echo 2 || echo 1 ) == stage$( [ -n "$FAST" ] && echo 3 || echo 2 ), byte for byte ($(stat -c%s elf/out/stage1.elf) bytes)"
   echo "   The compiler reproduces itself."
 else
   echo "   FAIL: stage 2 is not stage 1"; fail=1
