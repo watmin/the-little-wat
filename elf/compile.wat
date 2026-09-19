@@ -333,41 +333,66 @@
     "054883ec08c604240a48c7c7020000004889e648c7c20100000048c7c001"
     "0000000f0548c7c74600000048c7c03c0000000f05"))
 
-;; **The last mile: a file, as bytes.** 611 bytes covering `hexval`, `hexchar`,
-;; `prim_write_hex` and `prim_read_hex`, in that order.
+;; **The last mile: a file, as bytes.** Five routines.
 ;;
 ;; A compiled program can open and write a file in three syscalls. What it cannot do is call
 ;; wat's `:wat::io::` verbs, because those are Rust inside the evaluator -- and it cannot route
 ;; around them through a String, because a String is UTF-8 there and a byte array here, so the
 ;; two disagree on the first byte above 0x7f, which an ELF header has in its second byte.
 ;;
-;; So these are **F-119's contract made concrete**: `prim/read-hex` and `prim/write-hex`
-;; have a wat definition for the interpreter (`elf/lib/prim.wat`) and this implementation for the
+;; So these are **F-119's contract made concrete**: `prim/read-hex` and `prim/write-hex` have a
+;; wat definition for the interpreter (`elf/lib/prim.wat`) and this implementation for the
 ;; compiler, and a program using them still runs both ways. Hex is the carrier for the same
 ;; reason the rest of `elf/` uses it: it is the only byte representation a wat String can hold
 ;; (F-118).
-(:wat::core::defn :c::rt-prim [] -> :wat::core::String
+;;
+;; They are separate defns so that their ADDRESSES come from their own lengths. They used to be
+;; one blob with `+ 30`, `+ 163` and `+ 220` written into the offset chain by hand -- the same
+;; shape as the `base + 11` that broke every tail call in C-135.
+
+;; `hexval(rax = one ascii hex digit) -> rax = 0..15`, 15 bytes.
+(:wat::core::defn :c::rt-hexval [] -> :wat::core::String
   (:wat::string::concat
-    "4883e8304883f80976044883e827c34883f80a72044883c0274883c030c3"
+    "4883e8304883f80976044883e827c3"))
+
+;; `hexchar(rax = 0..15) -> al`, 15 bytes.
+(:wat::core::defn :c::rt-hexchar [] -> :wat::core::String
+  (:wat::string::concat
+    "4883f80a72044883c0274883c030c3"))
+
+;; `prim_write_hex(rax = path, rcx = hex) -> rax = bytes written`. Decodes the hex into a
+;; buffer above the heap top and writes it with open/write/close. **Parks its pointers in r12,
+;; not r11: `syscall` destroys rcx and r11.**
+(:wat::core::defn :c::rt-prim-write-hex [] -> :wat::core::String
+  (:wat::string::concat
     "5341544989c04989c94d89fa498d70084c89d7498b08f3a4c6070048ffc7"
     "4989fc498b1148d1ea4889d3498d71084885d2742b480fb606e8a6ffffff"
     "48c1e0044889c1480fb64601e895ffffff4809c888074883c60248ffc748"
     "ffca75d548c7c0020000004c89d748c7c64102000048c7c2ed0100000f05"
     "4989c148c7c0010000004c89cf4c89e64889da0f054989c248c7c0030000"
-    "004c89cf0f054c89d0415c5bc341544d89fa488d70084c89d7488b08f3a4"
-    "c6070048ffc74989fc48c7c0020000004c89d74831f64831d20f054989c0"
-    "4d89e148c7c0000000004c89c74c89ce48c7c2000001000f054885c07e05"
-    "4901c1ebe048c7c0030000004c89c70f054c89ca4c29e24d8d41074983e0"
-    "f84889d04801c0488d48174883e1f84c89c64801ce493b76087605e8b4fc"
-    "ffff4989f749c700010000004d8d5008498902498d7a084c89e64885d274"
-    "2e480fb6064889c148c1e804e896feffff880748ffc74889c84883e00fe8"
-    "85feffff880748ffc748ffc648ffca75d24c89d0415cc341544d89fa488d"
-    "70084c89d7488b08f3a4c6070048ffc74989fc48c7c0020000004c89d748"
-    "31f64831d20f054989c04d89e148c7c0000000004c89c74c89ce48c7c200"
-    "0001000f054885c07e054901c1ebe048c7c0030000004c89c70f054c89ca"
-    "4c29e24d8d41074983e0f8488d4a174883e1f84c89c64801ce493b760876"
-    "05e8defbffff4989f749c700010000004d8d5008498912498d7a084c89e6"
-    "4889d1f3a44c89d0415cc3"))
+    "004c89cf0f054c89d0415c5bc3"))
+
+;; `prim_read_hex(rax = path) -> rax = a String of hex`.
+(:wat::core::defn :c::rt-prim-read-hex [] -> :wat::core::String
+  (:wat::string::concat
+    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
+    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
+    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
+    "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d48174883"
+    "e1f84c89c64801ce493b76087605e8b4fcffff4989f749c700010000004d"
+    "8d5008498902498d7a084c89e64885d2742e480fb6064889c148c1e804e8"
+    "96feffff880748ffc74889c84883e00fe885feffff880748ffc748ffc648"
+    "ffca75d24c89d0415cc3"))
+
+;; `io_read_file(rax = path) -> rax = a String of the file bytes`. This is `wat.io/read-file`.
+(:wat::core::defn :c::rt-io-read-file [] -> :wat::core::String
+  (:wat::string::concat
+    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
+    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
+    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
+    "89c70f054c89ca4c29e24d8d41074983e0f8488d4a174883e1f84c89c648"
+    "01ce493b76087605e8defbffff4989f749c700010000004d8d5008498912"
+    "498d7a084c89e64889d1f3a44c89d0415cc3"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
@@ -375,7 +400,9 @@
                         (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
                         (:c::rt-slot-set) (:c::rt-oom)
                         (:c::rt-str-subs) (:c::rt-str-starts) (:c::rt-str-contains)
-                        (:c::rt-i64-to-str) (:c::rt-str-eq) (:c::rt-die) (:c::rt-prim)))
+                        (:c::rt-i64-to-str) (:c::rt-str-eq) (:c::rt-die)
+                        (:c::rt-hexval) (:c::rt-hexchar) (:c::rt-prim-write-hex)
+                        (:c::rt-prim-read-hex) (:c::rt-io-read-file)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -407,13 +434,16 @@
   (:wat::core::+ (:c::at-tostr rt) (:c::hexlen (:c::rt-i64-to-str))))
 (:wat::core::defn :c::at-die [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-streq rt) (:c::hexlen (:c::rt-str-eq))))
-;; hexval is 15 bytes and hexchar 15, so the two entry points sit 30 and 45 bytes in
+;; every entry point from the length of what precedes it, and nothing written in by hand
+(:wat::core::defn :c::at-hexval [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-die rt) (:c::hexlen (:c::rt-die))))
 (:wat::core::defn :c::at-wrhex [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:wat::core::+ (:c::at-die rt) (:c::hexlen (:c::rt-die))) 30))
+  (:wat::core::+ (:c::at-hexval rt)
+    (:wat::core::+ (:c::hexlen (:c::rt-hexval)) (:c::hexlen (:c::rt-hexchar)))))
 (:wat::core::defn :c::at-rdhex [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-wrhex rt) 163))
+  (:wat::core::+ (:c::at-wrhex rt) (:c::hexlen (:c::rt-prim-write-hex))))
 (:wat::core::defn :c::at-rdfile [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-rdhex rt) 220))
+  (:wat::core::+ (:c::at-rdhex rt) (:c::hexlen (:c::rt-prim-read-hex))))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
 (:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
@@ -778,7 +808,8 @@
 (:wat::core::defrecord :c::Rec
   [name <- :wat::core::String
    fields <- (:wat::core::Vector :- [:wat::core::String])
-   ftypes <- (:wat::core::Vector :- [:wat::core::String])])
+   ftypes <- (:wat::core::Vector :- [:wat::core::String])
+   fv <- :wat::core::i64])
 (:wat::core::typealias :c::Recs (:wat::core::Vector :- [:c::Rec]))
 
 ;; a `typealias` is a name standing for a type expression; the compiler only ever needs the
@@ -894,10 +925,18 @@
           ((:wat::core::>= ai 0)
             (:c::ty-node (:c::Alias/node (:wat::core::nth (:c::Prog/aliases pg) ai)) pg
               (:wat::core::- depth 1)))
-          ((:wat::string::contains? src "String") "str")
-          ((:wat::string::contains? src "bool") "bool")
-          ((:wat::string::contains? src "nil") "nil")
-          (:else "i64"))))))
+          ;; **exact names, not substrings.** This used to ask whether the annotation CONTAINED
+          ;; "String", which makes a user type called `StringBuilder` a string and one called
+          ;; `nilable` a nil. And the fallthrough was "i64", so an unrecognised type quietly
+          ;; became a machine word -- which is the silent-divergence shape F-120 is about:
+          ;; `println` would render a pointer as an integer. An unknown type is now a refusal.
+          ((:c::is? src "wat.type/String" ":wat::core::String") "str")
+          ((:c::is? src "wat.type/bool" ":wat::core::bool") "bool")
+          ((:c::is? src "wat.type/nil" ":wat::core::nil") "nil")
+          ((:c::is? src "wat.type/i64" ":wat::core::i64") "i64")
+          (:else
+            (:wat::kernel::assertion-failed!
+              :message (:wat::string::concat "compile: unknown type: " src))))))))
 
 ;; the element type of a vector type, and the declared type of a record's field
 (:wat::core::defn :c::elem-ty [t <- :wat::core::String] -> :wat::core::String
@@ -1222,8 +1261,11 @@
                 (:wat::string::concat "488b0424" (:c::add-rsp 16))))))
           ;; string concatenation: a left fold through `str_cat`, which is the only thing the
           ;; compiler emits that allocates. `length` is a peek at the header.
+          ;; `(concat x)` is the identity, which wat accepts and this refused -- found by the
+          ;; compiler compiling itself, where a routine short enough to fit one line of hex gets
+          ;; a one-argument concat
           ((:c::concat? head)
-            (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "concat arity" a pg)
+            (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "concat arity" a pg)
               (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                 env pg rt tb slot
                 ;; the FIRST operand came from somewhere else, so it needs the same last-use
@@ -2075,6 +2117,33 @@
                     (:c::any-poke? ks (:wat::core::+ i 1) pg))))
 
 ;; one sweep: any function that reaches a poke, or calls one that does, joins the set
+;; ---------------------------------------------------------------- resolving the types
+;;
+;; Collection is one forward pass, so a type named before it is declared cannot be resolved as it
+;; goes. wat itself has no such rule -- `:c::kidsof` returns `:c::Kids` twenty lines above the
+;; typealias that defines it -- so the compiler should not either. Types are therefore left blank
+;; during collection and filled once every record and alias has been seen.
+
+(:wat::core::defn :c::fill-recs [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::Recs] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/recs pg)))
+    (:wat::core::assoc pg :recs acc)
+    (:wat::core::let [r (:wat::core::nth (:c::Prog/recs pg) i)
+                      fv (:c::kidsof pg (:c::Rec/fv r))]
+      (:c::fill-recs pg (:wat::core::+ i 1)
+        (:wat::core::conj acc
+          (:wat::core::assoc r :ftypes
+            (:c::field-types fv 0 pg (:wat::core::Vector :- [:wat::core::String]))))))))
+
+(:wat::core::defn :c::fill-fns [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::FnV] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg)))
+    (:wat::core::assoc pg :fns acc)
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)
+                      ks (:c::kidsof pg (:c::Fn/node f))]
+      (:c::fill-fns pg (:wat::core::+ i 1)
+        (:wat::core::conj acc
+          (:wat::core::assoc f :ret
+            (:c::ty-of-node (:wat::core::nth ks (:wat::core::- (:c::body-start ks 3 pg) 1)) pg)))))))
+
 (:wat::core::defn :c::poke-scan [pg <- :c::Prog i <- :wat::core::i64] -> :c::Prog
   (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) pg
     (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)
@@ -2403,17 +2472,18 @@
           (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc pg :fns
               (:wat::core::conj (:c::Prog/fns pg)
-                (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0
-                        :ret (:c::ty-of-node
-                               (:wat::core::nth ks (:wat::core::- (:c::body-start ks 3 pg) 1)) pg)))) dir))
+                ;; the return TYPE waits until every record and alias has been seen -- a type
+                ;; is allowed to be declared after the function that uses it, as it is in wat
+                (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0 :ret "")))
+            dir))
         ((:c::defrecord? head)
           (:wat::core::let [fv (:c::kidsof pg (:wat::core::nth ks 2))]
             (:c::collect-in tops (:wat::core::+ i 1)
               (:wat::core::assoc pg :recs
                 (:wat::core::conj (:c::Prog/recs pg)
-                  (:c::Rec :name (:c::text pg (:wat::core::nth ks 1))
+                  (:c::Rec :name (:c::text pg (:wat::core::nth ks 1)) :fv (:wat::core::nth ks 2)
                            :fields (:c::field-names fv 0 (:wat::core::Vector :- [:wat::core::String]) pg)
-                           :ftypes (:c::field-types fv 0 pg (:wat::core::Vector :- [:wat::core::String])))))
+                           :ftypes (:wat::core::Vector :- [:wat::core::String]))))
               dir)))
         ((:c::typealias? head)
           (:c::collect-in tops (:wat::core::+ i 1)
@@ -2472,7 +2542,9 @@
 (:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1900000000)
 (:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
 
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64 117)
+;; measured, not asserted: every form in the stub is fixed-width, so its length does not depend
+;; on the addresses it is given. This was written in by hand as 117.
+(:wat::core::defn :c::stub-len [] -> :wat::core::i64 (:c::hexlen (:c::stub 0 0)))
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
@@ -2517,7 +2589,10 @@
      pg-c (:c::collect-in (:rd::St/kids st) 0
             (:wat::core::assoc (:c::empty-prog) :src st) (:c::dir-of src-path))
      ;; which functions reach a `poke`, transitively, before any code is emitted
-     pg0 (:c::poke-fix pg-c (:wat::core::length (:c::Prog/fns pg-c)))
+     ;; every record and alias is known now, so the types can be resolved in any order
+     pg-r (:c::fill-recs pg-c 0 (:wat::core::Vector :- [:c::Rec]))
+     pg-f (:c::fill-fns pg-r 0 (:wat::core::Vector :- [:c::Fn]))
+     pg0 (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one
      p1 (:c::pass pg0 0 0 0 (:c::empty-pass))
