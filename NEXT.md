@@ -7,7 +7,52 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## Where this stands (2026-09-18) — **every numbered item is closed**
+## elf/ — open items (2026-09-19)
+
+The book queue below is closed. This section is the live one: every item is something a
+FINDINGS entry **named rather than did**, so the evidence is already written down and this is
+only a map to it. Nothing here is a vague intention — each line says what it is, where the
+measurement lives, and why it was not done at the time.
+
+**Correctness first — these are defects, not improvements.**
+
+1. **`quot` and `rem` do not trap** (F-125/C-148). `+`, `-` and `*` now carry `jo` to the
+   overflow handler; `idiv` FAULTS on `MIN / -1` rather than setting a flag, so it needs a
+   different mechanism — a signal handler or a guard before the divide. The interpreter traps;
+   we do not. Same class as the bug C-148 fixed, and the only part of it left open.
+2. **`:c::cat-fold`'s `own?` rule treats any non-symbol operand as a temporary** (flagged in
+   C-140, twice). That is false for a field read like `(:c::Out/tail o)` — the container still
+   points at it. It has not bitten because the shapes that would expose it do not occur in the
+   corpus, which is exactly what F-125 said before it did.
+3. **`999999` as "name not found"** and the **`"vec:"`/`"rec:"` string-tagged type encoding**
+   (C-139). A magic number where an `Option` belongs, and a record wearing a string. Both are
+   internal and consistent; both are the shape C-139 was about.
+
+**Performance — the compute gap against `gcc -O2`, currently ~1.7x.**
+
+4. **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
+   levels are live at once and C-146 has three registers, because `rbp` is the frame pointer and
+   `r14`/`r15` hold the buffer and the heap. Dropping `rbp` frees a fourth AND removes
+   `push rbp` / `mov rbp,rsp` / `leave` from every call. The obstacle is real: expression
+   evaluation pushes to the stack, so `rsp`-relative offsets move and the emitter would have to
+   track push depth. Evidence: the disassembly in C-147's follow-up, `mov %rax,-0x20(%rbp)`
+   followed by three reloads.
+5. **Rematerialise instead of spilling.** The outer `n` survives a call only because `(- n 2)`
+   needs it; it could be recomputed as `n_inner + 1` for one `add` instead of a store and three
+   loads. Narrower than 4 and much cheaper to try.
+6. **Tail recursion modulo `+`, restricted.** `-O2` beats us partly by reassociating the
+   additions, which is free in C (overflow is undefined) and unsound in wat (it traps) — see
+   F-125. **But measure before building**: depth 2→4 removed four fifths of all calls for 26%,
+   so ALL remaining call overhead is ~11% of the time. This cannot close 1.7x and is listed last
+   for that reason.
+
+**And a method note that outranks all of them.** This machine's run-to-run spread is ±15%, which
+is larger than most effects now being chased. A sequential A-then-B measurement produced
+`nregs=1` beating `nregs=2`, which is impossible. **Interleave A and B on two retained binaries
+and take the minimum of many** — that is what gave the trustworthy 10% for C-146 and the wash
+that kept C-136 standing.
+
+## Where the book queue stands (2026-09-18) — **every numbered item is closed**
 
 §1–§5 done, §6 declined, §7–§8 built as instruments, §9–§12 ported and complete. The list this
 file was written to work through is finished; what follows is kept as the record of how each item
