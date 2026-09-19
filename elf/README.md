@@ -30,8 +30,8 @@ This program —
   (wat.kernel/println (wat.core/+ 2 2)))
 ```
 
-— becomes a **272-byte static ELF** that prints `4` and exits 0, with no interpreter, no runtime
-and no libc.
+— becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
+libc, and no runtime but the 360 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -63,6 +63,58 @@ that is not a symbol, keyword or string literal, and a tree walk meets those con
 
 integer literals, negatives included, nested to any depth — and both spellings of every name
 (`wat.core/+` and `:wat::core::+`), because the reader keeps whichever the source used.
+
+**Strings**, as values:
+
+```clojure
+(wat.string/concat A B ...)           ; n-ary, folded left through `str_cat`
+(wat.string/length S)                 ; a peek at the header
+"a literal"                           ; a pointer to [len:8][bytes...] in the data tail
+```
+
+## Strings, and the heap
+
+A String value is one machine word, like everything else: the address of `[len:8][bytes...]`. So
+it rides in `rax` like an integer, and nothing else in the compiler had to change shape to carry
+one. Literals live in the read-only data tail. Anything `concat` builds lives in a megabyte the
+entry stub `mmap`s, bump-allocated through **r15** — reserved for the program's whole life,
+callee-saved in the System V ABI, and the entire memory model. No free, no collector, no bounds
+check: a program that wants more than a megabyte gets a segmentation fault, not an error message.
+
+It needed a **type pass**, for exactly one decision: `println` has to know whether to call
+`print_i64` or `print_str`, and the argument can be a name, a branch, a call or a `let`. So there
+is a two-type static pass (`i64`, `str`) that propagates what the declarations already say —
+through parameters, `defn` returns, `let` bindings, `if` arms and `do` tails. It is not
+inference. It recognises a wat type by its spelling, which covers `wat.type/String` and
+`:wat::core::String` without a table.
+
+`elf/src/strings.wat` is the test, and it runs both ways:
+
+```clojure
+(wat.core/defn user/stars [n :- wat.type/i64 acc :- wat.type/String] :- wat.type/String
+  (wat.core/if (wat.core/= n 0) acc
+    (user/stars (wat.core/- n 1) (wat.string/concat acc "*"))))
+```
+
+```
+"hello, world!"   "xyxyxy"   6   "hello, then!"   "****...****"   40   "q\" b\\ n\n t\t r\r ."
+```
+
+1319 bytes, byte-identical to the interpreter — the escapes included.
+
+### The part that is really a finding
+
+`println` renders a String as **EDN**: quotes around it, `"` and `\` and newline and tab and
+carriage return escaped, and every other byte passed through raw. So `print_str` — 158 bytes of
+machine code — *is wat's EDN escaping*, and agreeing with the interpreter means reproducing it
+exactly.
+
+Every rule in that list was found by **asking the interpreter what it printed**. Nothing says.
+And the other half of the same problem: a string in memory has a length in bytes, while
+`wat.string/length` counts characters and the string surface has no byte-length verb at all — so
+this compiler restricts itself to ASCII, where the two agree, and refuses the rest.
+`elf/bad/nonascii.wat` is valid wat that prints `"café"` under the interpreter and is rejected at
+compile time rather than silently mis-measured. That is **F-120**.
 
 And an **intrinsic set that is the compiler's own, not wat's**:
 
@@ -135,6 +187,14 @@ functions, a `let`, and arithmetic wide enough to need 64 bits.
 
 659 bytes of native code; prints `6765`, `1307674368000`, `175`; agrees with the interpreter.
 
+## Two negative tests
+
+`elf/bad/unsupported.wat` is refused for a **form** the compiler has no translation for;
+`elf/bad/nonascii.wat` is refused for a **representation** it cannot honour. Both are valid wat
+that the interpreter runs. The drivers that point the compiler at them are generated from
+`compile.wat` by `tools/gen-refuse.sh`, because a negative test that has drifted from the thing
+it tests proves nothing — and the committed one had already drifted.
+
 ## What compiling is worth
 
 `fib(27)`, the same source both ways, measured by `tools/elf-run.sh` on each run:
@@ -195,11 +255,18 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-`print_i64` is 105 bytes of hand-assembled x86-64: sign handling, a divide-by-ten loop building
-digits backwards **on the stack** (so the segment never needs to be writable), and one `write`
-syscall. It is the only part of the output not computed from the source — the part a C toolchain
-would call libc for. It was checked against a negative, a small value, zero and `i64::MAX` before
-it was embedded.
+Three routines, 360 bytes — the only part of the output not computed from the source, and the
+part a C toolchain would call libc for.
+
+| routine | bytes | what it is |
+| --- | --- | --- |
+| `print_i64` | 105 | sign handling, a divide-by-ten loop building digits backwards **on the stack** (so the segment never needs to be writable), and one `write`. Checked against a negative, a small value, zero and `i64::MAX` before it was embedded. |
+| `str_cat` | 97 | two lengths added, a header written at the heap top, two byte-at-a-time copy loops, `r15` bumped past the result. |
+| `print_str` | 158 | a quote, a byte loop emitting one byte or two, a quote, a newline, one `write` — **wat's EDN escaping, in machine code**. |
+
+`print_i64` was hand-assembled. `str_cat` and `print_str` were hand-encoded too, and then checked
+against `as` and `objdump` byte for byte before being embedded — 97 bytes and 158 bytes, both
+matching on the first comparison.
 
 ## The differential test, and what it caught
 
@@ -256,19 +323,21 @@ here.
 
 ## What is still missing, in order of what it would prove
 
-`let`, `if` and user functions are done. What stands between this and a compiler that could
-compile *itself*:
+`let`, `if`, user functions, strings and a heap are done. What stands between this and a
+compiler that could compile *itself*:
 
-1. **Strings as values** — not just literals to print. Length, `subs`, concatenation; which means
-   a heap, or at least an arena, and a representation for a string that is not "bytes in the
-   data section".
-2. **Vectors and records** — every one of this compiler's data structures. Allocation, field
-   offsets, and something to free them or a decision not to.
+1. ~~**Strings as values**~~ — done (C-119). A String is a pointer to `[len:8][bytes...]`,
+   literals in the data tail and everything else bump-allocated out of an `mmap`'d megabyte.
+   `subs` and `split` are still missing, and so is any way to give memory back.
+2. **Vectors and records** — every one of this compiler's own data structures. Allocation is
+   solved now; what is left is field offsets, a length that can grow, and either something to
+   free them or a stated decision not to.
 3. **`match`** — which is `if` with a tag test and destructuring, so the hard part is the data
-   representation rather than the control flow.
+   representation rather than the control flow. Same blocker as (2).
 4. **The wat runtime's verbs** — `read-string` itself, `ast->children`, `Bytes::from-hex`. A
    self-hosting compiler either reimplements them or links against the substrate.
 
-That is the honest distance: the control flow and the calling convention are solved, and
-everything remaining is about **data**. This file is 430 lines of wat and compiles a language
-with no heap; compiling the language it is written in needs one.
+That is the honest distance, and it moved: the control flow, the calling convention and the heap
+are solved, and everything remaining is about **aggregate** data. The bump allocator that carries
+strings will carry vectors too — what it will not carry is a compiler that runs long enough to
+need the memory back.

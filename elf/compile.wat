@@ -27,7 +27,10 @@
 ;;   (wat.kernel/println EXPR | "literal")
 ;;   (wat.core/+ - * quot rem)             n-ary, folded left
 ;;   (wat.core/< > <= >= = not=)           cmp + setcc + movzx, so a bool is 0 or 1 in rax
+;;   (wat.string/concat A B ...)           n-ary, folded left through `str_cat`
+;;   (wat.string/length S)                 a peek at the string's header
 ;;   integer literals, negatives included, nested to any depth
+;;   string literals, as VALUES: a pointer to [len:8][bytes...] in the data tail
 ;;
 ;; and an INTRINSIC set that is the compiler's own, not wat's:
 ;;
@@ -95,13 +98,32 @@
 ;; The entry point is a 19-byte stub -- `call user/main`, then exit(0) -- which is the only code
 ;; in the output not compiled from a `defn`.
 ;;
+;; ## Strings, and the heap
+;;
+;; A String value is one machine word, like everything else: the address of `[len:8][bytes...]`.
+;; Literals live in the read-only data tail. Anything `concat` builds lives in a megabyte the
+;; entry stub `mmap`s, bump-allocated through **r15**, which is reserved for the program's whole
+;; life and is the entire memory model -- no free, no collector, no bounds check.
+;;
+;; The header length is in BYTES, and `:wat::string::length` counts CHARACTERS. They agree only
+;; for ASCII, so a non-ASCII literal is refused rather than silently mis-measured; wat has no
+;; byte-length verb to compile against. See F-120, and `elf/bad/nonascii.wat`.
+;;
 ;; ## The runtime
 ;;
-;; `print_i64` is 105 bytes of hand-assembled x86-64 embedded below: sign handling, a divide-by-
-;; ten loop building digits backwards on the stack, and one `write` syscall. It is the only part
-;; of the output not computed from the source, and it is the part a C toolchain would call libc
-;; for. Its correctness was checked against four values (a negative, a small one, zero, and
-;; i64::MAX) before it was embedded.
+;; Three routines, 360 bytes, the only part of the output not computed from the source, and the
+;; part a C toolchain would call libc for:
+;;
+;;   `print_i64`  105 bytes   sign handling, a divide-by-ten loop building digits backwards on
+;;                            the stack, and one `write`. Checked against four values (a
+;;                            negative, a small one, zero, and i64::MAX) before it was embedded.
+;;   `str_cat`     97 bytes   two lengths added, a header written at the heap top, two copy
+;;                            loops, r15 bumped.
+;;   `print_str`  158 bytes   wat's EDN escaping, in machine code.
+;;
+;; That last one is the interesting one. `println` renders a String as EDN, so agreeing with the
+;; interpreter means reproducing its escaping exactly -- and every escape in it was found by
+;; ASKING the interpreter what it printed, because nothing says. **F-120** is that gap.
 ;;
 ;; Run from the repository root:
 ;;   wat elf/compile.wat        # compiles elf/src/*.wat to elf/out/*.elf and verifies each
@@ -121,12 +143,63 @@
 ;;   lea rdx,[rbp-1] / sub rdx,rsi / inc rdx    length = end - start + 1
 ;;   mov rax,1 / mov rdi,1 / syscall            write(1, rsi, rdx)
 ;;   leave / ret
-(:wat::core::defn :c::runtime [] -> :wat::core::String
+(:wat::core::defn :c::rt-print-i64 [] -> :wat::core::String
   (:wat::string::concat
     "554889e54883ec20488d75ffc6060a48ffce4d31c04885c0790a48f7d8"
     "49c7c00100000048c7c10a0000004831d248f7f180c230881648ffce48"
     "85c075ed4983f8007406c6062d48ffce48ffc6488d55ff4829f248ffc2"
     "48c7c00100000048c7c7010000000f05c9c3"))
+
+;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes. The two lengths are added, the total is written
+;; at the heap top, the bytes are copied across with two byte-at-a-time loops, and r15 is bumped
+;; past the result rounded up to eight. r10 carries the result pointer, because rax is needed as
+;; the copy loops' scratch byte.
+;;
+;;   mov r8,[rax] / mov r9,[rcx]                 the two lengths
+;;   lea rdx,[rax+8] / lea rcx,[rcx+8]           the two sources
+;;   mov rax,r8 / add rax,r9 / mov [r15],rax     total, written as the new header
+;;   mov r10,r15 / lea rdi,[r15+8]               result pointer and destination cursor
+;;   add rax,15 / and rax,-8 / add r15,rax       bump, rounded up
+;;   <copy r8 bytes> <copy r9 bytes>
+;;   mov rax,r10 / ret
+(:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
+  (:wat::string::concat
+    "4c8b004c8b09488d5008488d49084c89c04c01c84989074d89fa498d7f08"
+    "4883c00f4883e0f84901c74889d64d89c34d85db740f8a06880748ffc648"
+    "ffc749ffcbebec4889ce4d89cb4d85db740f8a06880748ffc648ffc749ff"
+    "cbebec4c89d0c3"))
+
+;; `print_str(rax = s)`, 158 bytes. **This routine is wat's EDN escaping, in machine code.**
+;; `:wat::kernel::println` renders a String as EDN -- quotes around it, and quote, backslash,
+;; newline, tab and carriage return escaped, everything else passed through raw -- so agreeing
+;; with the interpreter means doing exactly that: a quote, a byte loop that emits one byte or
+;; two, a quote, a newline, and ONE write. The escaped copy is built at the heap top WITHOUT
+;; bumping r15, because nothing allocates while a string is being printed.
+;;
+;; Every one of those five escapes was found by ASKING THE INTERPRETER, not by reading a
+;; specification, because there is no specification. That is F-120.
+(:wat::core::defn :c::rt-print-str [] -> :wat::core::String
+  (:wat::string::concat
+    "4989c04d8b08498d70084c89ff4d89fac6072248ffc74d31db4d39cb7d5a"
+    "8a063c2274173c5c74133c0a741c3c0974263c0d7430880748ffc7eb35c6"
+    "075c48ffc7880748ffc7eb28c6075c48ffc7c6076e48ffc7eb1ac6075c48"
+    "ffc7c6077448ffc7eb0cc6075c48ffc7c6077248ffc748ffc649ffc3eba1"
+    "c6072248ffc7c6070a48ffc74889fa4c29d24c89d648c7c70100000048c7"
+    "c0010000000f05c3"))
+
+(:wat::core::defn :c::runtime [] -> :wat::core::String
+  (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)))
+
+;; how many bytes a hex string is
+(:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::/ (:wat::string::length h) 2))
+
+;; the three entry points, laid out in that order at `rt`
+(:wat::core::defn :c::at-i64 [rt <- :wat::core::i64] -> :wat::core::i64 rt)
+(:wat::core::defn :c::at-cat [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ rt (:c::hexlen (:c::rt-print-i64))))
+(:wat::core::defn :c::at-str [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-cat rt) (:c::hexlen (:c::rt-str-cat))))
 
 ;; ---------------------------------------------------------------- instructions
 
@@ -267,6 +340,10 @@
 
 (:wat::core::defn :c::println? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.kernel/println" ":wat::kernel::println"))
+(:wat::core::defn :c::concat? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/concat" ":wat::string::concat"))
+(:wat::core::defn :c::strlen? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/length" ":wat::string::length"))
 (:wat::core::defn :c::if? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.core/if" ":wat::core::if"))
 (:wat::core::defn :c::let? [s <- :wat::core::String] -> :wat::core::bool
@@ -292,7 +369,8 @@
 (:wat::core::typealias :c::Kids (:wat::core::Vector :- [:wat::WatAST]))
 
 ;; a name and where it lives, as a displacement from rbp: parameters above it, locals below
-(:wat::core::defrecord :c::Bind [name <- :wat::core::String  disp <- :wat::core::i64])
+(:wat::core::defrecord :c::Bind
+  [name <- :wat::core::String  disp <- :wat::core::i64  ty <- :wat::core::String])
 (:wat::core::typealias :c::Env (:wat::core::Vector :- [:c::Bind]))
 
 ;; innermost first, so a `let` shadows a parameter of the same name
@@ -302,9 +380,22 @@
     ((:wat::core::= (:c::Bind/name (:wat::core::nth env i)) name) (:c::Bind/disp (:wat::core::nth env i)))
     (:else (:c::lookup env name (:wat::core::- i 1)))))
 
+(:wat::core::defn :c::lookup-ty [env <- :c::Env name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::< i 0) "i64")
+    ((:wat::core::= (:c::Bind/name (:wat::core::nth env i)) name) (:c::Bind/ty (:wat::core::nth env i)))
+    (:else (:c::lookup-ty env name (:wat::core::- i 1)))))
+
 (:wat::core::defrecord :c::Fn
-  [name <- :wat::core::String  node <- :wat::WatAST  addr <- :wat::core::i64])
+  [name <- :wat::core::String  node <- :wat::WatAST  addr <- :wat::core::i64
+   ret <- :wat::core::String])
 (:wat::core::typealias :c::Fns (:wat::core::Vector :- [:c::Fn]))
+
+(:wat::core::defn :c::fn-ret [fns <- :c::Fns name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length fns)) "i64")
+    ((:wat::core::= (:c::Fn/name (:wat::core::nth fns i)) name) (:c::Fn/ret (:wat::core::nth fns i)))
+    (:else (:c::fn-ret fns name (:wat::core::+ i 1)))))
 
 (:wat::core::defn :c::fn-addr [fns <- :c::Fns name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::cond
@@ -319,6 +410,103 @@
     ((:wat::core::>= i (:wat::core::length ks)) i)
     ((:wat::core::= (:c::kind (:wat::core::nth ks i)) "list") i)
     (:else (:c::body-start ks (:wat::core::+ i 1)))))
+
+;; ---------------------------------------------------------------- what type an expression has
+;;
+;; The compiler needs this for exactly one decision -- which of the two print routines `println`
+;; should call -- but that one decision reaches everywhere, because the argument can be a name, a
+;; branch, a call or a `let`. So there is a small static type pass, with two types: a machine
+;; word (`i64`) and a pointer to a string header (`str`).
+;;
+;; It is deliberately not inference. Every type is DECLARED somewhere -- on a parameter, on a
+;; `defn`'s return -- and this walk only propagates what the declarations already say. A wat type
+;; is recognised by its spelling, which covers `wat.type/String` and `:wat::core::String` without
+;; a table.
+
+(:wat::core::defn :c::ty-of-node [a <- :wat::WatAST] -> :wat::core::String
+  (:wat::core::let [src (:wat::core::ast->source a)]
+    (:wat::core::cond
+      ((:wat::string::contains? src "String") "str")
+      ((:wat::string::contains? src "nil") "nil")
+      (:else "i64"))))
+
+(:wat::core::defn :c::type-of [a <- :wat::WatAST env <- :c::Env fns <- :c::Fns] -> :wat::core::String
+  (:wat::core::let [k (:c::kind a)]
+    (:wat::core::cond
+      ((:wat::core::= k "string") "str")
+      ((:wat::core::= k "symbol") (:c::lookup-ty env (:wat::core::ast->source a)
+                                    (:wat::core::- (:wat::core::length env) 1)))
+      ((:wat::core::= k "list") (:c::type-of-form (:wat::core::ast->children a) env fns))
+      (:else "i64"))))
+
+(:wat::core::defn :c::type-of-form [ks <- :c::Kids env <- :c::Env fns <- :c::Fns] -> :wat::core::String
+  (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) "i64"
+    (:wat::core::let [head (:wat::core::ast->source (:wat::core::nth ks 0))
+                      last (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))]
+      (:wat::core::cond
+        ((:c::concat? head) "str")
+        ((:c::println? head) "nil")
+        ;; a branch is typed by its consequent; the alternative has to agree, and if it does not
+        ;; the program is wrong in a way this compiler does not check
+        ((:c::if? head) (:c::type-of (:wat::core::nth ks 2) env fns))
+        ((:c::do? head) (:c::type-of last env fns))
+        ((:c::let? head)
+          (:c::type-of last
+            (:c::ty-bind (:wat::core::ast->children (:wat::core::nth ks 1)) 0 env fns) fns))
+        ((:wat::core::>= (:c::fn-addr fns head 0) 0) (:c::fn-ret fns head 0))
+        (:else "i64")))))
+
+;; the same left-to-right walk `:c::bind-each` does, carrying types instead of displacements
+(:wat::core::defn :c::ty-bind [bs <- :c::Kids i <- :wat::core::i64 env <- :c::Env fns <- :c::Fns] -> :c::Env
+  (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) env
+    (:c::ty-bind bs (:wat::core::+ i 2)
+      (:wat::core::conj env
+        (:c::Bind :name (:wat::core::ast->source (:wat::core::nth bs i)) :disp 0
+                  :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env fns)))
+      fns)))
+
+;; ---------------------------------------------------------------- string literals, as values
+;;
+;; A string VALUE is one machine word: the address of `[len:8][bytes...]`, so it fits the same
+;; one-register model everything else uses. Literals live in the read-only data tail; anything
+;; `concat` builds lives in the heap the entry stub mmaps.
+;;
+;; The header length is in BYTES, and `:wat::string::length` counts CHARACTERS -- they agree only
+;; for ASCII, which is why a non-ASCII literal is refused rather than silently mis-measured. The
+;; refusal comes for free: `:asm::code-of` has no code for it and says "not encodable". wat has
+;; no byte-length verb to compile against; see F-120.
+
+(:wat::core::defn :c::unescape [s <- :wat::core::String i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::string::length s)) acc
+    (:wat::core::let [c (:wat::string::subs s i (:wat::core::+ i 1))]
+      (:wat::core::if (:wat::core::and (:wat::core::= c "\\")
+                        (:wat::core::< (:wat::core::+ i 1) (:wat::string::length s)))
+        (:c::unescape s (:wat::core::+ i 2)
+          (:wat::string::concat acc
+            (:wat::core::let [d (:wat::string::subs s (:wat::core::+ i 1) (:wat::core::+ i 2))]
+              (:wat::core::cond
+                ((:wat::core::= d "n") "\n")
+                ((:wat::core::= d "t") "\t")
+                ((:wat::core::= d "r") "\r")
+                (:else d)))))
+        (:c::unescape s (:wat::core::+ i 1) (:wat::string::concat acc c))))))
+
+(:wat::core::defn :c::zeros [n <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::<= n 0) acc
+    (:c::zeros (:wat::core::- n 1) (:wat::string::concat acc "00"))))
+
+;; a header is eight bytes, so the bytes after it are padded back up to a multiple of eight
+(:wat::core::defn :c::str-lit [a <- :wat::WatAST o <- :c::Out tb <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [src (:wat::core::ast->source a)
+     text (:c::unescape (:wat::string::subs src 1 (:wat::core::- (:wat::string::length src) 1)) 0 "")
+     n (:wat::string::length text)
+     addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
+     pad (:wat::core::rem (:wat::core::- 8 (:wat::core::rem n 8)) 8)
+     o1 (:wat::core::assoc o :tail
+          (:wat::string::concat (:c::Out/tail o) (:asm::le n 8) (:asm::ascii text 0 "")
+            (:c::zeros pad "")))]
+    (:c::emit o1 (:c::mov-rax addr))))
 
 ;; ---------------------------------------------------------------- frame size
 ;;
@@ -356,6 +544,7 @@
       ((:wat::core::= k "symbol")
         (:wat::core::let [d (:c::lookup env (:wat::core::ast->source a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::if (:wat::core::= d 999999) (:c::fail "name" a) (:c::emit o (:c::load d)))))
+      ((:wat::core::= k "string") (:c::str-lit a o tb))
       ((:wat::core::= k "list") (:c::form a o env fns rt tb slot))
       (:else (:c::fail "expression" a)))))
 
@@ -421,6 +610,15 @@
                 (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0))
                 (:wat::string::concat (:c::mov-rax 61) "0f05")
                 (:wat::string::concat "488b0424" (:c::add-rsp 16))))))
+          ;; string concatenation: a left fold through `str_cat`, which is the only thing the
+          ;; compiler emits that allocates. `length` is a peek at the header.
+          ((:c::concat? head)
+            (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "concat arity" a)
+              (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+                env fns rt tb slot)))
+          ((:c::strlen? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "length arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "488b00")))
           ((:c::let? head) (:c::let-form ks a o env fns rt tb slot))
           ((:c::println? head) (:c::print-form ks a o env fns rt tb slot))
           ((:wat::core::not (:wat::core::= op ""))
@@ -442,6 +640,19 @@
        o4 (:c::emit o3 "58")                                  ;; pop rax
        o5 (:c::emit o4 (:c::op-hex op))]
       (:c::fold op ks (:wat::core::+ i 1) o5 env fns rt tb slot))))
+
+;; the same shape, with a call where the arithmetic fold has an instruction
+(:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
+                                o <- :c::Out env <- :c::Env fns <- :c::Fns
+                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
+    (:wat::core::let
+      [o1 (:c::emit o "50")                                   ;; push rax
+       o2 (:c::expr (:wat::core::nth ks i) o1 env fns rt tb slot)
+       o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
+       o4 (:c::emit o3 "58")                                  ;; pop rax
+       o5 (:c::call o4 (:c::at-cat rt))]
+      (:c::cat-fold ks (:wat::core::+ i 1) o5 env fns rt tb slot))))
 
 ;; ---------------------------------------------------------------- if
 
@@ -475,7 +686,10 @@
        disp (:wat::core::* -8 (:wat::core::+ slot 1))
        o2 (:c::emit o1 (:c::store disp))]
       (:c::bind-each bs (:wat::core::+ i 2) o2
-        (:wat::core::conj env (:c::Bind :name name :disp disp)) fns rt tb (:wat::core::+ slot 1)))))
+        (:wat::core::conj env
+          (:c::Bind :name name :disp disp
+                    :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env fns)))
+        fns rt tb (:wat::core::+ slot 1)))))
 
 (:wat::core::defn :c::let-form [ks <- :c::Kids a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
                                 rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
@@ -499,8 +713,12 @@
                                   rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "println arity" a)
     (:wat::core::let [arg (:wat::core::nth ks 1)]
-      (:wat::core::if (:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb)
-        (:c::call (:c::expr arg o env fns rt tb slot) rt)))))
+      (:wat::core::cond
+        ;; a literal is its own EDN rendering, so it goes out as bytes with no runtime at all
+        ((:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb))
+        ((:wat::core::= (:c::type-of arg env fns) "str")
+          (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-str rt)))
+        (:else (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-i64 rt)))))))
 
 ;; `:wat::kernel::println` renders a String as EDN -- `(println "a\nb")` writes `"a\nb"` and a
 ;; newline, quotes kept and the escape NOT expanded -- so the faithful compilation of a string
@@ -545,6 +763,7 @@
     (:c::param-env pv (:wat::core::+ i 3) n
       (:wat::core::conj env
         (:c::Bind :name (:wat::core::ast->source (:wat::core::nth pv i))
+                  :ty (:c::ty-of-node (:wat::core::nth pv (:wat::core::+ i 2)))
                   :disp (:wat::core::+ 16 (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1)
                                                              (:wat::core::/ i 3)))))))))
 
@@ -595,8 +814,10 @@
           :message (:wat::string::concat "compile: only defn is allowed at the top level: "
                      (:wat::core::ast->source t)))
         (:c::collect tops (:wat::core::+ i 1)
-          (:wat::core::conj acc (:c::Fn :name (:wat::core::ast->source (:wat::core::nth ks 1))
-                                        :node t :addr 0)))))))
+          (:wat::core::conj acc
+            (:c::Fn :name (:wat::core::ast->source (:wat::core::nth ks 1)) :node t :addr 0
+                    :ret (:c::ty-of-node
+                           (:wat::core::nth ks (:wat::core::- (:c::body-start ks 3) 1))))))))))
 
 ;; one pass over every function: each is compiled at the address the table says, and the lengths
 ;; come back so the next table can be built
@@ -618,12 +839,27 @@
 (:wat::core::defn :c::empty-pass [] -> :c::PassR
   (:c::PassR :code "" :tail "" :lens (:wat::core::Vector :- [:wat::core::i64])))
 
-;; the entry stub: call main, then exit(0). 19 bytes, and the only code not compiled from a defn.
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64 19)
+;; the entry stub, and the only code not compiled from a defn: mmap a heap, park its address in
+;; r15, call main, exit(0). 94 bytes.
+;;
+;; **r15 is the whole memory model.** It is the bump pointer, it is callee-saved in the System V
+;; ABI, and nothing here ever calls anything this compiler did not emit -- so one register
+;; reserved for the program's lifetime is the entire allocator. There is no free, no collector
+;; and no bounds check: the heap is a megabyte, and a program that wants more gets a
+;; segmentation fault rather than an error message.
+(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1048576)
+
+(:wat::core::defn :c::stub-len [] -> :wat::core::i64 94)
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [o (:c::Out :base (:asm::entry) :code "" :tail "")]
-    (:c::Out/code (:c::emit (:c::call o main-addr)
+  (:wat::core::let
+    [o (:c::Out :base (:asm::entry) :code "" :tail "")
+     o1 (:c::emit o (:wat::string::concat
+          (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0) (:c::mov-rsi (:c::heap-bytes)))
+          (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
+          (:wat::string::concat (:c::mov-r8 -1) (:c::mov-r9 0))
+          (:wat::string::concat "0f05" "4989c7")))]        ;; syscall ; mov r15, rax
+    (:c::Out/code (:c::emit (:c::call o1 main-addr)
                     (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05")))))
 
 ;; place every function end to end after the stub
@@ -687,6 +923,7 @@
     (:c::compile "elf/src/branch.wat" "elf/out/branch.elf")
     (:c::compile "elf/src/fib.wat"    "elf/out/fib.elf")
     (:c::compile "elf/src/bench.wat"  "elf/out/bench.elf")
+    (:c::compile "elf/src/strings.wat" "elf/out/strings.elf")
     (:c::compile "elf/native/fork.wat"     "elf/out/fork.elf")
     (:c::compile "elf/native/thread.wat"   "elf/out/thread.elf")
     (:c::compile "elf/native/threads4.wat" "elf/out/threads4.elf")

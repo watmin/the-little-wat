@@ -34,7 +34,7 @@ chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
-for name in four arith greet branch fib bench; do
+for name in four arith greet branch fib bench strings; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$("$WAT" "$src" 2>&1); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
@@ -77,19 +77,28 @@ printf 'interpreted %5s ms    native %3s ms    %sx\n' "$i" "$n" "$(( i / n ))"
 
 echo
 echo "== and the compiler refuses what it cannot translate =="
-msg=$("$WAT" elf/refuse.wat 2>&1)
-if printf '%s' "$msg" | grep -q 'cannot compile call: (wat.core/str 10)'; then
-  echo "refused elf/bad/unsupported.wat, naming the form: (wat.core/str 10)"
-else
-  echo "FAIL: the compiler did not refuse elf/bad/unsupported.wat as expected"
-  printf '%s\n' "$msg" | head -3 | sed 's/^/      /'
-  fail=1
-fi
+# Both files are generated from elf/compile.wat by tools/gen-refuse.sh, so they are the SAME
+# compiler; both programs are valid wat that the interpreter runs.
+refuses () {   # driver, needle, what it proves
+  local drv="$1" needle="$2" why="$3" msg
+  msg=$("$WAT" "$drv" 2>&1)
+  if printf '%s' "$msg" | grep -qF "$needle"; then
+    echo "$why"
+  else
+    echo "FAIL: $drv did not refuse as expected"
+    printf '%s\n' "$msg" | head -3 | sed 's/^/      /'
+    fail=1
+  fi
+}
+refuses elf/refuse.wat          'cannot compile call: (wat.core/str 10)' \
+        "refused elf/bad/unsupported.wat, naming the form:    (wat.core/str 10)"
+refuses elf/refuse-nonascii.wat 'not encodable' \
+        "refused elf/bad/nonascii.wat, naming the character:  e-acute (F-120: bytes vs chars)"
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- eleven native binaries, nine of them compiled from wat source."
-  echo "         Six agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "elf-run: ok -- twelve native binaries, ten of them compiled from wat source."
+  echo "         Seven agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi

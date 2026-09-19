@@ -58,6 +58,7 @@
   (:wat::core::cond
     ((:wat::core::= c "\n") 10)
     ((:wat::core::= c "\t") 9)
+    ((:wat::core::= c "\r") 13)
     (:else (:asm::scan c 0))))
 
 (:wat::core::defn :asm::ascii [s <- :wat::core::String i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
