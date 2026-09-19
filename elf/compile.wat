@@ -636,11 +636,22 @@
 
 ;; ---------------------------------------------------------------- the output being built
 
+;; `rax` names the binding whose value is ALREADY in rax, or "". A `let` writes its register and
+;; the body's very first act is usually to read it straight back -- `mov %rax,%rbx` followed by
+;; `mov %rbx,%rax` -- which is two instructions at every binding C-142's inlining creates.
+;;
+;; **The window is one instruction wide and every emission closes it.** `:c::emit` clears the
+;; field unconditionally, and only `:c::bind-each` sets it, immediately after its store. So the
+;; read is elided only when nothing whatever was emitted in between -- which is also what makes
+;; it safe against a jump landing on the read: a branch target is a position some emission
+;; recorded, and any emission has already cleared the field.
 (:wat::core::defrecord :c::Out
-  [base <- :wat::core::i64  code <- :wat::core::String  tail <- :wat::core::String])
+  [base <- :wat::core::i64  code <- :wat::core::String  tail <- :wat::core::String
+   rax <- :wat::core::String])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
-  (:wat::core::assoc o :code (:wat::string::concat (:c::Out/code o) hex)))
+  (:wat::core::assoc (:wat::core::assoc o :code (:wat::string::concat (:c::Out/code o) hex))
+                     :rax ""))
 
 (:wat::core::defn :c::codelen [o <- :c::Out] -> :wat::core::i64
   (:wat::core::/ (:wat::string::length (:c::Out/code o)) 2))
@@ -1255,6 +1266,8 @@
         (:wat::core::let [r (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))
                           d (:c::lookup env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::cond
+            ;; already there, and nothing has been emitted since it was put there
+            ((:wat::core::= (:c::Out/rax o) (:c::text pg a)) o)
             ((:wat::core::>= r 0) (:c::emit o (:c::reg-mov-to r)))
             ((:wat::core::= d 999999) (:c::fail "name" a pg))
             (:else (:c::emit o (:c::load d))))))
@@ -2138,7 +2151,9 @@
        disp (:wat::core::* -8 (:wat::core::+ slot 1))
        r (:wat::core::if (:wat::core::< slot (:c::Prog/nlr pg))
            (:wat::core::+ (:c::Prog/regbase pg) slot) -1)
-       o2 (:c::emit o1 (:wat::core::if (:wat::core::>= r 0) (:c::reg-mov-from r) (:c::store disp)))]
+       o2 (:wat::core::assoc
+            (:c::emit o1 (:wat::core::if (:wat::core::>= r 0) (:c::reg-mov-from r) (:c::store disp)))
+            :rax name)]
       (:c::bind-each bs (:wat::core::+ i 2) o2
         (:wat::core::conj env
           (:c::Bind :name name :disp disp :reg r
@@ -2489,14 +2504,22 @@
      ;; a function that clones is excluded for the same reason it is excluded from tail calls:
      ;; the child inherits the frame, and moving a parameter into a register moves it out of
      ;; the place the child reads it from
-     regs? (:wat::core::and
-             (:wat::core::not (:c::has-clone? node pg))
-             (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
-                             (:c::text pg (:wat::core::nth ks 1)) n pg))
-     nr (:wat::core::if regs? (:c::imin n (:c::nregs)) 0)
-     env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs?)
      start (:c::body-start ks 3 pg)
      slots (:c::slots-body ks start 0 pg)
+     ;; **C-136 gave parameters registers only to a function with a self tail call**, because the
+     ;; prologue cost is per call and the benefit per iteration -- measured, and right at the
+     ;; time. C-146 changed the premise: a function with `let` bindings is already saving those
+     ;; registers, so the push and the pop are already bought and a parameter's register now
+     ;; costs one `mov` in the prologue and saves a frame load at every read. `fib` was loading
+     ;; `n` back three times a level with rbx, r12 and r13 already pushed above it.
+     regs? (:wat::core::and
+             (:wat::core::not (:c::has-clone? node pg))
+             (:wat::core::or
+               (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
+                               (:c::text pg (:wat::core::nth ks 1)) n pg)
+               (:wat::core::> slots 0)))
+     nr (:wat::core::if regs? (:c::imin n (:c::nregs)) 0)
+     env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs?)
      ;; **the registers a parameter did not take, `let` can have.** C-142's inlining turns every
      ;; inlined call into a `let`, and each of those bindings was round-tripping through a frame
      ;; slot -- a store and a load per read -- where gcc keeps the value in a register. Excluded
@@ -2507,7 +2530,7 @@
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
-     o0 (:c::Out :base base :code "" :tail tail-in)
+     o0 (:c::Out :base base :code "" :tail tail-in :rax "")
      ;; push rbp / mov rbp,rsp / make room / save the registers this function will use / load
      ;; the parameters into them. The saves come AFTER the frame so that a `let` slot at
      ;; [rbp-8k] does not land on a saved register.
@@ -2687,7 +2710,7 @@
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
-    [o (:c::Out :base (:asm::entry) :code "" :tail "")
+    [o (:c::Out :base (:asm::entry) :code "" :tail "" :rax "")
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
@@ -2788,7 +2811,20 @@
       (:c::imax best (:c::pure-max pg (:wat::core::nth ks i))))))
 
 (:wat::core::defn :c::inl-limit [] -> :wat::core::i64 34)
-(:wat::core::defn :c::inl-depth [] -> :wat::core::i64 2)
+;; **Depth is a property of the CALLEE, not a global number.** A self-recursive callee earns
+;; more of it: its inlined copy contains another call to itself, so each level removes a
+;; MULTIPLICATIVE number of calls. A leaf accessor earns almost none -- inlining it removes
+;; exactly one call per site, and further depth only expands ITS callees. Measured before the
+;; rule existed: one global depth of 4 bought `fib` 25% and cost this compiler 21%, because its
+;; own inlinable helpers are `:c::at-*` chains and nothing else.
+(:wat::core::defn :c::inl-depth [] -> :wat::core::i64 4)
+
+(:wat::core::defn :c::inl-depth-for [pg <- :c::Prog head <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::let [fi (:c::fn-of pg head 0)]
+    (:wat::core::if (:wat::core::< fi 0) 1
+      (:wat::core::let [nd (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))]
+        ;; the name occurs once as the definition; more than that is a call to itself
+        (:wat::core::if (:wat::core::> (:c::occ nd head pg) 1) 4 1)))))
 
 (:wat::core::defn :c::inl-ok? [pg <- :c::Prog head <- :wat::core::String nargs <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::let [fi (:c::fn-of pg head 0)]
@@ -2880,7 +2916,8 @@
      br (:c::inl-binds pg pv ks 0 d (:wat::core::Vector :- [:wat::core::i64]))
      vr (:c::mknode (:c::KidsR/pg br) "vector" "[]" (:c::KidsR/kids br))
      bo (:c::inl-body (:c::NodeR/pg vr) fks (:c::body-start fks 3 (:c::NodeR/pg vr))
-          (:wat::core::- d 1) (:wat::core::Vector :- [:wat::core::i64]))
+          (:c::imin (:wat::core::- d 1) (:c::inl-depth-for pg head))
+          (:wat::core::Vector :- [:wat::core::i64]))
      lr (:c::mknode (:c::KidsR/pg bo) "symbol" ":wat::core::let"
           (:wat::core::Vector :- [:wat::core::i64]))]
     (:c::mknode (:c::NodeR/pg lr) "list" (:c::text pg a)
