@@ -1246,17 +1246,69 @@
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
 ;; popped back -- the stack discipline a compiler without a register allocator has to use
+;; ---------------------------------------------------------------- the direct operand
+;;
+;; `(wat.core/- n 1)` used to be six instructions -- push rax, load 1, mov rcx, pop rax, sub --
+;; because a compiler with no register allocator keeps everything in rax and the stack. But x86
+;; will take the right-hand operand straight from an immediate or from memory, and the two
+;; shapes that matter are exactly the two a program writes most: a constant, and a name.
+;;
+;; So when the right operand is an int literal that fits in 32 bits, or a variable in the frame,
+;; the whole sequence collapses to ONE instruction. Everything else still goes the long way.
+;;
+;; `quot` and `rem` are excluded because `idiv` wants its divisor in rcx anyway, and a comparison
+;; keeps its `setcc`/`movzx` tail -- only the compare itself gets shorter.
+
+(:wat::core::defn :c::imm-op [op <- :wat::core::String n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "+") (:wat::string::concat "4805" (:asm::le n 4)))
+    ((:wat::core::= op "-") (:wat::string::concat "482d" (:asm::le n 4)))
+    ((:wat::core::= op "*") (:wat::string::concat "4869c0" (:asm::le n 4)))
+    ((:c::cmp? op) (:wat::string::concat "483d" (:asm::le n 4) (:c::setcc op) "480fb6c0"))
+    (:else "")))
+
+(:wat::core::defn :c::mem-op [op <- :wat::core::String d <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "+") (:wat::string::concat "480385" (:asm::le d 4)))
+    ((:wat::core::= op "-") (:wat::string::concat "482b85" (:asm::le d 4)))
+    ((:wat::core::= op "*") (:wat::string::concat "480faf85" (:asm::le d 4)))
+    ((:c::cmp? op) (:wat::string::concat "483b85" (:asm::le d 4) (:c::setcc op) "480fb6c0"))
+    (:else "")))
+
+;; an int literal small enough to be an immediate
+(:wat::core::defn :c::imm32? [n <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::and (:wat::core::>= n -2147483648) (:wat::core::<= n 2147483647)))
+
+;; the one instruction this operand collapses to, or "" if it does not
+(:wat::core::defn :c::direct [op <- :wat::core::String a <- :wat::core::i64 env <- :c::Env
+                              pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [k (:c::kind a pg)]
+    (:wat::core::cond
+      ((:wat::core::= k "int")
+        (:wat::core::let [n (:c::to-int (:c::text pg a) pg)]
+          (:wat::core::if (:c::imm32? n) (:c::imm-op op n) "")))
+      ((:wat::core::= k "symbol")
+        (:wat::core::let [d (:c::lookup env (:c::text pg a)
+                              (:wat::core::- (:wat::core::length env) 1))]
+          (:wat::core::if (:wat::core::= d 999999) "" (:c::mem-op op d))))
+      (:else ""))))
+
+;; left fold: the first argument lands in rax, and each one after it either collapses to a
+;; single instruction or is pushed, computed and popped back
 (:wat::core::defn :c::fold [op <- :wat::core::String ks <- :c::Kids i <- :wat::core::i64
                             o <- :c::Out env <- :c::Env pg <- :c::Prog
                             rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
-    (:wat::core::let
-      [o1 (:c::emit o "50")                                   ;; push rax
-       o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
-       o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
-       o4 (:c::emit o3 "58")                                  ;; pop rax
-       o5 (:c::emit o4 (:c::op-hex op))]
-      (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot))))
+    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)]
+      (:wat::core::if (:wat::core::not= fast "")
+        (:c::fold op ks (:wat::core::+ i 1) (:c::emit o fast) env pg rt tb slot)
+        (:wat::core::let
+          [o1 (:c::emit o "50")                               ;; push rax
+           o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
+           o3 (:c::emit o2 "4889c1")                          ;; mov rcx, rax
+           o4 (:c::emit o3 "58")                              ;; pop rax
+           o5 (:c::emit o4 (:c::op-hex op))]
+          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot))))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
@@ -1276,20 +1328,95 @@
 
 ;; ---------------------------------------------------------------- if
 
+;; ---------------------------------------------------------------- branching on the flags
+;;
+;; `(if (< n 2) ...)` used to compute the comparison into rax -- `cmp`, `setcc`, `movzx` -- and
+;; then throw that away again with `test rax,rax` and a `jz`. Five instructions to reach a branch
+;; the `cmp` had already decided.
+;;
+;; A comparison in the condition of an `if` now branches on the flags directly: the compare, and
+;; the OPPOSITE jump to the else. Everything else still goes through rax, because a condition that
+;; is not a comparison really does need a value to test.
+
+(:wat::core::defn :c::jcc-not [op <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "<") "0f8d")        ;; jge
+    ((:wat::core::= op ">") "0f8e")        ;; jle
+    ((:wat::core::= op "<=") "0f8f")       ;; jg
+    ((:wat::core::= op ">=") "0f8c")       ;; jl
+    ((:wat::core::= op "=") "0f85")        ;; jne
+    (:else "0f84")))                       ;; je, for not=
+
+;; the compare alone, with no setcc tail, when the right operand is an immediate or a name
+(:wat::core::defn :c::cmp-only [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [k (:c::kind a pg)]
+    (:wat::core::cond
+      ((:wat::core::= k "int")
+        (:wat::core::let [n (:c::to-int (:c::text pg a) pg)]
+          (:wat::core::if (:c::imm32? n) (:wat::string::concat "483d" (:asm::le n 4)) "")))
+      ((:wat::core::= k "symbol")
+        (:wat::core::let [d (:c::lookup env (:c::text pg a)
+                              (:wat::core::- (:wat::core::length env) 1))]
+          (:wat::core::if (:wat::core::= d 999999) ""
+            (:wat::string::concat "483b85" (:asm::le d 4)))))
+      (:else ""))))
+
+;; Is this condition a two-operand comparison of MACHINE WORDS, and therefore branchable?
+;;
+;; The type test is the whole point. `(if (wat.core/not= fast "") ...)` is a comparison by
+;; spelling and a `str_eq` call by meaning -- branching on `cmp rax, <address>` would compare
+;; pointers and answer "not equal" for two equal strings. That is F-120's cousin one more time,
+;; and it is how this optimisation announced itself: the compiler stopped recognising its own
+;; `defn`s the first time it compiled itself.
+(:wat::core::defn :c::cmp-cond [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") ""
+    (:wat::core::let [cks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) ""
+        (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth cks 0)))]
+          (:wat::core::if (:wat::core::not (:c::cmp? op)) ""
+            (:wat::core::if (:wat::core::or
+                              (:c::ptr-ty? (:c::type-of (:wat::core::nth cks 1) env pg))
+                              (:c::ptr-ty? (:c::type-of (:wat::core::nth cks 2) env pg)))
+              "" op)))))))
+
+(:wat::core::defn :c::if-cmp [ks <- :c::Kids op <- :wat::core::String o <- :c::Out env <- :c::Env
+                              pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                              slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+  (:wat::core::let
+    [cks (:c::kidsof pg (:wat::core::nth ks 1))
+     o1 (:c::expr (:wat::core::nth cks 1) o env pg rt tb slot (:c::no-tail))
+     fast (:c::cmp-only (:wat::core::nth cks 2) env pg)
+     o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
+          (:wat::core::let
+            [p1 (:c::emit o1 "50")
+             p2 (:c::expr (:wat::core::nth cks 2) p1 env pg rt tb slot (:c::no-tail))]
+            (:c::emit p2 (:wat::string::concat "4889c1" "58" "4839c8"))))
+     o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
+     at (:wat::core::- (:c::codelen o3) 4)
+     o4 (:c::expr (:wat::core::nth ks 2) o3 env pg rt tb slot tc)
+     o5 (:c::emit o4 "e900000000")
+     jmp-at (:wat::core::- (:c::codelen o5) 4)
+     o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 4)) 4))
+     o7 (:c::expr (:wat::core::nth ks 3) o6 env pg rt tb slot tc)]
+    (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4))))
+
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "if arity" a pg)
-    (:wat::core::let
-      [o1 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-       o2 (:c::emit o1 "4885c0")                       ;; test rax, rax
-       o3 (:c::emit o2 "0f8400000000")                 ;; jz <patched below>
-       jz-at (:wat::core::- (:c::codelen o3) 4)
-       o4 (:c::expr (:wat::core::nth ks 2) o3 env pg rt tb slot tc)
-       o5 (:c::emit o4 "e900000000")                   ;; jmp <patched below>
-       jmp-at (:wat::core::- (:c::codelen o5) 4)
-       o6 (:c::patch o5 jz-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jz-at 4)) 4))
-       o7 (:c::expr (:wat::core::nth ks 3) o6 env pg rt tb slot tc)]
-      (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4)))))
+    (:wat::core::let [cop (:c::cmp-cond (:wat::core::nth ks 1) env pg)]
+     (:wat::core::if (:wat::core::not= cop "")
+      (:c::if-cmp ks cop o env pg rt tb slot tc)
+      (:wat::core::let
+       [o1 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+        o2 (:c::emit o1 "4885c0")                      ;; test rax, rax
+        o3 (:c::emit o2 "0f8400000000")                ;; jz <patched below>
+        jz-at (:wat::core::- (:c::codelen o3) 4)
+        o4 (:c::expr (:wat::core::nth ks 2) o3 env pg rt tb slot tc)
+        o5 (:c::emit o4 "e900000000")                  ;; jmp <patched below>
+        jmp-at (:wat::core::- (:c::codelen o5) 4)
+        o6 (:c::patch o5 jz-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jz-at 4)) 4))
+        o7 (:c::expr (:wat::core::nth ks 3) o6 env pg rt tb slot tc)]
+       (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4)))))))
 
 ;; ---------------------------------------------------------------- last use
 ;;
