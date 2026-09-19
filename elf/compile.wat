@@ -1336,6 +1336,110 @@
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
 ;; popped back -- the stack discipline a compiler without a register allocator has to use
+;; ---------------------------------------------------------------- expression temporaries
+;;
+;; `:c::direct` below collapses a right operand that is a constant or a name. What it cannot
+;; help with is a COMPOUND right operand -- `(+ a (* b c))`, `(nth v (+ i 1))` -- which still
+;; went through the stack: push the accumulator, evaluate the operand into rax, mov rcx,rax,
+;; pop rax, combine. Three instructions and two memory references to hold one value.
+;;
+;; A register would do, if one could be shown to survive. **r8 through r11 survive exactly when
+;; the operand emits no call** -- nothing else this compiler generates touches them, and a call
+;; touches all of them. So the question is decidable by looking at the subtree, and the answer is
+;; a whitelist: arithmetic, comparisons, the logical forms, `if`, `cond`, `let`, `do`, `nth`,
+;; `length`, `peek`, and leaves. `=` and `not=` are NOT on it, because on two Strings they call
+;; `str_eq` (C-130) and that is decided by types this function does not have.
+;;
+;; How many of the four a subtree needs is computed bottom-up, so nothing has to be threaded:
+;; an operand needing k registers is evaluated with 0..k-1, which leaves k free for the value
+;; waiting on it.
+
+(:wat::core::defn :c::nscratch [] -> :wat::core::i64 4)
+
+(:wat::core::defn :c::scr-save [r <- :wat::core::i64] -> :wat::core::String     ;; mov rN, rax
+  (:wat::core::cond ((:wat::core::= r 0) "4989c0") ((:wat::core::= r 1) "4989c1")
+                    ((:wat::core::= r 2) "4989c2") (:else "4989c3")))
+(:wat::core::defn :c::scr-back [r <- :wat::core::i64] -> :wat::core::String     ;; mov rax, rN
+  (:wat::core::cond ((:wat::core::= r 0) "4c89c0") ((:wat::core::= r 1) "4c89c8")
+                    ((:wat::core::= r 2) "4c89d0") (:else "4c89d8")))
+
+;; rax = rN OP rax, where rN holds the left operand
+(:wat::core::defn :c::scr-op [op <- :wat::core::String r <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "+")
+      (:wat::core::cond ((:wat::core::= r 0) "4c01c0") ((:wat::core::= r 1) "4c01c8")
+                        ((:wat::core::= r 2) "4c01d0") (:else "4c01d8")))
+    ((:wat::core::= op "*")
+      (:wat::core::cond ((:wat::core::= r 0) "490fafc0") ((:wat::core::= r 1) "490fafc1")
+                        ((:wat::core::= r 2) "490fafc2") (:else "490fafc3")))
+    ;; subtraction is not commutative, so it runs backwards and comes home
+    ((:wat::core::= op "-")
+      (:wat::string::concat
+        (:wat::core::cond ((:wat::core::= r 0) "4929c0") ((:wat::core::= r 1) "4929c1")
+                          ((:wat::core::= r 2) "4929c2") (:else "4929c3"))
+        (:c::scr-back r)))
+    ((:c::cmp? op)
+      (:wat::string::concat
+        (:wat::core::cond ((:wat::core::= r 0) "4939c0") ((:wat::core::= r 1) "4939c1")
+                          ((:wat::core::= r 2) "4939c2") (:else "4939c3"))
+        (:c::setcc op) "480fb6c0"))
+    (:else "")))
+
+;; the heads that emit no call and leave r8-r11 alone
+(:wat::core::defn :c::quiet-head? [h <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:c::cmp? (:c::binop h))
+    (:wat::core::or (:wat::core::not= (:c::binop h) "")
+      (:wat::core::or (:c::if? h) (:wat::core::or (:c::cond? h)
+        (:wat::core::or (:c::and? h) (:wat::core::or (:c::or? h)
+          (:wat::core::or (:c::not? h) (:wat::core::or (:c::do? h)
+            (:wat::core::or (:c::let? h) (:wat::core::or (:c::nth? h)
+              (:wat::core::or (:c::len? h) (:wat::core::or (:c::strlen? h)
+                                                          (:c::peek? h))))))))))))))
+
+(:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") true
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
+        (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
+          ;; `=` and `not=` may be `str_eq`, which is a call
+          (:wat::core::and
+            (:wat::core::and (:c::quiet-head? h)
+              (:wat::core::and (:wat::core::not= (:c::binop h) "=")
+                               (:wat::core::not= (:c::binop h) "not=")))
+            (:c::all-safe? ks 1 pg)))))))
+
+(:wat::core::defn :c::all-safe? [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
+                     (:c::all-safe? ks (:wat::core::+ i 1) pg))))
+
+;; how many of r8..r11 evaluating this subtree will use
+(:wat::core::defn :c::scratch-need [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") 0
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
+        (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))]
+          (:wat::core::if (:wat::core::or (:wat::core::= op "") (:wat::core::= op "quot"))
+            (:c::need-max ks 0 pg 0)
+            (:wat::core::if (:wat::core::= op "rem") (:c::need-max ks 0 pg 0)
+              (:c::need-fold ks 2 pg
+                (:c::scratch-need (:wat::core::nth ks 1) pg)))))))))
+
+(:wat::core::defn :c::need-max [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
+                                best <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
+    (:c::need-max ks (:wat::core::+ i 1) pg
+      (:c::imax best (:c::scratch-need (:wat::core::nth ks i) pg)))))
+
+(:wat::core::defn :c::need-fold [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
+                                 best <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
+    (:wat::core::let [r (:c::scratch-need (:wat::core::nth ks i) pg)
+                      use? (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
+                                            (:wat::core::< r (:c::nscratch)))]
+      (:c::need-fold ks (:wat::core::+ i 1) pg
+        (:c::imax best (:wat::core::if use? (:wat::core::+ r 1) r))))))
+
 ;; ---------------------------------------------------------------- the direct operand
 ;;
 ;; `(wat.core/- n 1)` used to be six instructions -- push rax, load 1, mov rcx, pop rax, sub --
@@ -1414,16 +1518,30 @@
                             o <- :c::Out env <- :c::Env pg <- :c::Prog
                             rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
-    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)]
-      (:wat::core::if (:wat::core::not= fast "")
-        (:c::fold op ks (:wat::core::+ i 1) (:c::emit o fast) env pg rt tb slot)
-        (:wat::core::let
+    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)
+                      r (:c::scratch-need (:wat::core::nth ks i) pg)
+                      scr? (:wat::core::and (:wat::core::= fast "")
+                             (:wat::core::and (:wat::core::not= (:c::scr-op op 0) "")
+                               (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) pg)
+                                                (:wat::core::< r (:c::nscratch)))))]
+      (:wat::core::cond
+        ((:wat::core::not= fast "")
+          (:c::fold op ks (:wat::core::+ i 1) (:c::emit o fast) env pg rt tb slot))
+        ;; the accumulator waits in a register instead of on the stack
+        (scr?
+          (:wat::core::let
+            [s1 (:c::emit o (:c::scr-save r))
+             s2 (:c::expr (:wat::core::nth ks i) s1 env pg rt tb slot (:c::no-tail))]
+            (:c::fold op ks (:wat::core::+ i 1) (:c::emit s2 (:c::scr-op op r))
+              env pg rt tb slot)))
+        (:else
+          (:wat::core::let
           [o1 (:c::emit o "50")                               ;; push rax
            o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
            o3 (:c::emit o2 "4889c1")                          ;; mov rcx, rax
            o4 (:c::emit o3 "58")                              ;; pop rax
            o5 (:c::emit o4 (:c::op-hex op))]
-          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot))))))
+          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot)))))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
@@ -2268,7 +2386,7 @@
 ;; when they are first touched. A megabyte was enough while the only thing that
 ;; allocated was string concatenation, and 64 MiB until the compiler compiled itself -- which
 ;; touches more than that, because nothing is reclaimed except at statement boundaries (C-125).
-(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1073741824)
+(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1900000000)
 (:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
 
 (:wat::core::defn :c::stub-len [] -> :wat::core::i64 117)
@@ -2374,6 +2492,7 @@
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
+    (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")
     (:c::compile "elf/bench/cat32000.wat"    "elf/out/cat32000.elf")
     (:c::compile "elf/bench/grow20000.wat"   "elf/out/grow20000.elf")
     (:c::compile "elf/bench/grow200000.wat"  "elf/out/grow200000.elf")
