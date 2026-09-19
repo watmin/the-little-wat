@@ -107,7 +107,17 @@ peepholes.
    container's own count is never 1, because `:c::push-args` increments every pointer-typed
    symbol argument. C-143 tried to make that a move and was reverted over four aliasing holes,
    which are written up in its entry and are the real specification for this work.
-4. **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
+4. ~~**Frame-pointer elimination.**~~ **DONE 2026-09-19, C-155**, in three steps so the first
+   one could be tested: track the depth and change no bytes, then address from rsp with rbp still
+   maintained, then drop rbp and give it to the allocator. It is worth **-2.7% instructions and
+   -1.8% cycles on the compiler and nothing at all on the benchmarks**, because the two halves
+   cancel on anything call-heavy — dropping rbp removes two instructions per call and a fourth
+   callee-saved register adds a push and a pop back. What it really bought is **a register that
+   did not exist**, which is what a register calling convention will need. `clone` keeps its
+   frame pointer: the child gets a fresh rsp and inherits rbp, and that is the only reason a
+   spawned thread can read the frame it came from. Original text:
+
+   **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
    levels are live at once and C-146 has three registers, because `rbp` is the frame pointer and
    `r14`/`r15` hold the buffer and the heap. Dropping `rbp` frees a fourth AND removes
    `push rbp` / `mov rbp,rsp` / `leave` from every call. The obstacle is real: expression

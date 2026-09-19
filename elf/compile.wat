@@ -601,16 +601,29 @@
 (:wat::core::defn :c::disp8? [d <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::and (:wat::core::>= d -128) (:wat::core::<= d 127)))
 
+;; **Every frame access is measured from rsp, not rbp.** The displacement arrives already
+;; adjusted by `:c::fp` -- the caller is the only thing that knows how deep the stack is right
+;; here -- and the opcodes carry a SIB byte, because rsp cannot be a ModRM base without one.
+;; That byte is the price of the frame pointer's register: one more byte per frame access.
 (:wat::core::defn :c::rbp-at [op1 <- :wat::core::String op4 <- :wat::core::String
                               d <- :wat::core::i64] -> :wat::core::String
   (:wat::core::if (:c::disp8? d)
     (:wat::string::concat op1 (:asm::le d 1))
     (:wat::string::concat op4 (:asm::le d 4))))
 
-(:wat::core::defn :c::store [d <- :wat::core::i64] -> :wat::core::String
-  (:c::rbp-at "488945" "488985" d))
-(:wat::core::defn :c::load [d <- :wat::core::i64] -> :wat::core::String
-  (:c::rbp-at "488b45" "488b85" d))
+;; the same, choosing between a frame-pointer form and an rsp form. The rsp opcodes carry a SIB
+;; byte, because rsp cannot be a ModRM base without one -- one byte per frame access, which is
+;; what the register costs.
+(:wat::core::defn :c::at-frame [fp? <- :wat::core::bool
+                                b1 <- :wat::core::String b4 <- :wat::core::String
+                                s1 <- :wat::core::String s4 <- :wat::core::String
+                                d <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if fp? (:c::rbp-at b1 b4 d) (:c::rbp-at s1 s4 d)))
+
+(:wat::core::defn :c::store [d <- :wat::core::i64 fp? <- :wat::core::bool] -> :wat::core::String
+  (:c::at-frame fp? "488945" "488985" "48894424" "48898424" d))
+(:wat::core::defn :c::load [d <- :wat::core::i64 fp? <- :wat::core::bool] -> :wat::core::String
+  (:c::at-frame fp? "488b45" "488b85" "488b4424" "488b8424" d))
 
 ;; a source literal into rax: seven bytes when it fits in a sign-extended 32, ten when it does
 ;; not. Addresses keep `:c::mov-rax`, which is always ten.
@@ -731,7 +744,8 @@
 ;; knows the depth. Tracking them while still addressing through rbp is how the tracking gets
 ;; tested: every binary has to come out byte for byte identical.
   [base <- :wat::core::i64  code <- :c::Buf  tail <- :c::Buf
-   rax <- :wat::core::String  sp <- :wat::core::i64  fk <- :wat::core::i64])
+   rax <- :wat::core::String  sp <- :wat::core::i64  fk <- :wat::core::i64
+   fpr <- :wat::core::bool])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
   (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
@@ -750,8 +764,28 @@
   (:wat::core::assoc (:c::emit o hex) :sp (:wat::core::- (:c::Out/sp o) n)))
 
 ;; the displacement that reaches what `[rbp + d]` reaches, measured from rsp
+;; the displacement that reaches what `[rbp + d]` reaches. **A function that CLONES keeps its
+;; frame pointer**, so for those it is still `d`: `clone` gives the child a fresh rsp and lets it
+;; inherit rbp, which is the only reason a thread can see the frame it was spawned from. C-136
+;; already refuses such a function its register parameters and C-121 its tail calls, for the same
+;; reason; this is the third thing the intrinsic costs.
+;;
+;; **The eight bytes that held the saved rbp are gone, and only the things ABOVE the frame
+;; notice.** `sub rsp, frame` still carves the same slots out of the same place, so a local at
+;; `[rbp-8k]` lands where it always did; but the return address and the arguments sat above the
+;; saved rbp, so each of them is now eight bytes nearer. Locals are the negative displacements
+;; and arguments the positive ones, which is what makes the test a sign.
+(:wat::core::defn :c::fp-at [d <- :wat::core::i64 adj <- :wat::core::i64
+                            fp? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::if fp? d
+    (:wat::core::+ (:wat::core::if (:wat::core::> d 0) (:wat::core::- d 8) d) adj)))
+
+;; how far rsp is from where rbp would be, which is all an operand's own displacement needs
+(:wat::core::defn :c::fp-adj [o <- :c::Out] -> :wat::core::i64
+  (:wat::core::+ (:c::Out/fk o) (:c::Out/sp o)))
+
 (:wat::core::defn :c::fp [o <- :c::Out d <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ d (:wat::core::+ (:c::Out/fk o) (:c::Out/sp o))))
+  (:c::fp-at d (:c::fp-adj o) (:c::Out/fpr o)))
 
 ;; a body has to end at the depth it began, or every displacement after it is wrong by whatever
 ;; leaked. This is the whole test for the tracking, and it runs on every function of every
@@ -965,16 +999,24 @@
 
 ;; innermost first, so a `let` shadows a parameter of the same name
 ;; how many parameters get registers, and which registers those are
-(:wat::core::defn :c::nregs [] -> :wat::core::i64 3)
+;; **four, because frame-pointer elimination freed rbp.** rbx, r12, r13, rbp -- every
+;; callee-saved register the ABI has that this compiler is not already spending on the output
+;; buffer (r14) and the heap (r15). A function that CLONES gets none of them anyway, which is
+;; what keeps rbp available as its frame pointer.
+(:wat::core::defn :c::nregs [] -> :wat::core::i64 4)
 
 (:wat::core::defn :c::reg-mov-to [r <- :wat::core::i64] -> :wat::core::String   ;; mov rax, REG
-  (:wat::core::cond ((:wat::core::= r 0) "4889d8") ((:wat::core::= r 1) "4c89e0") (:else "4c89e8")))
+  (:wat::core::cond ((:wat::core::= r 0) "4889d8") ((:wat::core::= r 1) "4c89e0")
+                    ((:wat::core::= r 2) "4c89e8") (:else "4889e8")))
 (:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String ;; mov REG, rax
-  (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4") (:else "4989c5")))
+  (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4")
+                    ((:wat::core::= r 2) "4989c5") (:else "4889c5")))
 (:wat::core::defn :c::reg-push [r <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond ((:wat::core::= r 0) "53") ((:wat::core::= r 1) "4154") (:else "4155")))
+  (:wat::core::cond ((:wat::core::= r 0) "53") ((:wat::core::= r 1) "4154")
+                    ((:wat::core::= r 2) "4155") (:else "55")))
 (:wat::core::defn :c::reg-pop [r <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond ((:wat::core::= r 0) "5b") ((:wat::core::= r 1) "415c") (:else "415d")))
+  (:wat::core::cond ((:wat::core::= r 0) "5b") ((:wat::core::= r 1) "415c")
+                    ((:wat::core::= r 2) "415d") (:else "5d")))
 
 ;; `cmp $imm, REG` -- the comparison with a register on the LEFT. C-133 taught the right operand
 ;; of a binop to come straight from an immediate or the frame; the left one always went through
@@ -985,7 +1027,8 @@
                     pre (:wat::core::cond
                           ((:wat::core::= r 0) (:wat::core::if short? "4883fb" "4881fb"))
                           ((:wat::core::= r 1) (:wat::core::if short? "4983fc" "4981fc"))
-                          (:else (:wat::core::if short? "4983fd" "4981fd")))]
+                          ((:wat::core::= r 2) (:wat::core::if short? "4983fd" "4981fd"))
+                          (:else (:wat::core::if short? "4883fd" "4881fd")))]
     (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
 
 ;; which register this operand already lives in, or -1
@@ -996,27 +1039,29 @@
 (:wat::core::defn :c::imm-cmp? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
                    (:c::imm32? (:c::to-int (:c::text pg a) pg))))
-;; `mov <reg>, rax` -- a `let` binding landing in a register instead of a frame slot
-(:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4") (:else "4989c5")))
-
-(:wat::core::defn :c::reg-load [r <- :wat::core::i64 d <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::reg-load [r <- :wat::core::i64 d <- :wat::core::i64
+                                fp? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::= r 0) (:c::rbp-at "488b5d" "488b9d" d))
-    ((:wat::core::= r 1) (:c::rbp-at "4c8b65" "4c8ba5" d))
-    (:else (:c::rbp-at "4c8b6d" "4c8bad" d))))
+    ((:wat::core::= r 0) (:c::at-frame fp? "488b5d" "488b9d" "488b5c24" "488b9c24" d))
+    ((:wat::core::= r 1) (:c::at-frame fp? "4c8b65" "4c8ba5" "4c8b6424" "4c8ba424" d))
+    ((:wat::core::= r 2) (:c::at-frame fp? "4c8b6d" "4c8bad" "4c8b6c24" "4c8bac24" d))
+    (:else (:c::at-frame fp? "488b6d" "488bad" "488b6c24" "488bac24" d))))
 
 ;; the operand forms, when the right-hand side is one of those registers
 (:wat::core::defn :c::reg-op [op <- :wat::core::String r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= op "+")
-      (:wat::core::cond ((:wat::core::= r 0) "4801d8") ((:wat::core::= r 1) "4c01e0") (:else "4c01e8")))
+      (:wat::core::cond ((:wat::core::= r 0) "4801d8") ((:wat::core::= r 1) "4c01e0")
+                        ((:wat::core::= r 2) "4c01e8") (:else "4801e8")))
     ((:wat::core::= op "-")
-      (:wat::core::cond ((:wat::core::= r 0) "4829d8") ((:wat::core::= r 1) "4c29e0") (:else "4c29e8")))
+      (:wat::core::cond ((:wat::core::= r 0) "4829d8") ((:wat::core::= r 1) "4c29e0")
+                        ((:wat::core::= r 2) "4c29e8") (:else "4829e8")))
     ((:wat::core::= op "*")
-      (:wat::core::cond ((:wat::core::= r 0) "480fafc3") ((:wat::core::= r 1) "490fafc4") (:else "490fafc5")))
+      (:wat::core::cond ((:wat::core::= r 0) "480fafc3") ((:wat::core::= r 1) "490fafc4")
+                        ((:wat::core::= r 2) "490fafc5") (:else "480fafc5")))
     ((:c::cmp? op)
-      (:wat::core::cond ((:wat::core::= r 0) "4839d8") ((:wat::core::= r 1) "4c39e0") (:else "4c39e8")))
+      (:wat::core::cond ((:wat::core::= r 0) "4839d8") ((:wat::core::= r 1) "4c39e0")
+                        ((:wat::core::= r 2) "4c39e8") (:else "4839e8")))
     (:else "")))
 
 (:wat::core::defn :c::lookup-reg [env <- :c::Env name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
@@ -1393,7 +1438,14 @@
 (:wat::core::defn :c::tail-store [k <- :wat::core::i64 n <- :wat::core::i64 o <- :c::Out
                                   nr <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= k n) o
-    (:wat::core::let [i (:wat::core::- (:wat::core::- n 1) k)]
+    (:wat::core::let
+      [i (:wat::core::- (:wat::core::- n 1) k)
+       ;; **the store happens AFTER the pop, so it measures from the shallower stack.** This is
+       ;; the one site in the compiler where a frame access and a stack move share an emit, and
+       ;; it is exactly the kind of thing a frame pointer made impossible to get wrong.
+       fpr? (:c::Out/fpr o)
+       d (:wat::core::+ (:c::fp o (:wat::core::+ 16 (:wat::core::* 8 k)))
+                        (:wat::core::if (:wat::core::or fpr? (:wat::core::= k 0)) 0 -8))]
       (:c::tail-store (:wat::core::+ k 1) n
         (:c::popn o
           ;; **k = 0 is the LAST argument, and it never went to the stack.** It used to be
@@ -1401,10 +1453,9 @@
           ;; written as a store and a load, once per iteration of every tail-recursive loop
           ;; (C-153 found the pair adjacent in `loopsum`). `:c::push-but-last` leaves it in rax.
           (:wat::core::if (:wat::core::= k 0)
-            (:wat::core::if (:wat::core::< i nr) (:c::reg-mov-from i)
-              (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))
+            (:wat::core::if (:wat::core::< i nr) (:c::reg-mov-from i) (:c::store d fpr?))
             (:wat::core::if (:wat::core::< i nr) (:c::reg-pop i)
-              (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))))
+              (:wat::string::concat "58" (:c::store d fpr?))))
           ;; ...so k = 0 moves the stack by nothing, and every other k by one slot
           (:wat::core::if (:wat::core::= k 0) 0 8))
         nr))))
@@ -1444,7 +1495,8 @@
             ((:wat::core::>= r 0)
               (:wat::core::assoc (:c::emit o (:c::reg-mov-to r)) :rax (:c::text pg a)))
             ((:wat::core::= d 999999) (:c::fail "name" a pg))
-            (:else (:wat::core::assoc (:c::emit o (:c::load d)) :rax (:c::text pg a))))))
+            (:else (:wat::core::assoc (:c::emit o (:c::load (:c::fp o d) (:c::Out/fpr o)))
+                     :rax (:c::text pg a))))))
       ;; nil is a machine zero and a bool is 0 or 1, which is already what a comparison leaves
       ;; in rax -- so both are literals, and only `println` has to know which is which
       ((:wat::core::= k "nil") (:c::emit o (:c::mov-rax 0)))
@@ -1731,9 +1783,12 @@
     ((:wat::core::= lr 1)
       (:wat::core::cond ((:wat::core::= r 0) "4d89e0") ((:wat::core::= r 1) "4d89e1")
                         ((:wat::core::= r 2) "4d89e2") (:else "4d89e3")))
-    (:else
+    ((:wat::core::= lr 2)
       (:wat::core::cond ((:wat::core::= r 0) "4d89e8") ((:wat::core::= r 1) "4d89e9")
-                        ((:wat::core::= r 2) "4d89ea") (:else "4d89eb")))))
+                        ((:wat::core::= r 2) "4d89ea") (:else "4d89eb")))
+    (:else
+      (:wat::core::cond ((:wat::core::= r 0) "4989e8") ((:wat::core::= r 1) "4989e9")
+                        ((:wat::core::= r 2) "4989ea") (:else "4989eb")))))
 
 ;; the register a tracked NAME lives in, or -1 -- including for the empty name, which is what
 ;; `:c::Out/rax` holds when it knows nothing
@@ -1876,16 +1931,19 @@
     (:wat::core::if (:wat::core::= c "") ""
       (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
 
-(:wat::core::defn :c::mem-only [op <- :wat::core::String d <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::mem-only [op <- :wat::core::String d <- :wat::core::i64
+                                fp? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::= op "+") (:c::rbp-at "480345" "480385" d))
-    ((:wat::core::= op "-") (:c::rbp-at "482b45" "482b85" d))
-    ((:wat::core::= op "*") (:c::rbp-at "480faf45" "480faf85" d))
-    ((:c::cmp? op) (:c::rbp-at "483b45" "483b85" d))
+    ((:wat::core::= op "+") (:c::at-frame fp? "480345" "480385" "48034424" "48038424" d))
+    ((:wat::core::= op "-") (:c::at-frame fp? "482b45" "482b85" "482b4424" "482b8424" d))
+    ((:wat::core::= op "*")
+      (:c::at-frame fp? "480faf45" "480faf85" "480faf4424" "480faf8424" d))
+    ((:c::cmp? op) (:c::at-frame fp? "483b45" "483b85" "483b4424" "483b8424" d))
     (:else "")))
 
-(:wat::core::defn :c::mem-op [op <- :wat::core::String d <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [c (:c::mem-only op d)]
+(:wat::core::defn :c::mem-op [op <- :wat::core::String d <- :wat::core::i64
+                              fp? <- :wat::core::bool] -> :wat::core::String
+  (:wat::core::let [c (:c::mem-only op d fp?)]
     (:wat::core::if (:wat::core::= c "") ""
       (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
 
@@ -1895,7 +1953,8 @@
 
 ;; the one instruction this operand collapses to, or "" if it does not
 (:wat::core::defn :c::direct [op <- :wat::core::String a <- :wat::core::i64 env <- :c::Env
-                              pg <- :c::Prog] -> :wat::core::String
+                              pg <- :c::Prog adj <- :wat::core::i64
+                              fp? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let [k (:c::kind a pg)]
     (:wat::core::cond
       ((:wat::core::= k "int")
@@ -1910,7 +1969,7 @@
                 (:wat::core::if (:wat::core::= c "") ""
                   (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
             ((:wat::core::= d 999999) "")
-            (:else (:c::mem-op op d)))))
+            (:else (:c::mem-op op (:c::fp-at d adj fp?) fp?)))))
       (:else ""))))
 
 ;; left fold: the first argument lands in rax, and each one after it either collapses to a
@@ -1958,7 +2017,8 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
     ;; a one-operand fold never ran a step, so the value is still where it started
     (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
-    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)
+    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg
+                             (:c::fp-adj o) (:c::Out/fpr o))
                       r (:c::scratch-need (:wat::core::nth ks i) env pg)
                       scr? (:wat::core::and (:wat::core::= fast "")
                              (:wat::core::and (:wat::core::not= (:c::scr-op op 0) "")
@@ -2036,7 +2096,9 @@
     (:else "0f84")))                       ;; je, for not=
 
 ;; the compare alone, with no setcc tail, when the right operand is an immediate or a name
-(:wat::core::defn :c::cmp-only [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+(:wat::core::defn :c::cmp-only [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
+                                adj <- :wat::core::i64
+                                fp? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let [k (:c::kind a pg)]
     (:wat::core::cond
       ((:wat::core::= k "int")
@@ -2048,7 +2110,7 @@
           (:wat::core::cond
             ((:wat::core::>= r 0) (:c::reg-op "=" r))
             ((:wat::core::= d 999999) "")
-            (:else (:c::mem-only "=" d)))))
+            (:else (:c::mem-only "=" (:c::fp-at d adj fp?) fp?)))))
       (:else ""))))
 
 ;; Is this condition a two-operand comparison of MACHINE WORDS, and therefore branchable?
@@ -2084,7 +2146,7 @@
           (:c::expr (:wat::core::nth cks 1) o env pg rt tb slot (:c::no-tail)))
      fast (:wat::core::if both?
             (:c::reg-cmp-imm lr (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg))
-            (:c::cmp-only (:wat::core::nth cks 2) env pg))
+            (:c::cmp-only (:wat::core::nth cks 2) env pg (:c::fp-adj o1) (:c::Out/fpr o1)))
      o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
           (:wat::core::let
             [p1 (:c::push o1 "50" 8)
@@ -2457,7 +2519,8 @@
        r (:wat::core::if (:wat::core::< slot (:c::Prog/nlr pg))
            (:wat::core::+ (:c::Prog/regbase pg) slot) -1)
        o2 (:wat::core::assoc
-            (:c::emit o1 (:wat::core::if (:wat::core::>= r 0) (:c::reg-mov-from r) (:c::store disp)))
+            (:c::emit o1 (:wat::core::if (:wat::core::>= r 0) (:c::reg-mov-from r)
+                           (:c::store (:c::fp o1 disp) (:c::Out/fpr o1))))
             :rax name)]
       (:c::bind-each bs (:wat::core::+ i 2) o2
         (:wat::core::conj env
@@ -2793,12 +2856,15 @@
     (:c::reg-restores (:wat::core::- i 1) (:wat::string::concat acc (:c::reg-pop i)))))
 
 (:wat::core::defn :c::reg-loads [pv <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
-                                 nr <- :wat::core::i64 pg <- :c::Prog
+                                 nr <- :wat::core::i64 pg <- :c::Prog k <- :wat::core::i64
+                                 fp? <- :wat::core::bool
                                  acc <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::core::>= i nr) acc
-    (:c::reg-loads pv (:wat::core::+ i 1) n nr pg
+    (:c::reg-loads pv (:wat::core::+ i 1) n nr pg k fp?
       (:wat::string::concat acc
-        (:c::reg-load i (:wat::core::+ 16 (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) i))))))))
+        (:c::reg-load i (:wat::core::+ k
+          (:wat::core::+ (:wat::core::if fp? 16 8)
+                         (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) i)))) fp?)))))
 
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :wat::core::i64 tb <- :wat::core::i64
@@ -2836,16 +2902,24 @@
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
-     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0
-                 ;; rbp sits `frame` bytes plus the saved registers above rsp once the prologue
-                 ;; has run, which is the distance every `[rbp + d]` has to cross
-                 :fk (:wat::core::+ frame (:wat::core::* 8 (:wat::core::+ nr nlr))))
-     ;; push rbp / mov rbp,rsp / make room / save the registers this function will use / load
-     ;; the parameters into them. The saves come AFTER the frame so that a `let` slot at
-     ;; [rbp-8k] does not land on a saved register.
-     o1 (:c::emit o0 (:wat::string::concat "55" "4889e5" (:c::sub-rsp frame)
+     ;; **the frame pointer is gone except where `clone` needs it.** Without it a local is
+     ;; addressed from rsp, which costs a SIB byte and a depth the emitter has to track -- and
+     ;; buys `rbp` as a fourth callee-saved register plus two instructions off every call.
+     fpr? (:c::has-clone? node pg)
+     ;; **where rbp WOULD point, measured from rsp at the top of the body.** `push rbp` used to
+     ;; put it eight bytes below the return address, and the frame and the saved registers below
+     ;; that -- so without the push the whole frame moves up by those eight bytes, and forgetting
+     ;; them puts every parameter one slot out.
+     fkv (:wat::core::if fpr? 0
+           (:wat::core::+ frame (:wat::core::* 8 (:wat::core::+ nr nlr))))
+     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv)
+     ;; make room / save the registers this function will use / load the parameters into them.
+     ;; The saves come AFTER the frame so that a `let` slot does not land on a saved register.
+     o1 (:c::emit o0 (:wat::string::concat
+                       (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
+                       (:c::sub-rsp frame)
                        (:c::reg-saves 0 (:wat::core::+ nr nlr) "")
-                       (:c::reg-loads pv 0 n nr pg "")))
+                       (:c::reg-loads pv 0 n nr pg fkv fpr? "")))
      ;; the top of the body is wherever the prologue ended -- which is NOT a constant any more,
      ;; now that `sub rsp` is one byte of displacement when it fits and nothing at all when the
      ;; frame is empty. It used to be hardcoded as eleven, and the first build after the short
@@ -2867,7 +2941,9 @@
                   :target (:wat::core::+ base (:c::codelen o1))))
      o2 (:c::seq ks start o1 env pg rt tb 0 tc)]
     (:c::at-depth0 o2 (:wat::string::concat
-      (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "") "c9c3"))))
+      (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "")
+      ;; `leave` is `mov rbp,rsp ; pop rbp`; without a frame pointer the same job is one `add`
+      (:wat::core::if fpr? "c9" (:c::add-rsp frame)) "c3"))))
 
 ;; ---------------------------------------------------------------- the driver
 ;;
@@ -3021,7 +3097,8 @@
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
-    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0)
+    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
+                :fpr false)
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))

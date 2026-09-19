@@ -10338,6 +10338,91 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh` section 5.
 
 
+### F-128: three holes the compiler has in itself, found by changing it
+
+- **Where:** found while building C-155 (frame-pointer elimination); `elf/compile.wat`.
+  None of these is about the language being compiled. All three are about the COMPILER, which
+  is a wat program, and all three were found because a large edit made mistakes that a smaller
+  one would not have.
+- **1. A user call is not checked for arity.** An edit left `(:c::emit X "58" 8)` -- two
+  parameters, three arguments -- and the compiler compiled it. `:c::push-args` pushes three, the
+  callee reads two at `[rbp + 16 + 8*(n-1-i)]` with ITS OWN `n`, and the caller pops three, so
+  the stack stays balanced and the callee reads its parameters **from the wrong slots**. The
+  symptom was two binaries silently differing by two bytes. `:c::inl-ok?` checks arity before
+  inlining, so the check exists -- `:c::call-user` simply never asks it. **Class: FIX.**
+- **2. `(+ i64 String)` compiles.** A new parameter `k` was shadowed by `:c::direct`'s own
+  `(let [k (:c::kind a pg)] ...)`, so `(:wat::core::+ d k)` added a displacement to a POINTER TO
+  A STRING. The type pass knows both types -- it is the same pass that decides `=` on two
+  Strings is `str_eq` (C-130) -- and it did not object. It compiled to
+  `add 0x41a8fc(%rsp),%rax`, an address where a frame offset belongs, and only `elf/src/diag.wat`
+  of twenty-five differential programs noticed. **Arithmetic on a pointer should be a refusal,
+  and the compiler has everything it needs to refuse it.** **Class: FIX.**
+- **3. A duplicate definition survived in the compiler for months.** `:c::reg-mov-from` was
+  defined twice, ~30 lines apart, with byte-identical bodies. wat's `DefRedefForbidden` did not
+  fire, because the two agreed; the moment one of them was updated and the other was not, the
+  interpreter refused the file. So the check is real but **only fires once the copies have
+  diverged -- which is exactly when the damage is already done** -- and the compiled compiler
+  never checks at all, which is why `tools/loop.sh --fast` was green while `tools/bootstrap.sh`
+  was red. The half-updated program ran, self-hosted and passed all twenty-five differential
+  tests; it was wrong only in the function nobody had reached yet. **Class: FIX** (a redefinition
+  should be refused whether or not the bodies agree), and **a lesson about the harness**: the
+  fast loop cannot see anything only the interpreter checks.
+- **Class:** FIX.
+- **Repro:** each is a one-line edit to `elf/compile.wat`; the entry names the exact shape.
+
+
+
+### C-155: frame-pointer elimination, and what it was actually worth
+
+- **Where:** `elf/compile.wat` — `:c::Out` gains `sp`/`fk`/`fpr`, `:c::push`/`:c::popn`/
+  `:c::at-depth0`/`:c::fp`/`:c::fp-at`/`:c::at-frame`, every frame-addressing helper, the
+  prologue and epilogue, and `:c::nregs` 3 → 4. NEXT.md item 4, built.
+- **Done in three steps, because the first one is the one that can be TESTED.** A local is
+  `[rbp-8]` however deep the stack happens to be; without a frame pointer it is
+  `[rsp + d + fk + sp]`, and the emitter is the only thing that knows the depth. So step one
+  tracked the depth and changed **no bytes** — every binary byte-identical, peak unchanged at
+  168,188 KiB, and `:c::at-depth0` asserting that every body ends where it started. Step two
+  moved the addressing to rsp with rbp still maintained, so a wrong `fk` would fail loudly. Step
+  three dropped rbp and gave it to the register allocator.
+- **`clone` keeps its frame pointer, and that is not a workaround.** `clone` gives the child a
+  fresh rsp and lets it INHERIT rbp, which is the only reason a spawned thread can read the frame
+  it came from. Under rsp-relative addressing the child reads its own empty stack: `thread`
+  printed `11 11` instead of `11 22`, and `threads4` answered `0` instead of `1000`. C-136
+  already refuses such a function its register parameters and C-121 its tail calls; this is the
+  third thing the intrinsic costs, and `:c::has-clone?` was already there to ask.
+- **The layout mistake worth writing down.** `push rbp` put the saved rbp eight bytes below the
+  return address, with the frame below that. Take the push away and the frame stays exactly where
+  `sub rsp, frame` puts it, while the return address and the arguments come eight bytes NEARER.
+  Subtracting eight from everything moved the locals down onto the saved registers —
+  `mov %rax,0x10(%rsp)` was overwriting saved `r13`, and `fib(20)` answered 2374 instead of 6765.
+  **Locals are the negative displacements and arguments the positive ones, so the correction is a
+  test on the sign.**
+- **Measured, interleaved, minimum of six, pinned to a P-core:**
+
+  | | instructions | cycles | size |
+  | --- | --- | --- | --- |
+  | the compiler compiling everything | 798,552,820 → **776,615,139** (-2.7%) | 502,947,611 → **493,832,485** (-1.8%) | 141,504 → 147,174 B (+4.0%) |
+  | `fib32` | 79,389,353 → 79,389,355 (0.0%) | 21,987,137 → 21,946,607 (-0.2%) | 3,716 → 3,719 B |
+  | `loopsum` | 2,200,000,440 → 2,200,000,472 (0.0%) | 353,316,178 → 353,420,997 (0.0%) | 752 → 748 B |
+
+- **And the honest reading: the two halves cancel on anything call-heavy.** Dropping rbp removes
+  `push rbp` and `mov rbp,rsp` from every call — two instructions — and then giving rbp to the
+  allocator adds its own `push`/`pop` back, one per call. Measured separately: **with three
+  registers** `fib32` was -3.3% instructions but **+3.0% cycles**, because every frame access
+  grew a SIB byte (rsp cannot be a ModRM base without one) and the code got less dense; the
+  fourth register bought that back to flat. The compiler gains because it is full of functions
+  with many live values and comparatively few calls.
+- **What it actually bought** is therefore not the 1.8%: it is **a callee-saved register that
+  did not exist before**, on a machine where the ABI has five and this compiler already spends
+  two on the output buffer and the heap. Everything that wants one from here — a register
+  calling convention above all — is now working with four instead of three.
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  147,011 bytes, and the compiled compiler is **705x** the interpreter; `elf-run` 25/25, `mem`,
+  `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh`; `taskset -c 2 perf stat -e cpu_core/instructions/ ./elf/out/compiler.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
