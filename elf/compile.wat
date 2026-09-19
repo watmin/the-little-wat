@@ -22,12 +22,21 @@
 ;;   (wat.core/defn user/NAME [p :- wat.type/i64 ...] :- T  BODY...)
 ;;   (wat.core/if COND THEN ELSE)          a real forward branch, patched
 ;;   (wat.core/let [a E b E] BODY...)      slots in the frame, innermost shadowing outward
+;;   (wat.core/do BODY...)                 a sequence; the last form is the value
 ;;   (user/NAME args...)                   a call, arguments on the stack, recursion included
-;;   (wat.kernel/println EXPR)             EXPR to rax, then `call print_i64`
-;;   (wat.kernel/println "literal")        written directly, the string in the data tail
-;;   (wat.core/+ - *)                      n-ary, folded left
+;;   (wat.kernel/println EXPR | "literal")
+;;   (wat.core/+ - * quot rem)             n-ary, folded left
 ;;   (wat.core/< > <= >= = not=)           cmp + setcc + movzx, so a bool is 0 or 1 in rax
 ;;   integer literals, negatives included, nested to any depth
+;;
+;; and an INTRINSIC set that is the compiler's own, not wat's:
+;;
+;;   (wat.os/getpid) (wat.os/getppid) (wat.os/fork)     a bare syscall, result in rax
+;;   (wat.os/exit N)                                     exit(N)
+;;   (wat.os/wait)                                       wait4, answering the raw status
+;;   (wat.os/mmap N)                                     anonymous read+write memory
+;;   (wat.os/clone SP)                                   a child sharing the address space
+;;   (wat.os/peek A) (wat.os/poke A V)                   eight bytes at an address
 ;;
 ;; Both spellings of every name are accepted -- `wat.core/+` and `:wat::core::+` -- because the
 ;; reader keeps whichever the source used and this repository writes one while the migration
@@ -35,6 +44,16 @@
 ;;
 ;; Anything else is a COMPILE ERROR that names the form it could not translate, which is the
 ;; least a compiler owes its caller.
+;;
+;; ## Where the compiled language stops being wat
+;;
+;; Everything in the first list is wat, and `elf/src/*.wat` is checked by running each program
+;; BOTH ways and requiring identical output. Nothing in the second list is: the interpreter has
+;; no `wat.os/fork`, so `elf/native/*.wat` cannot be run by it at all and has no differential
+;; oracle. That is the same position a C compiler is in with `write` -- it does not implement it
+;; either -- and C's answer is libc. wat has no equivalent: its OS surface (`:wat::io::`,
+;; `:wat::kernel::spawn-*`) is implemented in Rust inside the interpreter, so a compiled program
+;; cannot reach it. **F-119** is that gap, found by walking into it.
 ;;
 ;; ## The code it generates
 ;;
@@ -124,6 +143,16 @@
   (:wat::string::concat "488985" (:asm::le d 4)))
 (:wat::core::defn :c::load [d <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat "488b85" (:asm::le d 4)))
+;; the registers a Linux syscall takes its arguments in
+(:wat::core::defn :c::mov-r10 [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "49ba" (:asm::le n 8)))
+(:wat::core::defn :c::mov-r8 [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "49b8" (:asm::le n 8)))
+(:wat::core::defn :c::mov-r9 [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "49b9" (:asm::le n 8)))
+(:wat::core::defn :c::mov-rdi-rax [] -> :wat::core::String "4889c7")
+(:wat::core::defn :c::mov-rsi-rax [] -> :wat::core::String "4889c6")
+
 (:wat::core::defn :c::sub-rsp [n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat "4881ec" (:asm::le n 4)))
 (:wat::core::defn :c::add-rsp [n <- :wat::core::i64] -> :wat::core::String
@@ -134,6 +163,10 @@
     ((:wat::core::= op "+") "4801c8")       ;; add rax, rcx
     ((:wat::core::= op "-") "4829c8")       ;; sub rax, rcx
     ((:wat::core::= op "*") "480fafc1")     ;; imul rax, rcx
+    ;; idiv wants the dividend sign-extended into rdx:rax, which is what cqo is for
+    ((:wat::core::= op "quot") "489948f7f9")            ;; cqo ; idiv rcx  -> quotient in rax
+    ((:wat::core::= op "rem") "489948f7f94889d0")       ;; cqo ; idiv rcx ; mov rax, rdx
+
     ;; a comparison is cmp + setcc + movzx, so a bool is an ordinary 0 or 1 in rax
     (:else (:wat::string::concat "4839c8" (:c::setcc op) "480fb6c0"))))
 
@@ -189,6 +222,8 @@
     ((:c::is? src "wat.core/+" ":wat::core::+") "+")
     ((:c::is? src "wat.core/-" ":wat::core::-") "-")
     ((:c::is? src "wat.core/*" ":wat::core::*") "*")
+    ((:c::is? src "wat.core/quot" ":wat::core::quot") "quot")
+    ((:c::is? src "wat.core/rem" ":wat::core::rem") "rem")
     ((:c::is? src "wat.core/<" ":wat::core::<") "<")
     ((:c::is? src "wat.core/>" ":wat::core::>") ">")
     ((:c::is? src "wat.core/<=" ":wat::core::<=") "<=")
@@ -196,6 +231,39 @@
     ((:c::is? src "wat.core/=" ":wat::core::=") "=")
     ((:c::is? src "wat.core/not=" ":wat::core::not=") "not=")
     (:else "")))
+
+;; ---- the compiler's INTRINSICS: verbs that become a syscall rather than a call
+;;
+;; This is the first point where the compiled language stops being a subset of wat. The
+;; interpreter has no `wat.os/fork`, so a program using these cannot be run by it, and the
+;; differential test that carried every earlier program does not apply. That is not a trick: it
+;; is the same position a C compiler is in with `write`, which it does not implement either. The
+;; difference is that C's answer is libc and wat's answer would have to be an intrinsic present
+;; in BOTH worlds -- which is a real requirement for the builder's roadmap, stated here because
+;; this is the file that ran into it.
+(:wat::core::defn :c::syscall-nr [s <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::cond
+    ((:c::is? s "wat.os/getpid" ":wat::os::getpid") 39)
+    ((:c::is? s "wat.os/fork" ":wat::os::fork") 57)
+    ((:c::is? s "wat.os/getppid" ":wat::os::getppid") 110)
+    (:else -1)))
+
+(:wat::core::defn :c::exit? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/exit" ":wat::os::exit"))
+(:wat::core::defn :c::wait? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/wait" ":wat::os::wait"))
+;; one-argument intrinsics that take their argument in a register other than rdi
+(:wat::core::defn :c::mmap? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/mmap" ":wat::os::mmap"))
+(:wat::core::defn :c::clone? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/clone" ":wat::os::clone"))
+(:wat::core::defn :c::peek? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/peek" ":wat::os::peek"))
+(:wat::core::defn :c::poke? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/poke" ":wat::os::poke"))
+
+(:wat::core::defn :c::do? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/do" ":wat::core::do"))
 
 (:wat::core::defn :c::println? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.kernel/println" ":wat::kernel::println"))
@@ -299,6 +367,60 @@
                         op (:c::binop head)]
         (:wat::core::cond
           ((:c::if? head) (:c::if-form ks a o env fns rt tb slot))
+          ((:c::do? head) (:c::seq ks 1 o env fns rt tb slot))
+          ;; a no-argument syscall: the number goes in rax, the result comes back in rax
+          ((:wat::core::>= (:c::syscall-nr head) 0)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1) (:c::fail "syscall arity" a)
+              (:c::emit o (:wat::string::concat (:c::mov-rax (:c::syscall-nr head)) "0f05"))))
+          ;; exit(status): the argument is computed, then moved into rdi
+          ((:c::exit? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "exit arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+                (:wat::string::concat (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05"))))
+;; mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+          ;; -- the only way to get writable memory, since the one PT_LOAD is read+execute
+          ((:c::mmap? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "mmap arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+                (:wat::string::concat
+                  (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 0))
+                  (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
+                  (:wat::string::concat (:c::mov-r8 -1) (:c::mov-r9 0))
+                  (:wat::string::concat (:c::mov-rax 9) "0f05")))))
+          ;; clone(CLONE_VM|CLONE_FS|CLONE_FILES|SIGCHLD, stack, 0, 0, 0)
+          ;;
+          ;; CLONE_VM is what makes this a THREAD -- the child shares the address space, so a
+          ;; poke on one side is visible on the other. SIGCHLD rather than CLONE_THREAD is what
+          ;; keeps it waitable with the same wait4 the fork program uses: a thread proper is not
+          ;; a child in wait's sense, and this compiler has no futex.
+          ((:c::clone? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "clone arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+                (:wat::string::concat
+                  (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 1809))
+                  (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0) (:c::mov-r8 0))
+                  (:wat::string::concat (:c::mov-rax 56) "0f05")))))
+          ;; peek and poke: eight bytes at an address, which is all the memory model there is
+          ((:c::peek? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "peek arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "488b00")))
+          ((:c::poke? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "poke arity" a)
+              (:wat::core::let
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "50")
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env fns rt tb slot)]
+                (:c::emit o2 (:wat::string::concat "4889c1" "58" "488908")))))
+          ;; wait4(-1, &status, 0, NULL) -- reap any one child and answer its raw STATUS, which is
+          ;; more useful than the pid: `(rem (quot st 256) 256)` is the exit code. Sixteen bytes
+          ;; of scratch are taken off rsp for the status word and given straight back.
+          ((:c::wait? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1) (:c::fail "wait arity" a)
+              (:c::emit o (:wat::string::concat
+                (:c::sub-rsp 16)
+                (:wat::string::concat (:c::mov-rdi -1) "4889e6")      ;; rsi = rsp
+                (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0))
+                (:wat::string::concat (:c::mov-rax 61) "0f05")
+                (:wat::string::concat "488b0424" (:c::add-rsp 16))))))
           ((:c::let? head) (:c::let-form ks a o env fns rt tb slot))
           ((:c::println? head) (:c::print-form ks a o env fns rt tb slot))
           ((:wat::core::not (:wat::core::= op ""))
@@ -565,4 +687,7 @@
     (:c::compile "elf/src/branch.wat" "elf/out/branch.elf")
     (:c::compile "elf/src/fib.wat"    "elf/out/fib.elf")
     (:c::compile "elf/src/bench.wat"  "elf/out/bench.elf")
+    (:c::compile "elf/native/fork.wat"     "elf/out/fork.elf")
+    (:c::compile "elf/native/thread.wat"   "elf/out/thread.elf")
+    (:c::compile "elf/native/threads4.wat" "elf/out/threads4.elf")
     (:wat::kernel::println "compile: ok")))

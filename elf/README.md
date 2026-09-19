@@ -56,12 +56,63 @@ that is not a symbol, keyword or string literal, and a tree walk meets those con
 (user/NAME args...)                   ; a call, arguments on the stack, recursion included
 (wat.kernel/println EXPR)             ; EXPR to rax, then call print_i64
 (wat.kernel/println "literal")        ; written directly, string in the data tail
-(wat.core/+ - *)                      ; n-ary, folded left
+(wat.core/do BODY...)                 ; a sequence; the last form is the value
+(wat.core/+ - * quot rem)             ; n-ary, folded left
 (wat.core/< > <= >= = not=)           ; cmp + setcc + movzx, so a bool is 0 or 1 in rax
 ```
 
 integer literals, negatives included, nested to any depth — and both spellings of every name
 (`wat.core/+` and `:wat::core::+`), because the reader keeps whichever the source used.
+
+And an **intrinsic set that is the compiler's own, not wat's**:
+
+```clojure
+(wat.os/getpid) (wat.os/getppid) (wat.os/fork)   ; a bare syscall, result in rax
+(wat.os/exit N)                                   ; exit(N)
+(wat.os/wait)                                     ; wait4, answering the raw status
+(wat.os/mmap N)                                   ; anonymous read+write memory
+(wat.os/clone SP)                                 ; a child sharing the address space
+(wat.os/peek A) (wat.os/poke A V)                 ; eight bytes at an address
+```
+
+## Processes and threads
+
+`elf/native/fork.wat` forks, and the parent reads the child's exit status back:
+
+```clojure
+(wat.core/defn user/child [] :- wat.type/i64
+  (wat.kernel/println 2)
+  (wat.os/exit 7))
+
+(wat.core/defn user/main [] :- wat.type/nil
+  (wat.kernel/println 1)
+  (wat.core/let [parent (wat.os/getpid)
+                 pid (wat.os/fork)]
+    (wat.core/if (wat.core/= pid 0)
+      (user/child)
+      (wat.core/let [st (wat.os/wait)]
+        (wat.kernel/println (wat.core/rem (wat.core/quot st 256) 256))
+        (wat.kernel/println (wat.core/if (wat.core/> pid 0) 1 0))
+        (wat.kernel/println (wat.core/if (wat.core/= (wat.os/getpid) parent) 1 0)))))
+  (wat.kernel/println 4))
+```
+
+`1 2 7 1 1 4` — 698 bytes. The `7` is the child's exit code, decoded out of `wait4`'s status
+word with `quot` and `rem`.
+
+`elf/native/threads4.wat` starts **four threads** that share an address space, each writing its
+own slot in an `mmap`'d page, and sums them: `1000`, in 1269 bytes, the same every run.
+
+`clone` is called with `CLONE_VM | CLONE_FS | CLONE_FILES | SIGCHLD`. `CLONE_VM` is what makes it
+a thread — the address space is shared, so a `poke` on one side is visible on the other.
+`SIGCHLD` rather than `CLONE_THREAD` is what keeps it waitable with the same `wait4` the fork
+program uses: a thread proper is not a child in `wait`'s sense, and this compiler has no futex.
+
+**One thing to know about the frames.** `clone` gives the child a fresh `rsp` but it inherits
+`rbp`, so the child reads its locals out of the *parent's* frame — which works only because the
+address space is shared, and only for as long as that frame is live. `threads4.wat` is written so
+the parent reaps every child at the bottom of its recursion, before any frame unwinds. A compiler
+that wanted real threads would give the child its own frame at the clone site.
 
 `elf/src/fib.wat` is the program that shows it is real: two mutually independent recursive
 functions, a `let`, and arithmetic wide enough to need 64 bits.
@@ -86,13 +137,15 @@ functions, a `let`, and arithmetic wide enough to need 64 bits.
 
 ## What compiling is worth
 
-`fib(27)`, the same source both ways:
+`fib(27)`, the same source both ways, measured by `tools/elf-run.sh` on each run:
 
 ```
 interpreted  3391 ms    native   6 ms    565x
+interpreted  4165 ms    native   5 ms    833x
 ```
 
-The 6 ms is mostly `execve`. This is the number NEXT.md §7's baseline was taken to make sense of,
+The native figure is mostly `execve`, so the ratio moves with machine load and is a floor rather
+than a measurement. Five hundred times is the conservative reading. This is the number NEXT.md §7's baseline was taken to make sense of,
 arriving from the other direction: the interpreter's per-operation cost is what a compiler
 removes, and it removes essentially all of it.
 
@@ -186,6 +239,20 @@ evaluates a source string, not an arbitrary program). `tools/elf-run.sh` is thos
 the differential check. Note the exec bit only has to be set **once**: `open-file` truncates
 rather than replaces, so after the first `chmod +x` a wat program alone keeps producing runnable
 binaries at that path.
+
+## Where the compiled language stops being wat
+
+Everything in the first list above is wat, and `elf/src/*.wat` is checked by running each program
+**both ways** and requiring identical output and exit status. Nothing in the intrinsic list is:
+the interpreter has no `wat.os/fork`, so `elf/native/*.wat` cannot be run by it at all and has no
+differential oracle — only a fixed expected output in `tools/elf-run.sh`.
+
+That is the same position a C compiler is in with `write`: it does not implement it either, and
+C's answer is libc. wat has no equivalent. Its OS surface — `:wat::io::`, `:wat::kernel::spawn-*`
+— is implemented in Rust *inside the interpreter*, so a compiled program cannot reach it.
+**F-119** is that gap, and it is a roadmap question rather than a defect: a compiled wat needs an
+intrinsic set defined independently of the interpreter, or the two languages drift apart exactly
+here.
 
 ## What is still missing, in order of what it would prove
 

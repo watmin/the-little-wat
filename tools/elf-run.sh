@@ -49,6 +49,26 @@ for name in four arith greet branch fib bench; do
 done
 
 echo
+echo "== native-only: syscalls the interpreter has no implementation of (F-119) =="
+check_native () {   # name, expected output (newline separated)
+  local name="$1" want="$2" bin="elf/out/$1.elf"
+  local got rc
+  got=$(timeout -s KILL 20 "./$bin" 2>&1); rc=$?
+  if [ "$got" = "$want" ] && [ $rc -eq 0 ]; then
+    printf '%-10s %4s bytes  %s\n' "$name" "$(stat -c%s "$bin")" "$(printf '%s' "$got" | tr '\n' ' ')"
+  else
+    echo "FAIL $name: got '$got' (exit $rc), wanted '$want'"
+    fail=1
+  fi
+}
+# fork: parent prints 1, child prints 2 and exits 7, parent reads that status back, then 1 1 4
+check_native fork     "$(printf '1\n2\n7\n1\n1\n4')"
+# clone with CLONE_VM: the child writes 22 into a page the parent mmap'd, and the parent sees it
+check_native thread   "$(printf '11\n22')"
+# four threads, each writing its own slot; 100 + 200 + 300 + 400
+check_native threads4 "1000"
+
+echo
 echo "== what compiling is worth: fib(27), the same source both ways =="
 s=$(date +%s%N); "$WAT" elf/src/bench.wat >/dev/null 2>&1; i=$(( ($(date +%s%N)-s)/1000000 ))
 s=$(date +%s%N); ./elf/out/bench.elf  >/dev/null 2>&1; n=$(( ($(date +%s%N)-s)/1000000 ))
@@ -58,8 +78,8 @@ printf 'interpreted %5s ms    native %3s ms    %sx\n' "$i" "$n" "$(( i / n ))"
 echo
 echo "== and the compiler refuses what it cannot translate =="
 msg=$("$WAT" elf/refuse.wat 2>&1)
-if printf '%s' "$msg" | grep -q 'cannot compile call: (wat.core/quot 10 2)'; then
-  echo "refused elf/bad/unsupported.wat, naming the form: (wat.core/quot 10 2)"
+if printf '%s' "$msg" | grep -q 'cannot compile call: (wat.core/str 10)'; then
+  echo "refused elf/bad/unsupported.wat, naming the form: (wat.core/str 10)"
 else
   echo "FAIL: the compiler did not refuse elf/bad/unsupported.wat as expected"
   printf '%s\n' "$msg" | head -3 | sed 's/^/      /'
@@ -68,8 +88,8 @@ fi
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- eight native binaries, six of them compiled from wat source,"
-  echo "         and every one agrees with the interpreter that produced it"
+  echo "elf-run: ok -- eleven native binaries, nine of them compiled from wat source."
+  echo "         Six agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi
