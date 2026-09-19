@@ -9724,6 +9724,80 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `time wat elf/bench/pass20000.wat`, then the same file with 20000 -> 80000.
 
 
+### C-145: the promoting vector -- `conj` from O(n) to O(log n), and the cliff measured at 1,580x is gone
+
+- **Where:** `elf/runtime.s` (`varr_new`, `node_new`, `node_copy`, `tree_get`, `tree_push`,
+  `tree_from_arr`, `vec_conj`), `elf/compile.wat` (`nth`, `:c::at-varr`, `:c::at-tget`, the
+  level table), `elf/src/pvec.wat`, `elf/bench/pass80000.wat`, `elf/bench/deepvec.wat`.
+  Fixes F-124 on our side. **`tools/bootstrap.sh` green from the interpreter -- 46 binaries
+  byte-identical, fixpoint at 129,077 bytes; `tools/loop.sh`, `tools/mem.sh`, `tools/vs-c.sh`
+  green.**
+- **The shape, taken from wat's own `PVec` rather than invented.** Reading `wat-rs/src/value/
+  pvec.rs` produced a better design than three turns of reasoning had: an array while the vector
+  is small or bulk-built, a 32-way tree once persistent `conj` pushes it past eight, promoting
+  one way and never back, under one rule -- *representation must be unobservable*. Its own
+  comment carries the argument: **"One representation chosen globally is a claim about how
+  vectors are built; promoting per instance makes no claim."** A blocked vector, which this
+  entry was going to be, fails that test: it is a third representation, chosen globally, by me.
+
+  ```
+  array:  [arm=0][rc][count][slot]...        p -> count
+  tree:   [arm=1][rc][count][shift][root]    p -> count
+  ```
+
+  **`count` is at offset 0 in both**, so `length` stays one instruction for either arm, for a
+  record and for a String. Only `nth` asks, and only for a Vector -- a record never conj's, so
+  it is an array for ever and the compiler emits its bare indexed load with no test. The arm
+  could not live in the `rc` word: that is a share count `incq` walks upward, and it already
+  carries C-140's `0x100000001`, while an arm must survive sharing.
+- **`vec_conj_own` did not change, because it already WAS `push_back_mut`.** C-127 and C-140's
+  work is kept entire. Exactly one routine was wrong -- `vec_conj`, the shared path -- and it
+  promotes now instead of cloning.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `pass20000` — a shared accumulator | 1,563,944 KiB | **18,168 KiB**, 17 ms |
+  | `pass80000` — four times the size | heap exhausted | **80,976 KiB**, 76 ms |
+  | **the curve at 4x n** | — | **4.5x** |
+  | `deepvec` — 40,000 through a call | heap exhausted | **ok**, 36,672 KiB |
+  | `moved.wat` — the F-124 cliff | 1,564,512 KiB | **18,652 KiB** |
+  | the compiler on itself | 142,008 KiB / 288 ms | **136,032 KiB / 242 ms** |
+
+  **4.5x for four times the input is the whole finding.** O(n) would be 16x; wat's interpreter
+  measures 18.2x on the same program. It does `pass80000` in 109,402 ms; this does it in 76.
+- **The tests were written first, and one of them was wrong.** `elf/src/pvec.wat` builds the
+  same sequence in bulk and by `conj` and compares it observation by observation -- length,
+  `nth` at every index, sum, `conj` onto each, a trip through a function, `i64` and `String`
+  elements -- at 0, 1, 7/8/9, 31/32/33, 64, 1000, 1025. `elf/bench/deepvec.wat` first **passed**
+  at 960 KiB, which was the test being wrong rather than the claim right: built by `conj` at the
+  call site, the accumulator takes C-127's in-place path and never promotes anything. It goes
+  through a function now.
+- **Three bugs, and the third is the one to keep.**
+  - `r10` held the slot index across `node_new`, which uses `r10` for the object it is building.
+    The compiler segfaulted compiling itself -- its own arena is deep enough to run the walk.
+  - `[rax+8]` written where `[rax-16]` was meant, and the array load on the wrong side of the
+    branch. Caught by decoding the bytes by hand before building, not by a test.
+  - **C-137's scratch pool collided with this change.** It parks expression temporaries in
+    r8-r11 whenever a subtree *"emits no call"*, and `nth` is on that whitelist -- true until a
+    Vector's `nth` could reach `tree_get`, which used r8 and r9. The pool's real requirement is
+    not "no call" but **"disturbs no scratch register"**, so `tree_get` now disturbs only `rax`
+    and `rcx`, stated as a contract in the routine's own comment. It surfaced only in a function
+    with TWO vector parameters and a self tail call, because C-136 puts those in registers --
+    which is exactly why the wall test compares two vectors rather than checking one. **Two
+    optimisations, each sound alone, whose invariants met for the first time here.**
+- **C-144's hand-chunked arena comes out** -- 46 lines of blocks and spine, deleted, because the
+  runtime does it properly now and a flat arena promotes on its own. A workaround's obituary is
+  the feature landing.
+- **What is still refused:** `(assoc v i x)` on a Vector. The machine code for it is a path copy
+  we now have, and wat has already resolved to BUILD index-assoc (F-104's update), but exposing
+  it here while the interpreter refuses it would make the compiled language a superset -- the
+  F-119 drift this repository exists to catch. `elf/src/assocn.wat` is the portable O(n) route
+  in the meantime, working both ways today.
+- **Class:** FIX.
+- **Repro:** `tools/bootstrap.sh`; `./elf/out/pvec.elf`; `./elf/out/pass80000.elf`;
+  `./elf/out/deepvec.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
