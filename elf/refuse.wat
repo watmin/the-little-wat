@@ -30,7 +30,9 @@
 ;;   (wat.core/if COND THEN ELSE)          a real forward branch, patched
 ;;   (wat.core/let [a E b E] BODY...)      slots in the frame, innermost shadowing outward
 ;;   (wat.core/do BODY...)                 a sequence; the last form is the value
-;;   (user/NAME args...)                   a call, arguments on the stack, recursion included
+;;   (user/NAME args...)                   a call, arguments on the stack, recursion included --
+;;                                         and a SELF call in tail position becomes a jmp, because
+;;                                         wat has TCO and a compiler for wat therefore owes it
 ;;   (wat.kernel/println EXPR | "literal")
 ;;   (wat.core/+ - * quot rem)             n-ary, folded left
 ;;   (wat.core/< > <= >= = not=)           cmp + setcc + movzx, so a bool is 0 or 1 in rax
@@ -565,10 +567,46 @@
 (:wat::core::defn :c::slots-body [ks <- :c::Kids i <- :wat::core::i64 best <- :wat::core::i64] -> :wat::core::i64
   (:c::slots-list ks i best))
 
+;; ---------------------------------------------------------------- tail calls
+;;
+;; **wat eliminates tail calls, so a compiler for wat has to.** A million levels of tail
+;; self-recursion return `1000000` under the interpreter; the same depth NOT in tail position
+;; dumps core. So iteration in wat is a tail-recursive loop, and a compiler that lays every call
+;; down as a `call` turns working programs into segmentation faults. `elf/src/deep.wat` is that
+;; program, and before this it segfaulted at exit 139 while the interpreter printed 1000000.
+;;
+;; A self tail call is a `jmp` back to the top of the body with the arguments replaced:
+;;
+;;   <evaluate each new argument, pushing it>    left to right, as an ordinary call would
+;;   pop rax ; mov [rbp+16], rax                 then popped BACK into the incoming slots,
+;;   pop rax ; mov [rbp+24], rax                 last argument first, because it is on top
+;;   jmp body                                    and round again, on the same frame
+;;
+;; The arguments are all evaluated before any of them is stored, which is what makes
+;; `(f (g b) (h a))` safe when the new `a` is computed from the old `b` and vice versa.
+;;
+;; `:c::TC` is the context: the name and arity of the function being compiled, and the address
+;; to jump back to. A `name` of "" means "this is not a tail position", and every subexpression
+;; that is not in tail position is compiled with `(:c::no-tail)`.
+(:wat::core::defrecord :c::TC
+  [name <- :wat::core::String  arity <- :wat::core::i64  target <- :wat::core::i64])
+
+(:wat::core::defn :c::no-tail [] -> :c::TC (:c::TC :name "" :arity 0 :target 0))
+
+(:wat::core::defn :c::tail-call? [tc <- :c::TC head <- :wat::core::String n <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::and (:wat::core::not= (:c::TC/name tc) "")
+    (:wat::core::and (:wat::core::= (:c::TC/name tc) head) (:wat::core::= (:c::TC/arity tc) n))))
+
+;; pop the freshly computed arguments back over the incoming ones, last first
+(:wat::core::defn :c::tail-store [k <- :wat::core::i64 n <- :wat::core::i64 o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::>= k n) o
+    (:c::tail-store (:wat::core::+ k 1) n
+      (:c::emit o (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))))))
+
 ;; ---------------------------------------------------------------- expressions
 
 (:wat::core::defn :c::expr [a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [k (:c::kind a)]
     (:wat::core::cond
       ((:wat::core::= k "int") (:c::emit o (:c::mov-rax (:c::to-int (:wat::core::ast->source a)))))
@@ -582,18 +620,18 @@
         (:c::emit o (:c::mov-rax
           (:wat::core::if (:wat::core::= (:wat::core::ast->source a) "true") 1 0))))
       ((:wat::core::= k "string") (:c::str-lit a o tb))
-      ((:wat::core::= k "list") (:c::form a o env fns rt tb slot))
+      ((:wat::core::= k "list") (:c::form a o env fns rt tb slot tc))
       (:else (:c::fail "expression" a)))))
 
 (:wat::core::defn :c::form [a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [ks (:wat::core::ast->children a)]
     (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::fail "empty form" a)
       (:wat::core::let [head (:wat::core::ast->source (:wat::core::nth ks 0))
                         op (:c::binop head)]
         (:wat::core::cond
-          ((:c::if? head) (:c::if-form ks a o env fns rt tb slot))
-          ((:c::do? head) (:c::seq ks 1 o env fns rt tb slot))
+          ((:c::if? head) (:c::if-form ks a o env fns rt tb slot tc))
+          ((:c::do? head) (:c::seq ks 1 o env fns rt tb slot tc))
           ;; a no-argument syscall: the number goes in rax, the result comes back in rax
           ((:wat::core::>= (:c::syscall-nr head) 0)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1) (:c::fail "syscall arity" a)
@@ -601,13 +639,13 @@
           ;; exit(status): the argument is computed, then moved into rdi
           ((:c::exit? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "exit arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
                 (:wat::string::concat (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05"))))
 ;; mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
           ;; -- the only way to get writable memory, since the one PT_LOAD is read+execute
           ((:c::mmap? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "mmap arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
                 (:wat::string::concat
                   (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 0))
                   (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
@@ -621,7 +659,7 @@
           ;; a child in wait's sense, and this compiler has no futex.
           ((:c::clone? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "clone arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
                 (:wat::string::concat
                   (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 1809))
                   (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0) (:c::mov-r8 0))
@@ -629,12 +667,12 @@
           ;; peek and poke: eight bytes at an address, which is all the memory model there is
           ((:c::peek? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "peek arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "488b00")))
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) "488b00")))
           ((:c::poke? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "poke arity" a)
               (:wat::core::let
-                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "50")
-                 o2 (:c::expr (:wat::core::nth ks 2) o1 env fns rt tb slot)]
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) "50")
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env fns rt tb slot (:c::no-tail))]
                 (:c::emit o2 (:wat::string::concat "4889c1" "58" "488908")))))
           ;; wait4(-1, &status, 0, NULL) -- reap any one child and answer its raw STATUS, which is
           ;; more useful than the pid: `(rem (quot st 256) 256)` is the exit code. Sixteen bytes
@@ -651,17 +689,17 @@
           ;; compiler emits that allocates. `length` is a peek at the header.
           ((:c::concat? head)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "concat arity" a)
-              (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+              (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
                 env fns rt tb slot)))
           ((:c::strlen? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "length arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) "488b00")))
-          ((:c::let? head) (:c::let-form ks a o env fns rt tb slot))
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) "488b00")))
+          ((:c::let? head) (:c::let-form ks a o env fns rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env fns rt tb slot))
           ((:wat::core::not (:wat::core::= op ""))
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "operator arity" a)
-              (:c::fold op ks 2 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot) env fns rt tb slot)))
-          ((:wat::core::>= (:c::fn-addr fns head 0) 0) (:c::call-user ks head o env fns rt tb slot))
+              (:c::fold op ks 2 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) env fns rt tb slot)))
+          ((:wat::core::>= (:c::fn-addr fns head 0) 0) (:c::call-user ks head o env fns rt tb slot tc))
           (:else (:c::fail "call" a)))))))
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
@@ -672,7 +710,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [o1 (:c::emit o "50")                                   ;; push rax
-       o2 (:c::expr (:wat::core::nth ks i) o1 env fns rt tb slot)
+       o2 (:c::expr (:wat::core::nth ks i) o1 env fns rt tb slot (:c::no-tail))
        o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
        o4 (:c::emit o3 "58")                                  ;; pop rax
        o5 (:c::emit o4 (:c::op-hex op))]
@@ -685,7 +723,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [o1 (:c::emit o "50")                                   ;; push rax
-       o2 (:c::expr (:wat::core::nth ks i) o1 env fns rt tb slot)
+       o2 (:c::expr (:wat::core::nth ks i) o1 env fns rt tb slot (:c::no-tail))
        o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
        o4 (:c::emit o3 "58")                                  ;; pop rax
        o5 (:c::call o4 (:c::at-cat rt))]
@@ -694,18 +732,18 @@
 ;; ---------------------------------------------------------------- if
 
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
-                               rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                               rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "if arity" a)
     (:wat::core::let
-      [o1 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot)
+      [o1 (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
        o2 (:c::emit o1 "4885c0")                       ;; test rax, rax
        o3 (:c::emit o2 "0f8400000000")                 ;; jz <patched below>
        jz-at (:wat::core::- (:c::codelen o3) 4)
-       o4 (:c::expr (:wat::core::nth ks 2) o3 env fns rt tb slot)
+       o4 (:c::expr (:wat::core::nth ks 2) o3 env fns rt tb slot tc)
        o5 (:c::emit o4 "e900000000")                   ;; jmp <patched below>
        jmp-at (:wat::core::- (:c::codelen o5) 4)
        o6 (:c::patch o5 jz-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jz-at 4)) 4))
-       o7 (:c::expr (:wat::core::nth ks 3) o6 env fns rt tb slot)]
+       o7 (:c::expr (:wat::core::nth ks 3) o6 env fns rt tb slot tc)]
       (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4)))))
 
 ;; ---------------------------------------------------------------- let
@@ -719,7 +757,7 @@
     (:wat::core::let
       [name (:wat::core::ast->source (:wat::core::nth bs i))
        ;; the initialiser is compiled in the OUTER scope, which is what makes `let` not `letrec`
-       o1 (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env fns rt tb slot)
+       o1 (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env fns rt tb slot (:c::no-tail))
        disp (:wat::core::* -8 (:wat::core::+ slot 1))
        o2 (:c::emit o1 (:c::store disp))]
       (:c::bind-each bs (:wat::core::+ i 2) o2
@@ -729,13 +767,13 @@
         fns rt tb (:wat::core::+ slot 1)))))
 
 (:wat::core::defn :c::let-form [ks <- :c::Kids a <- :wat::WatAST o <- :c::Out env <- :c::Env fns <- :c::Fns
-                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "let arity" a)
     (:wat::core::let [bs (:wat::core::ast->children (:wat::core::nth ks 1))]
       (:wat::core::if (:wat::core::not= (:wat::core::rem (:wat::core::length bs) 2) 0) (:c::fail "let bindings" a)
         (:wat::core::let [r (:c::bind-each bs 0 o env fns rt tb slot)]
           ;; the bindings go out of scope with the body, so the env is not carried back out
-          (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r) fns rt tb (:c::BindR/slot r)))))))
+          (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r) fns rt tb (:c::BindR/slot r) tc))))))
 
 ;; ---------------------------------------------------------------- sequences, and the heap
 ;;
@@ -783,16 +821,17 @@
 ;; a sequence of forms; the last one's value is the value of the whole, and every form before it
 ;; gives its allocations back
 (:wat::core::defn :c::seq [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env fns <- :c::Fns
-                           rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                           rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [a (:wat::core::nth ks i)
        drop? (:wat::core::and (:wat::core::< i (:wat::core::- (:wat::core::length ks) 1))
                               (:c::releasable? a))
        o1 (:wat::core::if drop? (:c::emit o "41574157") o)
-       o2 (:c::expr a o1 env fns rt tb slot)
+       last? (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
+       o2 (:c::expr a o1 env fns rt tb slot (:wat::core::if last? tc (:c::no-tail)))
        o3 (:wat::core::if drop? (:c::emit o2 "415f415f") o2)]
-      (:c::seq ks (:wat::core::+ i 1) o3 env fns rt tb slot))))
+      (:c::seq ks (:wat::core::+ i 1) o3 env fns rt tb slot tc))))
 
 ;; ---------------------------------------------------------------- println
 
@@ -804,13 +843,13 @@
       (:wat::core::cond
         ;; a literal is its own EDN rendering, so it goes out as bytes with no runtime at all
         ((:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb))
-        ((:wat::core::= ty "str") (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-str rt)))
+        ((:wat::core::= ty "str") (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-str rt)))
         ;; `(println (> 3 2))` prints `true`, not `1`. The type pass is the only thing standing
         ;; between the compiler and a SILENT disagreement with the interpreter here, which is why
         ;; every one of these four paths has a program in elf/src that exercises it.
-        ((:wat::core::= ty "bool") (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-bool rt)))
-        ((:wat::core::= ty "nil") (:c::print-nil (:c::expr arg o env fns rt tb slot)))
-        (:else (:c::call (:c::expr arg o env fns rt tb slot) (:c::at-i64 rt)))))))
+        ((:wat::core::= ty "bool") (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-bool rt)))
+        ((:wat::core::= ty "nil") (:c::print-nil (:c::expr arg o env fns rt tb slot (:c::no-tail))))
+        (:else (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-i64 rt)))))))
 
 ;; nil renders as four bytes and never varies, so it is written straight out of the stack rather
 ;; than costing the output a runtime routine: `mov dword [rsp], "nil\n"` and one write.
@@ -846,15 +885,22 @@
                                  slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-args ks (:wat::core::+ i 1)
-      (:c::emit (:c::expr (:wat::core::nth ks i) o env fns rt tb slot) "50") env fns rt tb slot)))
+      (:c::emit (:c::expr (:wat::core::nth ks i) o env fns rt tb slot (:c::no-tail)) "50") env fns rt tb slot)))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  fns <- :c::Fns rt <- :wat::core::i64 tb <- :wat::core::i64
-                                 slot <- :wat::core::i64] -> :c::Out
+                                 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
-                    o1 (:c::push-args ks 1 o env fns rt tb slot)
-                    o2 (:c::call o1 (:c::fn-addr fns head 0))]
-    (:wat::core::if (:wat::core::= n 0) o2 (:c::emit o2 (:c::add-rsp (:wat::core::* 8 n))))))
+                    o1 (:c::push-args ks 1 o env fns rt tb slot)]
+    (:wat::core::if (:c::tail-call? tc head n)
+      ;; a self call in tail position: overwrite the incoming arguments and go round again, on
+      ;; the SAME frame, so a tail-recursive loop runs in constant stack
+      (:wat::core::let [o2 (:c::tail-store 0 n o1)]
+        (:c::emit o2 (:wat::string::concat "e9"
+          (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o2) 5)) 4))))
+      (:wat::core::let [o2 (:c::call o1 (:c::fn-addr fns head 0))]
+        (:wat::core::if (:wat::core::= n 0) o2
+          (:c::emit o2 (:c::add-rsp (:wat::core::* 8 n))))))))
 
 ;; ---------------------------------------------------------------- compiling one function
 
@@ -888,7 +934,20 @@
                               (:wat::core::+ slots 1)))
      o0 (:c::Out :base base :code "" :tail tail-in)
      o1 (:c::emit o0 (:wat::string::concat "55" "4889e5" (:c::sub-rsp frame)))
-     o2 (:c::seq ks start o1 env fns rt tb 0)]
+     ;; push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (7) = 11: the top of the body
+     ;;
+     ;; ...unless the function clones. A tail call REUSES the frame, which is sound only while
+     ;; the frame is private to this thread -- and `clone` hands a second thread an rbp pointing
+     ;; straight at it (the child gets a fresh rsp but inherits rbp). elf/native/threads4.wat is
+     ;; the program that proves it: with its `user/spawn` tail call eliminated, the parent
+     ;; overwrote `i` while four children were still reading it, and the answer fell from 1000
+     ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
+     ;; break invariants the rest of the compiler is entitled to assume about wat.
+     tc (:wat::core::if (:wat::string::contains? (:wat::core::ast->source node) "clone")
+          (:c::no-tail)
+          (:c::TC :name (:wat::core::ast->source (:wat::core::nth ks 1)) :arity n
+                  :target (:wat::core::+ base 11)))
+     o2 (:c::seq ks start o1 env fns rt tb 0 tc)]
     (:c::emit o2 "c9c3")))                       ;; leave ; ret
 
 ;; ---------------------------------------------------------------- the driver

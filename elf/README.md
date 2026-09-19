@@ -69,6 +69,7 @@ integer literals, negatives included, nested to any depth — and both spellings
 ```clojure
 (wat.string/concat A B ...)           ; n-ary, folded left through `str_cat`
 (wat.string/length S)                 ; a peek at the header
+;; a self call in tail position becomes a jmp, not a call -- wat has TCO and so does this
 nil, true, false                      ; a machine zero, a one, a zero
 "a literal"                           ; a pointer to [len:8][bytes...] in the data tail
 ```
@@ -246,6 +247,84 @@ That file also pins down four printable types, because three of them would other
 silence: `(println (> 3 2))` is `true` and not `1`, and `(println nil)` is `nil` and not `0`. The
 type pass is the only thing that knows, so `println` dispatches on all four and `elf/src` has a
 program for each.
+
+## Tail calls, because wat has them
+
+This one is correctness, not speed. wat's own docs say it:
+
+> Wat has TCO — the stack does not grow regardless of […] The tail call must be the LAST
+> expression in the body.
+>
+> — `wat-rs/docs/ITERATION-PATTERNS.md`, where `defn` + a tail call is *the* documented way to
+> iterate with state
+
+Verified both directions: a million levels of tail self-recursion answer `1000000` under the
+interpreter, and the same depth **not** in tail position dumps core. So a tail-recursive loop is
+ordinary wat, and a compiler that lays every call down as a `call` turns working programs into
+segmentation faults — which is exactly what `elf/src/deep.wat` did: interpreter `1000000`,
+binary **`Segmentation fault`, exit 139**.
+
+A self tail call is now a `jmp` back to the top of the body with the arguments replaced:
+
+```
+<evaluate each new argument, pushing it>    left to right, as an ordinary call would
+pop rax ; mov [rbp+16], rax                 then popped BACK into the incoming slots,
+pop rax ; mov [rbp+24], rax                 last argument first, because it is on top
+jmp body                                    and round again, on the same frame
+```
+
+Every argument is evaluated before any of them is stored, which is what makes `(f (g b) (h a))`
+safe when the new `a` is computed from the old `b`. Tail position is threaded through the
+compiler as a small record and matches wat's own definition: the last form of a body or `do`,
+both arms of an `if`, the body of a `let`.
+
+### It broke the threads, which is the interesting part
+
+A tail call **reuses the frame**. That is sound only while the frame is private to this thread —
+and `clone` hands a second thread an `rbp` pointing straight at it. With `user/spawn`'s tail call
+eliminated, the parent overwrote `i` while four children were still reading it, and
+`threads4.elf` fell from **1000 to 400**.
+
+So a function containing `clone` is not tail-call optimised, exactly as a statement containing
+`poke` is not heap-released. Two optimisations, two soundness arguments, and the same intrinsic
+set breaks both — which is F-119 again from a new direction: an intrinsic set needs a stated
+contract about what it does to the machine, not just an opcode.
+
+## Against C
+
+`tools/vs-c.sh` builds the opponents with gcc and states the numbers. Two of them: C as it
+normally is (glibc), and C with libc *removed* — `-nostdlib -nostartfiles`, raw syscalls, its own
+`_start`. The second is the honest opponent, because it is the same bargain `elf/` makes.
+
+| a program that prints `4` | bytes |
+| --- | --- |
+| **ours** | **695** |
+| C, libc removed | 968 |
+| C, glibc, dynamic | 15,968 |
+| C, glibc, static | 856,720 |
+
+| 500 runs of a program that does nothing | |
+| --- | --- |
+| C, libc removed | 405 ms |
+| **ours** | **430 ms** |
+| C, glibc, static | 596 ms |
+| C, glibc, dynamic | 761 ms |
+
+| | ours | gcc -O0 | gcc -O2 |
+| --- | --- | --- | --- |
+| fib(32) | 44 ms | 42 ms | **12 ms** |
+| 100000 integers to stdout | 27 ms | — | **11 ms** |
+
+**What that says, without the flattery.** On size and startup we are *level with C that has had
+libc removed* — and against C with glibc we are 1200× smaller and ~30% faster to start, all of
+which is libc rather than anything clever here. On compute we are a naive stack machine with no
+register allocator and we land exactly on **gcc -O0**; `-O2` is 3.5× ahead, and closing that is
+register allocation and inlining, not tricks. On output we lose 2.5× for a reason with a name:
+every `println` is a `write` syscall, where glibc's stdio buffers 4 KiB. That is the clearest
+thing left on the table and it is a dozen instructions.
+
+(Numbers from one machine, one run, best-of-5. They move with load. They are here to set terms,
+not to win an argument.)
 
 ## Two negative tests
 

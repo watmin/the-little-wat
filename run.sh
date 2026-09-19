@@ -70,11 +70,12 @@ while IFS= read -r f; do
   if [ -n "${RECORD:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$WAT_REV" "$f" "$ms" "$rc" >> timings.tsv
   fi
-# lib/ files are definitions only, no main. Two exclusions under elf/: the refuse*.wat files are
-# NEGATIVE tests (the compiler pointed at programs it must refuse), and elf/native/ holds ones that
-# use the compiler's syscall intrinsics, which the INTERPRETER has no implementation of (F-119).
-# Both are checked by tools/elf-run.sh instead.
-done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' -not -path 'elf/refuse*.wat' -not -path 'elf/native/*' 2>/dev/null | sort)
+# lib/ files are definitions only, no main. Three exclusions under elf/: the refuse*.wat files are
+# NEGATIVE tests (the compiler pointed at programs it must refuse); elf/native/ holds ones that use
+# the compiler's syscall intrinsics, which the INTERPRETER has no implementation of (F-119); and
+# elf/bench/ holds timing programs sized for a compiled binary, which take minutes interpreted.
+# tools/elf-run.sh and tools/vs-c.sh check those instead.
+done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' -not -path 'elf/refuse*.wat' -not -path 'elf/native/*' -not -path 'elf/bench/*' 2>/dev/null | sort)
 
 echo "---"
 echo "$pass passed, $fail failed  (wat-rs $WAT_REV)"
