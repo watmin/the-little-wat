@@ -1427,9 +1427,11 @@
               (:c::cat-fold ks 2 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                 env pg rt tb slot
                 ;; the FIRST operand came from somewhere else, so it needs the same last-use
-                ;; proof `conj` does; a non-variable operand is a temporary and always qualifies
-                (:wat::core::or (:wat::core::not= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
-                  (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0)))))
+                ;; proof `conj` does -- and a non-symbol gets it from `:c::fresh-str?`, which
+                ;; asks whether the operand was ALLOCATED here rather than borrowed
+                (:wat::core::if (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                  (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0)
+                  (:c::fresh-str? (:wat::core::nth ks 1) pg)))))
           ;; one instruction answers the length of a String, a Vector and a record alike,
           ;; because all three are `[count:8][payload...]` -- and the type pass is REQUIRED to
           ;; say which, rather than merely happening to know. Measured before it was demanded:
@@ -2014,6 +2016,27 @@
     ((:wat::core::>= i (:wat::core::length (:c::Prog/linear pg))) false)
     ((:wat::core::= (:wat::core::nth (:c::Prog/linear pg) i) name) true)
     (:else (:c::linear? pg name (:wat::core::+ i 1)))))
+
+;; A SYMBOL gets the two proofs above. A non-symbol operand used to get a sentence instead:
+;; "a non-variable operand is a temporary and always qualifies". That is false, and C-140 wrote
+;; it down twice as a limitation without fixing it.
+;;
+;; A field read is not a temporary. It is a BORROWED pointer into a container that is still
+;; alive -- and its share count really is 1, because a fresh value stored into a container is
+;; stored by MOVE: `:c::share` increments symbols only, which is exactly what makes the reader's
+;; `(conj rows n)` chain cheap. So the runtime guard asks "count 1?", gets the truth, and draws
+;; the wrong conclusion. `elf/src/strown.wat` is that in three shapes.
+;;
+;; What IS true of an operand is that it is fresh when whatever produced it allocated it. Three
+;; verbs always do -- `concat`, `subs` and `i64/to-string` each write a new block and answer it,
+;; on every path, with no early return of an argument. Everything else -- a field read, an `nth`,
+;; a user call, an `if` -- can hand back something older than itself.
+(:wat::core::defn :c::fresh-str? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
+        (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))]
+          (:wat::core::or (:c::concat? head) (:c::subs? head) (:c::tostr? head)))))))
 
 ;; a value that lives on the heap, and therefore one whose sharing has to be counted
 (:wat::core::defn :c::ptr-ty? [t <- :wat::core::String] -> :wat::core::bool
@@ -3310,6 +3333,7 @@
     (:c::compile "elf/src/moved.wat"   "elf/out/moved.elf")
     (:c::compile "elf/src/freed.wat"   "elf/out/freed.elf")
     (:c::compile "elf/src/strverbs.wat" "elf/out/strverbs.elf")
+    (:c::compile "elf/src/strown.wat"  "elf/out/strown.elf")
     (:c::compile "elf/src/reader.wat"  "elf/out/reader.elf")
     (:c::compile "elf/src/diag.wat"    "elf/out/diag.elf")
     (:c::compile "elf/src/fileio.wat"  "elf/out/fileio.elf")

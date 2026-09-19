@@ -70,12 +70,15 @@ while IFS= read -r f; do
   if [ -n "${RECORD:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$WAT_REV" "$f" "$ms" "$rc" >> timings.tsv
   fi
-# lib/ files are definitions only, no main. Three exclusions under elf/: the refuse*.wat files are
-# NEGATIVE tests (the compiler pointed at programs it must refuse); elf/native/ holds ones that use
+# lib/ files are definitions only, no main. Four exclusions under elf/: the refuse*.wat files are
+# NEGATIVE tests (the compiler pointed at programs it must refuse); elf/bad/ is the other kind of
+# negative test -- programs that MUST DIE, one per arithmetic trap, so the interpreter raising is
+# the pass and a clean exit would be the failure (F-125, F-126); elf/native/ holds ones that use
 # the compiler's syscall intrinsics, which the INTERPRETER has no implementation of (F-119); and
 # elf/bench/ holds timing programs sized for a compiled binary, which take minutes interpreted.
-# tools/elf-run.sh and tools/vs-c.sh check those instead.
-done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' -not -path 'elf/refuse*.wat' -not -path 'elf/native/*' -not -path 'elf/bench/*' 2>/dev/null | sort)
+# tools/elf-run.sh and tools/vs-c.sh check all four instead -- elf/bad/ by asserting that BOTH
+# sides stop and agree on why, which is the only comparison a dying program admits.
+done < <(find "${roots[@]}" -name '*.wat' -not -path '*/lib/*' -not -path 'elf/refuse*.wat' -not -path 'elf/bad/*' -not -path 'elf/native/*' -not -path 'elf/bench/*' 2>/dev/null | sort)
 
 echo "---"
 echo "$pass passed, $fail failed  (wat-rs $WAT_REV)"

@@ -16,21 +16,32 @@ measurement lives, and why it was not done at the time.
 
 **Correctness first — these are defects, not improvements.**
 
-1. ~~**`quot` and `rem` do not trap**~~ **DONE 2026-09-19, F-126/C-150.** `+`, `-` and `*` now carry `jo` to the
-   overflow handler; Guarded routines now test the divisor before the
-   instruction. It turned up two more of its own: `:c::to-int` and `:asm::le` both reached a
+1. ~~**`quot` and `rem` do not trap**~~ **DONE 2026-09-19, F-126/C-150.** `idiv` *faults* rather than
+   flagging, so the divisor is tested BEFORE the instruction by a guarded routine, and `MIN / -1`
+   is `neg`+`jo` — `a / -1` is `-a`, overflowing in exactly the same place. It turned up two more of its own: `:c::to-int` and `:asm::le` both reached a
    negative by negating its magnitude, which is wrong at exactly one input, since i64's range is
    asymmetric.
-2. **`:c::cat-fold`'s `own?` rule treats any non-symbol operand as a temporary** (flagged in
-   C-140, twice). That is false for a field read like `(:c::Out/tail o)` — the container still
-   points at it. It has not bitten because the shapes that would expose it do not occur in the
-   corpus, which is exactly what F-125 said before it did.
+2. ~~**`:c::cat-fold`'s `own?` rule treats any non-symbol operand as a temporary**~~
+   **DONE 2026-09-19, F-127/C-151.** It bit: `elf/src/strown.wat` prints a record field that grew
+   after it was read. The rule asks whether the operand was ALLOCATED now, not whether it is
+   spelled like a variable. It cost **3.06x peak memory** (145,092 → 444,200 KiB) and 14% wall,
+   all of it `:c::emit`, and **the three ways to buy that back are all blocked by the same
+   thing** — see item 3a below.
 3. **`999999` as "name not found"** and the **`"vec:"`/`"rec:"` string-tagged type encoding**
    (C-139). A magic number where an `Option` belongs, and a record wearing a string. Both are
    internal and consistent; both are the shape C-139 was about.
 
 **Performance — the compute gap against `gcc -O2`, currently ~1.7x.**
 
+3a. **A share count that can come down.** C-126 chose increment-only and said what it buys;
+   C-128 and C-143 both named decrements as the next step, both for MEMORY. **F-127 makes it a
+   correctness constraint**: without a count that falls, a compiled wat cannot both answer
+   correctly and append in place through a container field, and the honest rule costs 3.06x peak
+   memory to prove it. Three repairs were tried on paper and all three hit the same wall — the
+   container's own count is never 1, because `:c::push-args` increments every pointer-typed
+   symbol argument. C-143 tried to make that a move and was reverted over four aliasing holes,
+   which are written up in its entry and are the real specification for this work. **This is now
+   the largest single item in the queue and the one with the most evidence behind it.**
 4. **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
    levels are live at once and C-146 has three registers, because `rbp` is the frame pointer and
    `r14`/`r15` hold the buffer and the heap. Dropping `rbp` frees a fourth AND removes

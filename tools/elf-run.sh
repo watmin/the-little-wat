@@ -53,7 +53,8 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
   printf '%s\n' "$out"; return $rc
 }
 
-for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear freed strverbs reader diag fileio asmbits; do
+for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
+            memory linear moved freed strverbs strown extremes reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
@@ -155,7 +156,7 @@ refuses elf/refuse-nonascii.wat 'not encodable' \
 echo
 if [ $fail -eq 0 ]; then
   echo "elf-run: ok -- thirty-six native binaries, thirty-four of them compiled from wat source."
-  echo "         Twenty agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "         Twenty-five agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi

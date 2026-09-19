@@ -10053,6 +10053,88 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/elf-run.sh`; `./elf/out/extremes.elf`; `./elf/out/divzero.elf`.
 
 
+### F-127 / C-151: a borrowed pointer is not a temporary, and the count cannot tell the difference
+
+- **Where:** `elf/compile.wat` (`:c::fresh-str?`, the `concat` first-operand rule),
+  `elf/src/strown.wat` (new), `tools/elf-run.sh`. The item C-140 flagged twice and left open,
+  now with a wrong answer behind it instead of a note. **`tools/bootstrap.sh` green from the
+  interpreter — 52 binaries byte-identical, fixpoint at 136,662 bytes; `elf-run`, `mem`, `vs-c`,
+  `loop` green.**
+- **`elf/src/strown.wat` prints a string that grew after it was read.** A record whose String
+  field is filled from an expression, read back, and concatenated:
+
+  ```
+              interpreter   compiled
+  (grow x)    "abcdXY"      "abcdXY"
+  (S/s x)     "abcd"        "abcdXY"      <-- the record's field changed
+  length      4             6
+  ```
+
+  Three shapes do it -- a field read, a field read through two records, and a user function
+  that answers a field. **The fourth in the file is right, and is in there because of WHY it is
+  right**: `(let [a (S/s z)] (concat a "!!"))` borrows exactly as hard, and survives only because
+  `:c::linear?` is keyed on PARAMETER names and a `let` name is never in that list. It is correct
+  by an accident of scope, not by a proof -- so the day `linear?` learns about `let` bindings,
+  that line starts printing `"mnop!!"` for `z` too. It is in the file to fail then.
+- **The rule that did it.** `str_cat_own` extends the left operand in place; the compiler decides
+  whether to call it. For a SYMBOL that needs C-127's two proofs. For anything else the rule was
+  a sentence: *"a non-variable operand is a temporary and always qualifies"*. A field read is not
+  a temporary. It is a **borrowed pointer into a container that is still alive**.
+- **And the share count says 1, truthfully.** `:c::share` increments only symbols, so a fresh
+  value stored into a container is stored by MOVE and keeps the count of 1 the allocator gave
+  it -- which is exactly what makes the reader's `(conj rows n)` chain cheap (C-140). So the
+  runtime guard asks *"has this ever been shared?"*, gets the right answer, and draws the wrong
+  conclusion. **C-127's two proofs are sound for a value you HOLD and vacuous for a value you
+  reached THROUGH something**: the count lives on the container's object, not on the one handed
+  back.
+- **The fix asks what is true instead of what it is spelled like.** An operand is fresh when
+  whatever produced it ALLOCATED it, and exactly three verbs always do -- `concat`, `subs` and
+  `i64/to-string` each write a new block and answer it on every path. A field read, an `nth`, a
+  user call and an `if` can all hand back something older than themselves.
+- **The price, measured, because it is not free.** Peak resident memory compiling the whole of
+  `elf/`, interleaved on two retained binaries and taking the minimum of each,
+  **145,092 -> 444,200 KiB (3.06x)**; wall clock the same way, **303 -> 346 ms (14%)**. All of it is one call site:
+  `:c::emit` is `(assoc o :code (concat (:c::Out/code o) hex))`, the compiler's own accumulator,
+  and its left operand is a field read. It was fast because the rule was wrong.
+- **Three ways to buy it back, and the same wall behind all three.**
+  1. **Check the container's count too** -- extend in place only when the record itself is
+     unshared. `:c::push-args` increments every pointer-typed symbol argument, so `o`'s count
+     inside `:c::emit` is never 1. Making that a move is what C-143 tried and what got reverted.
+  2. **Read destructively** -- null the slot as the pointer leaves, so "sole owner" becomes true
+     by construction. It converts silent corruption into a null dereference, which is more
+     honest and still not the right answer.
+  3. **Count the store** -- increment for fresh values too. Then every field read sees 2 and the
+     copy comes straight back.
+- **The root, and this is the first time it is a correctness constraint.** C-126 chose an
+  increment-only count and wrote down what it buys: *"it answers exactly one question"*. C-128
+  and C-143 both said the next step is decrements, both for MEMORY. It is not a memory question
+  any more: **without a count that can come down, a compiled wat cannot both answer correctly
+  and append in place through a container field.** wat has no way to say a reference is unique
+  -- Rust has it in the types, which is the deal C-126 measured us against.
+- **What did NOT regress**, and it matters which: an accumulator that is a linear PARAMETER is
+  untouched -- `cat32000`, `catx` and `grow20000` compile to **byte-identical binaries** under
+  both rules (md5 checked both ways), and `mem.sh` still reads 2,468 KiB for 32,000 appends.
+  What regressed is specifically accumulating into a record FIELD, which is the one shape the
+  compiler itself is built out of.
+- **The other in-place decision was audited and is clean.** There are exactly two -- `concat`
+  and `conj` -- and `conj`'s has always demanded a symbol *and* `linear?`, so a borrowed pointer
+  never reached `vec_conj_own`. It is conservative in the other direction: `(conj (conj v 1) 2)`
+  copies although the inner `conj` allocated, which is a missed optimisation and the symmetric
+  half of this fix. Left undone deliberately, because the point of this entry is that the cheap
+  half of that symmetry is what was wrong.
+- **And the interpreted suite had been red since C-148, in the other direction.** `elf/bad/`
+  holds programs that MUST DIE -- one per arithmetic trap -- and `run.sh`'s exclusion list knew
+  about `elf/refuse*.wat`, `elf/native/` and `elf/bench/` but not the directory C-148 added, so
+  `./run.sh elf` reported two failures whose failure WAS the pass. Excluded now, with the reason
+  written next to the other three.
+- **And the harness was only looking at 20 of the 25 programs in `elf/src/`.** `moved`, `pvec`,
+  `assocn` and `extremes` were being built and never compared against the interpreter; each was
+  run by hand when it was written and never again. All of them are in the differential loop now,
+  which is where `strown` went too.
+- **Class:** FIX.
+- **Repro:** `./elf/out/strown.elf` against `wat elf/src/strown.wat`; `tools/elf-run.sh`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
