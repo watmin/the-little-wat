@@ -9447,6 +9447,52 @@ complete at check time. Any openness either moves it to link time or gives it up
   `./elf/out/pass20000.elf`; `elf/bench/out_maxrss ./elf/out/stage1.elf`.
 
 
+### C-141: a program carries only the runtime it can reach -- 2,377 bytes to 452, and C's 968 beaten twice over
+
+- **Where:** `elf/runtime.s` (reordered), `elf/compile.wat` (`:c::runtime`, the `:c::at-*` chain,
+  `:c::rt-level`), `tools/rt-embed.sh`. Prompted by the builder: *"we can chase getting better
+  than c on the benchmarks we rigged up?"*
+  **`tools/bootstrap.sh` green, fixpoint at 109,456 bytes; `tools/loop.sh` green;
+  `tools/mem.sh` green; `tools/vs-c.sh` green.**
+- **We had quietly lost the size benchmark.** `tools/vs-c.sh` read 2,377 bytes against C's 968,
+  where earlier in the project it had been 695. Nothing regressed in the code generator: the
+  runtime had grown to **23 routines and 2,118 bytes**, and every binary embedded all of it.
+  `elf/src/four.wat` prints one integer and can reach 193 bytes of it.
+- **The fix needed no relocation machinery, only an order.** `elf/runtime.s` is now sorted so
+  that **every internal call points backward** -- `buf_put` calls `flush`, `str_cat` calls `oom`,
+  `vec_conj_own` calls `vec_conj`, and nothing calls anything defined after it. A dependency
+  order exists because the graph is shallow: 23 cross-routine references, all of them into six
+  routines. That makes **any prefix of the blob a complete runtime**, so the compiler emits a
+  prefix and every routine's address is still the sum of the lengths before it -- the `:c::at-*`
+  chain did not change shape at all. Three branches that `as` had relaxed to one byte are forced
+  back to `{disp32}`, so no cross-routine reference depends on a distance.
+- **The level is read off the arena, and a bare name is enough.** Every node of every file --
+  `load-file!` reads into the same arena -- and if `wat.string/concat` appears *anywhere*,
+  `str_cat` is carried, call or not. That over-approximates on purpose: being wrong high costs
+  bytes, being wrong low is a call into the data tail. **A built-in the table does not name
+  takes the whole runtime**, so adding a verb to the compiler cannot silently truncate it.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `four.elf` — prints `4` | 2,377 B | **452 B** (C, `-nostdlib`: 968) |
+  | `fib32.elf` | 2,519 B | 595 B |
+  | startup, 500 runs | 502 ms | 517 ms (C, libc removed: 524) |
+
+- **Two holes, both found by the suite crashing rather than by reading.**
+  - **`rd/classify` calls a keyword-spelled name kind `"keyword"`, not `"symbol"`.** The scan
+    read symbols only, so it skipped every `:wat::core::assoc`, `:wat::io::read-file` and
+    `:prim::read-hex` — which is *how this compiler writes about itself*. It gave itself level
+    16, and called past the end of its own runtime. The clj-spelled `wat.core/conj` in the
+    libraries is why the level was 16 and not 0: **the two spellings of one language read as two
+    node kinds**, and a scan that knows about one of them looks like it works.
+  - **`assert-eq` compares**, so on two Strings it is `str_eq` (C-130) and not just the
+    diagnostic. `elf/src/diag.wat` asserts on a `concat` and died on the first run.
+- **`tools/rt-embed.sh`** now also checks that `:c::runtime` concatenates the routines in the
+  order `nm -n` reports, which is the invariant the whole scheme rests on.
+- **Class:** FIX.
+- **Repro:** `tools/vs-c.sh`; `tools/bootstrap.sh`; `stat -c%s elf/out/four.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

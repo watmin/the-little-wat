@@ -1470,9 +1470,17 @@
                                                           (:c::peek? h))))))))))))))
 
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") true
-    (:wat::core::let [ks (:c::kidsof pg a)]
-      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::cond
+      ;; a leaf emits nothing
+      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kind a pg) "list"))
+      ;; **a node with kids that is not a list is still a node with kids** -- a `let`'s binding
+      ;; VECTOR is one, and keying this on "list" meant its initialisers were never looked at.
+      ;; An initialiser holding a call was judged quiet, and the call then clobbered whichever
+      ;; of r8-r11 the enclosing expression was holding a value in. Nothing reached that shape
+      ;; until inlining turned every small call into a `let` in operand position.
+      ((:wat::core::not= (:c::kind a pg) "list") (:c::all-safe? ks 0 env pg))
+      (:else
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
           (:wat::core::and (:c::quiet-head? h)
             (:wat::core::and (:c::word-cmp? h ks env pg)
@@ -1497,10 +1505,12 @@
 
 ;; how many of r8..r11 evaluating this subtree will use
 (:wat::core::defn :c::scratch-need [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") 0
+  (:wat::core::if (:wat::core::and (:wat::core::not= (:c::kind a pg) "list")
+                                   (:wat::core::= (:wat::core::length (:c::kidsof pg a)) 0)) 0
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
-        (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))]
+        (:wat::core::let [op (:wat::core::if (:wat::core::= (:c::kind a pg) "list")
+                               (:c::binop (:c::text pg (:wat::core::nth ks 0))) "")]
           (:wat::core::if (:wat::core::or (:wat::core::= op "") (:wat::core::= op "quot"))
             (:c::need-max ks 0 env pg 0)
             (:wat::core::if (:wat::core::= op "rem") (:c::need-max ks 0 env pg 0)
@@ -2613,6 +2623,265 @@
                     (:c::same-lens a b (:wat::core::+ i 1)))))
 
 
+;; ---------------------------------------------------------------- inlining
+;;
+;; gcc -O2 beats this compiler four to one on fib(32), and the disassembly says why: **it does
+;; not make most of the calls.** It inlines the recursion about six levels deep, so what is left
+;; is straight-line arithmetic with one call in the inner loop. This does the same thing, two
+;; levels deep, and does it as a rewrite of the AST before either pass sees it: a call becomes a
+;; `let` that binds the parameters to the argument expressions and then runs a COPY of the body.
+;; Nothing downstream changes -- `:c::fn-code` compiles the rewritten `defn`, and the frame size
+;; falls out of `:c::slots-body` walking it, so the emitter and the frame cannot disagree.
+;;
+;; Three restrictions, each a soundness boundary rather than a simplification:
+;;
+;;   - **never in tail position.** A self call there is a jump that reuses the frame (C-121) and
+;;     a `let` is not; elf/src/deep.wat is a million of them. The test is conservative: tail
+;;     position propagates through `if`, `cond`, `do`, `let`, `and` and `or`, which is exactly
+;;     the set of forms that pass `tc` down, and stops at everything else.
+;;   - **only bodies that touch no heap** -- `:c::lvl-node` at 3 or below, which is arithmetic,
+;;     comparisons, the logical forms and calls. A body that conj's or concats is judged by
+;;     `:c::linear?`, and that is keyed by NAME and rebuilt per function: inlining moves those
+;;     names into a frame whose linear set belongs to somebody else. Reusing the runtime level
+;;     for this is not a coincidence -- "allocates nothing" is the same question both times.
+;;   - **a size and a depth limit**, because every expansion is a copy.
+;;
+;; A subtree that does not change is SHARED rather than copied. Appending to the arena is the
+;; thing C-140 measured at 745 MB, and copying every node of this compiler would pay it twice.
+
+(:wat::core::defrecord :c::NodeR [pg <- :c::Prog  node <- :wat::core::i64])
+(:wat::core::defrecord :c::KidsR [pg <- :c::Prog  kids <- :rd::Kids  same <- :wat::core::bool])
+
+(:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :wat::core::String text <- :wat::core::String
+                              kids <- :rd::Kids] -> :c::NodeR
+  (:wat::core::let [st (:c::Prog/src pg)]
+    (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
+               :pg (:wat::core::assoc pg :src
+                     (:wat::core::assoc st :arena
+                       (:wat::core::conj (:rd::St/arena st)
+                         (:rd::Node :kind kind :text text :kids kids)))))))
+
+(:wat::core::defn :c::fn-of [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [v (:c::Prog/fns pg)]
+    (:wat::core::cond
+      ((:wat::core::>= i (:wat::core::length v)) -1)
+      ((:wat::core::= (:c::Fn/name (:wat::core::nth v i)) name) i)
+      (:else (:c::fn-of pg name (:wat::core::+ i 1))))))
+
+;; how many nodes a subtree is, and the highest runtime level anything in it reaches
+(:wat::core::defn :c::nodes-of [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::i64
+  (:c::nodes-kids pg (:c::kidsof pg a) 0 1))
+(:wat::core::defn :c::nodes-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                  acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::nodes-kids pg ks (:wat::core::+ i 1)
+      (:wat::core::+ acc (:c::nodes-of pg (:wat::core::nth ks i))))))
+
+(:wat::core::defn :c::pure-max [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::lvl-node pg a false)
+      (:c::pure-kids pg ks 0 0))))
+(:wat::core::defn :c::pure-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                 best <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
+    (:c::pure-kids pg ks (:wat::core::+ i 1)
+      (:c::imax best (:c::pure-max pg (:wat::core::nth ks i))))))
+
+(:wat::core::defn :c::inl-limit [] -> :wat::core::i64 34)
+(:wat::core::defn :c::inl-depth [] -> :wat::core::i64 2)
+
+(:wat::core::defn :c::inl-ok? [pg <- :c::Prog head <- :wat::core::String nargs <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::let [fi (:c::fn-of pg head 0)]
+    (:wat::core::if (:wat::core::< fi 0) false
+      (:wat::core::let [nd (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))
+                        pv (:c::kidsof pg (:wat::core::nth (:c::kidsof pg nd) 2))]
+        (:wat::core::and
+          (:wat::core::= nargs (:wat::core::/ (:wat::core::length pv) 3))
+          (:wat::core::and (:wat::core::<= (:c::nodes-of pg nd) (:c::inl-limit))
+                           (:wat::core::<= (:c::pure-max pg nd) 3)))))))
+
+;; tail position propagates through exactly the forms that pass `tc` down
+(:wat::core::defn :c::tail-through? [h <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or
+    (:wat::core::or (:c::if? h) (:c::cond? h))
+    (:wat::core::or (:wat::core::or (:c::do? h) (:c::let? h))
+                    (:wat::core::or (:c::and? h) (:c::or? h)))))
+
+;; the binding vector of the `let` a call becomes: parameter name, then the argument that was
+;; written for it. The names are the callee's own nodes, shared -- `let` already shadows.
+;; **`(user/gcd b (wat.core/rem a b))` is why this is not one loop.** Binding the parameters in
+;; order gives `a` its new value before the second argument is compiled, and `let` is `let*`, so
+;; `(rem a b)` would read the `a` that had just been written -- the oldest bug in inlining. The
+;; arguments are bound to temporaries first, in the caller's scope, and only then are the
+;; parameters bound to those. The temporary names carry a SPACE, which the reader can never put
+;; in a symbol, so they cannot collide with anything a program wrote. One parameter cannot be
+;; captured by anything, so the temporaries are skipped there and `fib` pays nothing.
+(:wat::core::defn :c::inl-tmp [i <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat " " (:wat::i64::to-string i)))
+
+(:wat::core::defn :c::inl-temps [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
+                                 d <- :wat::core::i64 acc <- :rd::Kids] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
+    (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks (:wat::core::+ i 1)) d false)
+                      t (:c::mknode (:c::NodeR/pg r) "symbol" (:c::inl-tmp i)
+                          (:wat::core::Vector :- [:wat::core::i64]))]
+      (:c::inl-temps (:c::NodeR/pg t) ks (:wat::core::+ i 1) n d
+        (:wat::core::conj (:wat::core::conj acc (:c::NodeR/node t)) (:c::NodeR/node r))))))
+
+(:wat::core::defn :c::inl-params [pg <- :c::Prog pv <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
+                                  acc <- :rd::Kids] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
+    (:wat::core::let [t (:c::mknode pg "symbol" (:c::inl-tmp i)
+                          (:wat::core::Vector :- [:wat::core::i64]))]
+      (:c::inl-params (:c::NodeR/pg t) pv (:wat::core::+ i 1) n
+        (:wat::core::conj (:wat::core::conj acc (:wat::core::nth pv (:wat::core::* i 3)))
+                          (:c::NodeR/node t))))))
+
+(:wat::core::defn :c::inl-binds [pg <- :c::Prog pv <- :c::Kids ks <- :c::Kids i <- :wat::core::i64
+                                 d <- :wat::core::i64 acc <- :rd::Kids] -> :c::KidsR
+  (:wat::core::let [n (:wat::core::/ (:wat::core::length pv) 3)]
+    (:wat::core::if (:wat::core::<= n 1)
+      (:c::inl-one pg pv ks 0 n d acc)
+      (:wat::core::let [tr (:c::inl-temps pg ks 0 n d acc)]
+        (:c::inl-params (:c::KidsR/pg tr) pv 0 n (:c::KidsR/kids tr))))))
+
+(:wat::core::defn :c::inl-one [pg <- :c::Prog pv <- :c::Kids ks <- :c::Kids i <- :wat::core::i64
+                               n <- :wat::core::i64 d <- :wat::core::i64 acc <- :rd::Kids] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
+    (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks (:wat::core::+ i 1)) d false)]
+      (:c::inl-one (:c::NodeR/pg r) pv ks (:wat::core::+ i 1) n d
+        (:wat::core::conj (:wat::core::conj acc (:wat::core::nth pv (:wat::core::* i 3)))
+                          (:c::NodeR/node r))))))
+
+(:wat::core::defn :c::inl-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                d <- :wat::core::i64 tail? <- :wat::core::bool
+                                acc <- :rd::Kids same <- :wat::core::bool] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::KidsR :pg pg :kids acc :same same)
+    (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks i) d tail?)]
+      (:c::inl-kids (:c::NodeR/pg r) ks (:wat::core::+ i 1) d tail?
+        (:wat::core::conj acc (:c::NodeR/node r))
+        (:wat::core::and same (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks i)))))))
+
+;; the body forms of the callee, copied one depth shallower and out of tail position
+(:wat::core::defn :c::inl-body [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                d <- :wat::core::i64 acc <- :rd::Kids] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::KidsR :pg pg :kids acc :same true)
+    (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks i) d false)]
+      (:c::inl-body (:c::NodeR/pg r) ks (:wat::core::+ i 1) d
+        (:wat::core::conj acc (:c::NodeR/node r))))))
+
+(:wat::core::defn :c::inl-call [pg <- :c::Prog a <- :wat::core::i64 ks <- :c::Kids
+                                head <- :wat::core::String d <- :wat::core::i64] -> :c::NodeR
+  (:wat::core::let
+    [fi (:c::fn-of pg head 0)
+     nd (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))
+     fks (:c::kidsof pg nd)
+     pv (:c::kidsof pg (:wat::core::nth fks 2))
+     br (:c::inl-binds pg pv ks 0 d (:wat::core::Vector :- [:wat::core::i64]))
+     vr (:c::mknode (:c::KidsR/pg br) "vector" "[]" (:c::KidsR/kids br))
+     bo (:c::inl-body (:c::NodeR/pg vr) fks (:c::body-start fks 3 (:c::NodeR/pg vr))
+          (:wat::core::- d 1) (:wat::core::Vector :- [:wat::core::i64]))
+     lr (:c::mknode (:c::KidsR/pg bo) "symbol" ":wat::core::let"
+          (:wat::core::Vector :- [:wat::core::i64]))]
+    (:c::mknode (:c::NodeR/pg lr) "list" (:c::text pg a)
+      (:c::inl-cons (:c::NodeR/node lr) (:c::NodeR/node vr) (:c::KidsR/kids bo) 0
+        (:wat::core::Vector :- [:wat::core::i64])))))
+
+(:wat::core::defn :c::inl-cons [l <- :wat::core::i64 v <- :wat::core::i64 body <- :rd::Kids
+                                i <- :wat::core::i64 acc <- :rd::Kids] -> :rd::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length body))
+    acc
+    (:c::inl-cons l v body (:wat::core::+ i 1)
+      (:wat::core::conj (:wat::core::if (:wat::core::= i 0)
+                          (:wat::core::conj (:wat::core::conj acc l) v) acc)
+                        (:wat::core::nth body i)))))
+
+(:wat::core::defn :c::inl-node [pg <- :c::Prog a <- :wat::core::i64 d <- :wat::core::i64
+                                tail? <- :wat::core::bool] -> :c::NodeR
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kind a pg) "list")
+                                    (:wat::core::= (:wat::core::length ks) 0))
+      (:c::NodeR :pg pg :node a)
+      (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))]
+        (:wat::core::if
+          (:wat::core::and (:wat::core::not tail?)
+            (:wat::core::and (:wat::core::> d 0)
+                             (:c::inl-ok? pg head (:wat::core::- (:wat::core::length ks) 1))))
+          (:c::inl-call pg a ks head d)
+          (:wat::core::if (:c::cond? head)
+            (:wat::core::let [cr (:c::inl-clauses pg ks 1 d tail?
+                                   (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
+                                                     (:wat::core::nth ks 0)) true)]
+              (:wat::core::if (:c::KidsR/same cr) (:c::NodeR :pg (:c::KidsR/pg cr) :node a)
+                (:c::mknode (:c::KidsR/pg cr) "list" (:c::text pg a) (:c::KidsR/kids cr))))
+          (:wat::core::let
+            [kr (:c::inl-kids pg ks 0 d
+                  (:wat::core::and tail? (:c::tail-through? head))
+                  (:wat::core::Vector :- [:wat::core::i64]) true)]
+            (:wat::core::if (:c::KidsR/same kr) (:c::NodeR :pg (:c::KidsR/pg kr) :node a)
+              (:c::mknode (:c::KidsR/pg kr) "list" (:c::text pg a) (:c::KidsR/kids kr))))))))))
+
+;; each clause is `(test body...)`: the test is never in tail position and every body form is in
+;; whatever position the `cond` itself was. elf/src/logic.wat's `gcd` is a tail call in one.
+(:wat::core::defn :c::inl-clauses [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                   d <- :wat::core::i64 tail? <- :wat::core::bool
+                                   acc <- :rd::Kids same <- :wat::core::bool] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::KidsR :pg pg :kids acc :same same)
+    (:wat::core::let [r (:c::inl-clause pg (:wat::core::nth ks i) d tail?)]
+      (:c::inl-clauses (:c::NodeR/pg r) ks (:wat::core::+ i 1) d tail?
+        (:wat::core::conj acc (:c::NodeR/node r))
+        (:wat::core::and same (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks i)))))))
+
+(:wat::core::defn :c::inl-clause [pg <- :c::Prog a <- :wat::core::i64 d <- :wat::core::i64
+                                  tail? <- :wat::core::bool] -> :c::NodeR
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::NodeR :pg pg :node a)
+      (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks 0) d false)
+                        br (:c::inl-kids (:c::NodeR/pg r) ks 1 d tail?
+                             (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
+                                               (:c::NodeR/node r))
+                             (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks 0)))]
+        (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node a)
+          (:c::mknode (:c::KidsR/pg br) (:c::kind a pg) (:c::text pg a) (:c::KidsR/kids br)))))))
+
+;; every function's `defn` rewritten, with the Fn pointing at the new one
+(:wat::core::defn :c::inl-fns [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::FnV] -> :c::Prog
+  (:wat::core::let [v (:c::Prog/fns pg)]
+    (:wat::core::if (:wat::core::>= i (:wat::core::length v)) (:wat::core::assoc pg :fns acc)
+      (:wat::core::let
+        [f (:wat::core::nth v i)
+         ks (:c::kidsof pg (:c::Fn/node f))
+         start (:c::body-start ks 3 pg)
+         br (:c::inl-body-tail pg ks start (:c::inl-depth)
+              (:wat::core::Vector :- [:wat::core::i64]) true)
+         nr (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node (:c::Fn/node f))
+              (:c::mknode (:c::KidsR/pg br) "list" (:c::text pg (:c::Fn/node f))
+                (:c::inl-head ks start 0 (:c::KidsR/kids br)
+                  (:wat::core::Vector :- [:wat::core::i64]))))]
+        (:c::inl-fns (:c::NodeR/pg nr) (:wat::core::+ i 1)
+          (:wat::core::conj acc (:wat::core::assoc f :node (:c::NodeR/node nr))))))))
+
+;; the `defn`'s first five children, then the rewritten body forms
+(:wat::core::defn :c::inl-head [ks <- :c::Kids start <- :wat::core::i64 i <- :wat::core::i64
+                                body <- :rd::Kids acc <- :rd::Kids] -> :rd::Kids
+  (:wat::core::if (:wat::core::>= i start) (:c::inl-app body 0 acc)
+    (:c::inl-head ks start (:wat::core::+ i 1) body
+      (:wat::core::conj acc (:wat::core::nth ks i)))))
+(:wat::core::defn :c::inl-app [body <- :rd::Kids i <- :wat::core::i64 acc <- :rd::Kids] -> :rd::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length body)) acc
+    (:c::inl-app body (:wat::core::+ i 1) (:wat::core::conj acc (:wat::core::nth body i)))))
+
+;; only the LAST body form is in tail position
+(:wat::core::defn :c::inl-body-tail [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                     d <- :wat::core::i64 acc <- :rd::Kids
+                                     same <- :wat::core::bool] -> :c::KidsR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::KidsR :pg pg :kids acc :same same)
+    (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks i) d
+                          (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1)))]
+      (:c::inl-body-tail (:c::NodeR/pg r) ks (:wat::core::+ i 1) d
+        (:wat::core::conj acc (:c::NodeR/node r))
+        (:wat::core::and same (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks i)))))))
+
 ;; ---------------------------------------------------------------- how much runtime to carry
 ;;
 ;; The level is the index of the highest routine a program can reach, and it is read off the
@@ -2732,7 +3001,9 @@
      ;; every record and alias is known now, so the types can be resolved in any order
      pg-r (:c::fill-recs pg-c 0 (:wat::core::Vector :- [:c::Rec]))
      pg-f (:c::fill-fns pg-r 0 (:wat::core::Vector :- [:c::Fn]))
-     pg0 (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
+     pg-p (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
+     ;; the calls that become `let`s, before either pass sees a node
+     pg0 (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one
      p1 (:c::pass pg0 0 0 0 (:c::empty-pass))
