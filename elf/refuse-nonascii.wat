@@ -37,6 +37,10 @@
 ;;   (wat.kernel/println EXPR | "literal")
 ;;   (wat.core/+ - * quot rem)             n-ary, folded left
 ;;   (wat.core/< > <= >= = not=)           cmp + setcc + movzx, so a bool is 0 or 1 in rax
+;;   (wat.core/cond (TEST BODY...) ...)    a chain of ifs, with (:else BODY) for the last
+;;   (wat.core/and A ...) (wat.core/or A ...)  the first falsy / first truthy operand, or the last
+;;   (wat.core/not A)                      test + sete + movzx
+;;   (:wat::core::/ A B)                   integer division -- keyword spelling only (F-121)
 ;;   (wat.string/concat A B ...)           n-ary, folded left through `str_cat`
 ;;   (wat.string/length S)                 a peek at the string's header
 ;;   nil, true, false                      a machine zero, a one and a zero
@@ -325,6 +329,9 @@
     ((:c::is? src "wat.core/-" ":wat::core::-") "-")
     ((:c::is? src "wat.core/*" ":wat::core::*") "*")
     ((:c::is? src "wat.core/quot" ":wat::core::quot") "quot")
+    ;; `/` has no Clojure spelling the reader will take (`wat.core//` reads as `:wat::core/::`),
+    ;; and on i64 it truncates toward zero -- `(/ -7 2)` is -3 -- which is exactly idiv
+    ((:wat::core::= src ":wat::core::/") "quot")
     ((:c::is? src "wat.core/rem" ":wat::core::rem") "rem")
     ((:c::is? src "wat.core/<" ":wat::core::<") "<")
     ((:c::is? src "wat.core/>" ":wat::core::>") ">")
@@ -369,6 +376,14 @@
 
 (:wat::core::defn :c::println? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.kernel/println" ":wat::kernel::println"))
+(:wat::core::defn :c::cond? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/cond" ":wat::core::cond"))
+(:wat::core::defn :c::and? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/and" ":wat::core::and"))
+(:wat::core::defn :c::or? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/or" ":wat::core::or"))
+(:wat::core::defn :c::not? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/not" ":wat::core::not"))
 (:wat::core::defn :c::concat? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/concat" ":wat::string::concat"))
 (:wat::core::defn :c::strlen? [s <- :wat::core::String] -> :wat::core::bool
@@ -487,6 +502,15 @@
         ;; a branch is typed by its consequent; the alternative has to agree, and if it does not
         ;; the program is wrong in a way this compiler does not check
         ((:c::if? head) (:c::type-of (:wat::core::nth ks 2) env fns))
+        ((:c::not? head) "bool")
+        ;; and / or answer one of their operands, so the last one's type is the honest guess
+        ((:wat::core::or (:c::and? head) (:c::or? head)) (:c::type-of last env fns))
+        ;; a cond is typed by its first clause's body, the way an if is by its consequent
+        ((:c::cond? head)
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
+            (:wat::core::let [cks (:wat::core::ast->children (:wat::core::nth ks 1))]
+              (:wat::core::if (:wat::core::< (:wat::core::length cks) 2) "i64"
+                (:c::type-of (:wat::core::nth cks (:wat::core::- (:wat::core::length cks) 1)) env fns)))))
         ((:c::do? head) (:c::type-of last env fns))
         ((:c::let? head)
           (:c::type-of last
@@ -637,6 +661,19 @@
                         op (:c::binop head)]
         (:wat::core::cond
           ((:c::if? head) (:c::if-form ks a o env fns rt tb slot tc))
+          ;; cond, and, or and not are `if` wearing different hats: no new instruction between
+          ;; them beyond a `sete`, and 46 of the 297 occurrences the census counts (elf/census.wat)
+          ((:c::cond? head) (:c::cond-form ks 1 a o env fns rt tb slot tc))
+          ((:c::and? head)
+            (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "and arity" a)
+              (:c::and-form ks 1 o env fns rt tb slot tc)))
+          ((:c::or? head)
+            (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "or arity" a)
+              (:c::or-form ks 1 o env fns rt tb slot tc)))
+          ((:c::not? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "not arity" a)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
+                (:wat::string::concat "4885c0" "0f94c0" "480fb6c0"))))   ;; test ; sete al ; movzx
           ((:c::do? head) (:c::seq ks 1 o env fns rt tb slot tc))
           ;; a no-argument syscall: the number goes in rax, the result comes back in rax
           ((:wat::core::>= (:c::syscall-nr head) 0)
@@ -762,6 +799,60 @@
        o6 (:c::patch o5 jz-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jz-at 4)) 4))
        o7 (:c::expr (:wat::core::nth ks 3) o6 env fns rt tb slot tc)]
       (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4)))))
+
+;; ---------------------------------------------------------------- cond, and, or
+;;
+;; `cond` is a chain of `if`s and needs no new idea; the only thing to get right is that each
+;; clause's BODY is in whatever tail position the `cond` itself was, while its test never is.
+;; A `cond` that falls off the end answers zero, which is what `nil` compiles to.
+
+(:wat::core::defn :c::cond-form [ks <- :c::Kids i <- :wat::core::i64 a <- :wat::WatAST o <- :c::Out
+                                 env <- :c::Env fns <- :c::Fns rt <- :wat::core::i64
+                                 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::emit o (:c::mov-rax 0))
+    (:wat::core::let [cks (:wat::core::ast->children (:wat::core::nth ks i))]
+      (:wat::core::if (:wat::core::< (:wat::core::length cks) 2) (:c::fail "cond clause" a)
+        (:wat::core::if (:wat::core::= (:wat::core::ast->source (:wat::core::nth cks 0)) ":else")
+          (:c::seq cks 1 o env fns rt tb slot tc)
+          (:wat::core::let
+            [o1 (:c::expr (:wat::core::nth cks 0) o env fns rt tb slot (:c::no-tail))
+             o2 (:c::emit o1 "4885c0")                      ;; test rax, rax
+             o3 (:c::emit o2 "0f8400000000")                ;; jz <next clause>
+             jz-at (:wat::core::- (:c::codelen o3) 4)
+             o4 (:c::seq cks 1 o3 env fns rt tb slot tc)
+             o5 (:c::emit o4 "e900000000")                  ;; jmp <end>
+             jmp-at (:wat::core::- (:c::codelen o5) 4)
+             o6 (:c::patch o5 jz-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jz-at 4)) 4))
+             o7 (:c::cond-form ks (:wat::core::+ i 1) a o6 env fns rt tb slot tc)]
+            (:c::patch o7 jmp-at
+              (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4))))))))
+
+;; `and` and `or` answer the FIRST falsy / first truthy operand, or the last one -- which is
+;; wat's rule and also the cheapest: the deciding value is already in rax, so the short circuit
+;; is one conditional jump to the end and nothing to load.
+(:wat::core::defn :c::and-form [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                fns <- :c::Fns rt <- :wat::core::i64 tb <- :wat::core::i64
+                                slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::- (:wat::core::length ks) 1))
+    (:c::expr (:wat::core::nth ks i) o env fns rt tb slot tc)
+    (:wat::core::let
+      [o1 (:c::expr (:wat::core::nth ks i) o env fns rt tb slot (:c::no-tail))
+       o2 (:c::emit (:c::emit o1 "4885c0") "0f8400000000")  ;; test ; jz <end, rax is the falsy one>
+       at (:wat::core::- (:c::codelen o2) 4)
+       o3 (:c::and-form ks (:wat::core::+ i 1) o2 env fns rt tb slot tc)]
+      (:c::patch o3 at (:asm::le (:wat::core::- (:c::codelen o3) (:wat::core::+ at 4)) 4)))))
+
+(:wat::core::defn :c::or-form [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                               fns <- :c::Fns rt <- :wat::core::i64 tb <- :wat::core::i64
+                               slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::- (:wat::core::length ks) 1))
+    (:c::expr (:wat::core::nth ks i) o env fns rt tb slot tc)
+    (:wat::core::let
+      [o1 (:c::expr (:wat::core::nth ks i) o env fns rt tb slot (:c::no-tail))
+       o2 (:c::emit (:c::emit o1 "4885c0") "0f8500000000")  ;; test ; jnz <end, rax is the truthy one>
+       at (:wat::core::- (:c::codelen o2) 4)
+       o3 (:c::or-form ks (:wat::core::+ i 1) o2 env fns rt tb slot tc)]
+      (:c::patch o3 at (:asm::le (:wat::core::- (:c::codelen o3) (:wat::core::+ at 4)) 4)))))
 
 ;; ---------------------------------------------------------------- let
 

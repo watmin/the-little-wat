@@ -34,7 +34,7 @@ chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
-for name in four arith greet branch fib bench strings shadow churn deep; do
+for name in four arith greet branch fib bench strings shadow churn deep logic; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$("$WAT" "$src" 2>&1); irc=$?
   native=$("./$bin" 2>&1); nrc=$?

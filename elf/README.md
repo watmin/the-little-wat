@@ -59,6 +59,11 @@ that is not a symbol, keyword or string literal, and a tree walk meets those con
 (wat.core/do BODY...)                 ; a sequence; the last form is the value
 (wat.core/+ - * quot rem)             ; n-ary, folded left
 (wat.core/< > <= >= = not=)           ; cmp + setcc + movzx, so a bool is 0 or 1 in rax
+(wat.core/cond (TEST BODY...) ...)    ; a chain of ifs; (:else BODY) for the last
+(wat.core/and A B ...)                ; the first falsy operand, or the last
+(wat.core/or A B ...)                 ; the first truthy operand, or the last
+(wat.core/not A)                      ; test + sete + movzx
+(:wat::core:://)                      ; integer division -- keyword spelling only, F-121
 ```
 
 integer literals, negatives included, nested to any depth — and both spellings of every name
@@ -499,17 +504,52 @@ C's answer is libc. wat has no equivalent. Its OS surface — `:wat::io::`, `:wa
 intrinsic set defined independently of the interpreter, or the two languages drift apart exactly
 here.
 
+## How far from compiling itself
+
+`elf/census.wat` answers that with a number instead of a feeling. It reads the AST of
+`elf/compile.wat` and `elf/lib/asm.wat` — the compiler's own source — asks of every form *could
+`:c::form` translate this?*, and tallies what is left, most frequent first. It is written in wat,
+using the same `read-string` walk the compiler uses.
+
+```
+$ wat elf/census.wat
+  rank  count  form
+  1   65       :wat::core::nth
+  2   54       :wat::core::length
+  3   21       :wat::core::ast->source
+  4   13       :wat::core::ast->children
+  5   12       :wat::core::Vector
+  6   8        :wat::string::subs
+  ...
+  51 distinct forms, 274 occurrences -- that is the distance to self-hosting
+```
+
+The first count was **56 forms, 297 occurrences**. What the table said to build first was not
+what intuition suggested: not `match` (3 uses) or closures (1), but `cond` (18), `/` (14) and the
+logical operators — 46 occurrences needing **no new codegen idea at all**. Those are done, and
+the total is 274.
+
+**It also moves as you build.** `nth` went 55 → 65 and `length` 44 → 54 over that same change,
+because the compiler that has to be compiled had itself grown by five forms. A self-hosting
+target is not stationary, and the honest measure is the ratio rather than the count.
+
+`nth` + `length` + `Vector` + `conj` is **137 of the 274 — exactly half — and it is one
+feature**: growable indexed sequences on the heap. After that comes the AST surface
+(`ast->source`, `ast->children`) and the I/O surface, which are F-119: Rust inside the
+interpreter, with no ABI for a compiled program to reach.
+
 ## What is still missing, in order of what it would prove
 
 `let`, `if`, user functions, strings and a heap are done. What stands between this and a
 compiler that could compile *itself*:
 
+0. ~~**`cond`, `and`, `or`, `not`, `/`**~~ — done (C-123), 46 occurrences, no new codegen.
 1. ~~**Strings as values**~~ — done (C-119). A String is a pointer to `[len:8][bytes...]`,
    literals in the data tail and everything else bump-allocated out of an `mmap`'d megabyte.
-   `subs` and `split` are still missing, and so is any way to give memory back.
-2. **Vectors and records** — every one of this compiler's own data structures. Allocation is
-   solved now; what is left is field offsets, a length that can grow, and either something to
-   free them or a stated decision not to.
+   `subs` (8 uses) and `contains?` (5) are still missing, and so is any way to give memory back.
+2. **Vectors and records** — **half the remaining census**, and every one of this compiler's own
+   data structures. Allocation is solved; what is left is field offsets, a length that can grow,
+   and either something to free them or a stated decision not to.
 3. **`match`** — which is `if` with a tag test and destructuring, so the hard part is the data
    representation rather than the control flow. Same blocker as (2).
 4. **The wat runtime's verbs** — `read-string` itself, `ast->children`, `Bytes::from-hex`. A
