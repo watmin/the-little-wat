@@ -9965,6 +9965,50 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/elf-run.sh`; `./elf/out/overflow.elf`; `wat elf/bad/overflow.wat`.
 
 
+### C-149: a compare and a branch write no register, so both arms already hold the value
+
+- **Where:** `elf/compile.wat` (`:c::if-cmp`, `:c::patch`). Extends C-147's tracking.
+  **`tools/bootstrap.sh --fast` green, `loop`, `mem`, `vs-c`, `elf-run` green; `threads4` 1000,
+  `deep` 1,000,000, overflow still traps.**
+- **Every inlined `if` reloaded a value that was sitting in the register.** C-147 gave `:c::Out`
+  a field naming what `rax` already holds, with a window one instruction wide -- any emission
+  closed it. The compare and the conditional jump between a binding and its use closed it,
+  though neither writes a register:
+
+  ```
+  175: mov %rax,-0x20(%rbp)     the binding
+  179: cmp $0x2,%rax            uses rax directly -- C-147 caught this one
+  17d: jge 0x192
+  183: mov -0x20(%rbp),%rax     then arm: reloads what rax holds
+  192: mov -0x20(%rbp),%rax     else arm: reloads what rax holds
+  ```
+
+- **What makes it sound is the reasoning, not the observation.** A compare and a branch write
+  nothing, so the fall-through and the jump arrive at their arms with the *same* contents -- and
+  the else arm has exactly one predecessor, that branch. Both arms may therefore inherit. Only
+  when the right operand compiled to a bare compare: the general path pushes and evaluates into
+  `rax`, which destroys it, and the restore is conditional on exactly that.
+- **`:c::patch` now clears the tracking**, because most of its uses are real joins -- two paths
+  meeting with different contents -- and one conservative clear in one place covers every `if`
+  and every `cond`. `:c::if-cmp` is the single caller that knows better, and says so where it
+  re-establishes the arm's state. That is the shape worth copying: clear centrally, restore
+  where the reasoning is written down.
+- **`fib32.elf` 4,053 → 3,719 bytes**, one load fewer on the hot path of every node.
+- **On the measurement, honestly.** The machine was under load -- average 1.5, a browser
+  running -- and `fib` read 19–25 ms against the 15 ms of an hour before, so the timing is
+  directional only: two of three interleaved rounds favour it, one ties. **The argument that
+  carries this change is structural**: strictly fewer instructions, visible in the disassembly,
+  executed once per node. A change whose only evidence was timing would not have been kept under
+  those conditions.
+- **And it struck an item off its own queue.** NEXT.md item 5, rematerialising instead of
+  spilling, was named as *"one `add` instead of a store and three loads"*. Two of those three
+  loads were these redundant reloads. A spill now costs one store and one load; rematerialising
+  costs one load and one subtract **per read** -- a tie at best, a loss when read twice. Struck,
+  with the arithmetic recorded rather than the line deleted.
+- **Class:** IMPROVE.
+- **Repro:** `objdump -b binary -m i386:x86-64 -D elf/out/fib32.elf`; `tools/bootstrap.sh`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
