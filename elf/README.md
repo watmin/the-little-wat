@@ -398,6 +398,51 @@ help: memory is O(n²), measured at 17,580 KiB for n=2000 and 63,548 KiB for n=4
 prediction of 15,625 and 62,500. Freeing those needs **reachability, not scope** — a collector,
 or linear types that let `conj` mutate when the old vector is provably dead.
 
+### Do we need a collector?
+
+No — and nothing here has one, wat included. wat-rs holds every value in an `Arc<…>` and there is
+no mark phase, no sweep and no roots scan anywhere in the tree. *Zero GC pause* is not something
+to aspire to; it is already the situation.
+
+But **"no collector" is bought three different ways**, and the difference is the whole answer:
+
+| | who frees | cost | fails on |
+| --- | --- | --- | --- |
+| C | the programmer, by hand | none | use-after-free, double-free, leaks |
+| Rust | the compiler, statically, from **ownership in the types** | none | cycles; needs `&`/`&mut`/move to exist |
+| wat | `Arc`, when the count hits zero | an atomic inc/dec per share | cycles |
+| this compiler | scope, at statement boundaries | none | anything outliving a statement |
+
+The same accumulator loop, run both ways, says which one we have:
+
+| n | interpreter peak RSS | compiled peak RSS |
+| --- | --- | --- |
+| 5,000 | 70,420 KiB | — |
+| 20,000 | 75,740 KiB | — |
+| 40,000 | 79,516 KiB | — |
+| 2,000 | — | 17,580 KiB |
+| 4,000 | — | 63,548 KiB |
+| 8,000 | — | `wat: heap exhausted` |
+
+The interpreter's baseline is 70,736 KiB, so it spends about **0.2 KB per element — linear**.
+Ours is **4n² — quadratic**. Identical algorithm, identical number of copies; the difference is
+that `Arc` drops each dead clone the instant `conj` returns and a bump pointer cannot know it
+happened.
+
+**So we are behind wat here, not ahead**, and the gap is exactly refcounting.
+
+**Can we have Rust's deal instead — no collector *and* no refcount traffic?** Not without wat
+expressing ownership. Rust buys that with `&`, `&mut` and move semantics being *in the type
+system*: `fn f(v: Vec<T>)` and `fn f(v: &Vec<T>)` are different functions and the compiler knows
+which one may free. `acc <- (Vector :- [T])` says nothing about whether the caller kept a
+reference, so no compiler can decide it statically. **That is a language question, not a compiler
+question** — and it is the interesting one on the road to rivalling C.
+
+What to build, in order: a refcount in the object header (matches what wat already does, needs no
+language change), and then in-place update when the count is 1 — Rust's `Vec::push`, Clojure's
+transient, Swift's `isKnownUniquelyReferenced`. wat-rs does not do that second one even though it
+could, which is F-123.
+
 **Running out says so.** `grow 8000` wants about 250 MB against a 64 MiB heap. It used to
 segfault. Every allocator now checks `r15 + need` against a limit at `[r14+8]` *before it writes
 anything*, and jumps to an 89-byte `oom` that flushes stdout, puts `wat: heap exhausted` on
