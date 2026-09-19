@@ -9493,6 +9493,66 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh`; `tools/bootstrap.sh`; `stat -c%s elf/out/four.elf`.
 
 
+### C-142: inlining -- fib(32) twice as fast as gcc -O0, and three bugs that only a new shape could reach
+
+- **Where:** `elf/compile.wat` (`:c::inl-*`, `:c::scratch-safe?`, `:c::scratch-need`).
+  **`tools/bootstrap.sh --fast` green, fixpoint at 120,327 bytes; `tools/loop.sh` green;
+  `tools/mem.sh` green; twenty differential programs agree.**
+- **The disassembly said what the gap was.** gcc -O2 beat this compiler four to one on fib(32),
+  and it is not instruction quality -- our call sequence is twenty-two instructions and tight.
+  **-O2 does not make most of the calls.** It inlines the recursion about six levels deep and
+  leaves one `call` in an inner loop, spending 1,040 bytes of code on a three-line function.
+- **So this inlines too, two levels, as a rewrite of the AST before either pass sees a node.** A
+  call becomes a `let` that binds the parameters to the argument expressions and runs a copy of
+  the body. Nothing downstream changes: `:c::compile-fn` compiles the rewritten `defn`, and the
+  frame size falls out of `:c::slots-body` walking the same tree, **so the emitter and the frame
+  cannot disagree about what is in there** -- which is the failure this change could most easily
+  have had. A subtree that does not change is shared rather than copied, because appending to
+  the arena is the thing C-140 measured at 745 MB.
+
+  | | | |
+  | --- | --- | --- |
+  | ours | **19–23 ms** | was 29–34 |
+  | gcc -O0 | 32–38 ms | |
+  | gcc -O2 | 9–14 ms | |
+
+  `fib32.elf` grows 595 → 1,152 bytes. Depth three buys a millisecond for 732 more bytes and
+  depth four buys nothing at all, so the limit stays at two.
+- **Three restrictions, each a soundness boundary rather than a simplification.**
+  - **Never in tail position.** A self call there is a jump that reuses the frame (C-121) and a
+    `let` is not; `elf/src/deep.wat` is a million of them.
+  - **Only bodies that allocate nothing** — `:c::lvl-node` at 3 or below, the same level C-141
+    uses to decide how much runtime to carry. That is not a coincidence: *"allocates nothing"*
+    is the same question both times. A body that `conj`s is judged by `:c::linear?`, which is
+    keyed by NAME and rebuilt per function, and inlining moves those names into a frame whose
+    linear set belongs to somebody else.
+  - **A size and a depth limit**, because every expansion is a copy.
+- **Three bugs, none of them found by reading, and the first one was already there.**
+  - **`:c::scratch-safe?` and `:c::scratch-need` keyed on `kind == "list"`**, so neither ever
+    looked inside a `let`'s binding VECTOR. An initialiser holding a call was judged quiet, and
+    the call then clobbered whichever of r8–r11 the enclosing expression was holding a value in.
+    **That hole has been open since C-137** — nothing in this repository reached the shape until
+    inlining put a `let` in operand position, and then the compiled compiler started disagreeing
+    with itself about how many children a form had. It is the C-138/C-139 lesson again: the
+    tests exercise what the code does, not what it assumed.
+  - **`(user/gcd b (wat.core/rem a b))`** — binding the parameters in order gives `a` its new
+    value before the second argument is compiled, and `let` is `let*`. The oldest bug in
+    inlining, and it took a real program to produce it. Arguments now bind to temporaries first,
+    named with a **space**, which the reader can never put in a symbol; one parameter cannot be
+    captured by anything, so `fib` pays nothing for the fix.
+  - **A `cond` clause body is in tail position**, and a clause's head is a *test expression*
+    rather than a form name — so the general rule called it non-tail and inlined the tail call
+    out of `elf/src/logic.wat`'s `gcd`. It printed 462 instead of 21.
+- **Where that leaves the five benchmarks against C:** size **452 B against 968**, startup level,
+  output **5 ms against 11**, tail calls level, and compute now **ahead of `gcc -O0` and about
+  twice behind `-O2`**. What is left in the gap is memory traffic: every inlined binding still
+  goes to a frame slot and comes back, where gcc keeps it in a register. `:c::Bind` already has
+  a `reg` field and C-136 already saves rbx/r12/r13 — **giving `let` bindings registers is the
+  named next step.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh`; `tools/bootstrap.sh`; `elf/bench/fib32.wat`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
