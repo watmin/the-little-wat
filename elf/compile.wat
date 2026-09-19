@@ -680,16 +680,59 @@
 ;; read is elided only when nothing whatever was emitted in between -- which is also what makes
 ;; it safe against a jump landing on the read: a branch target is a position some emission
 ;; recorded, and any emission has already cleared the field.
+
+;; ---------------------------------------------------------------- the accumulator
+;;
+;; **F-127 made appending to a record field cost 3x, and this is the answer that needs no
+;; ownership proof at all.** `concat` can only extend a String in place when the compiler can
+;; prove nothing else holds it, and a field read is precisely the case where it cannot -- so the
+;; correct rule copies the whole accumulated string on every append, which is quadratic.
+;;
+;; C-144 met the same wall from the other side and took the same way out: *stop asking the
+;; compiler*. A `Buf` is the string as a VECTOR OF CHUNKS, and a chunk vector appends by
+;; `conj` -- which on the promoting vector's tree arm (C-145) copies the path to the leaf and
+;; SHARES everything else. Around 850 bytes an append instead of the whole accumulator, with no
+;; uniqueness to establish, because nothing is mutated.
+;;
+;; The string only has to exist as one piece twice: when a patch has to reach into it, and at
+;; the end. `:c::buf-str` is that fold, and ITS accumulator is a linear parameter -- read once on
+;; every path -- so the in-place rule applies to it and the flatten is linear, not quadratic.
+(:wat::core::defrecord :c::Buf
+  [ch <- (:wat::core::Vector :- [:wat::core::String])  n <- :wat::core::i64])
+
+(:wat::core::defn :c::buf0 [] -> :c::Buf
+  (:c::Buf :ch (:wat::core::Vector :- [:wat::core::String]) :n 0))
+
+(:wat::core::defn :c::buf-add [b <- :c::Buf s <- :wat::core::String] -> :c::Buf
+  (:c::Buf :ch (:wat::core::conj (:c::Buf/ch b) s)
+           :n (:wat::core::+ (:c::Buf/n b) (:wat::string::length s))))
+
+;; the length without building the string -- which is the whole point, since `:c::here` asks for
+;; it on every instruction
+(:wat::core::defn :c::buf-len [b <- :c::Buf] -> :wat::core::i64 (:c::Buf/n b))
+
+(:wat::core::defn :c::buf-fold [v <- (:wat::core::Vector :- [:wat::core::String])
+                                i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length v)) acc
+    (:c::buf-fold v (:wat::core::+ i 1)
+      (:wat::string::concat acc (:wat::core::nth v i)))))
+
+(:wat::core::defn :c::buf-str [b <- :c::Buf] -> :wat::core::String
+  (:c::buf-fold (:c::Buf/ch b) 0 ""))
+
+(:wat::core::defn :c::buf-one [s <- :wat::core::String] -> :c::Buf
+  (:c::buf-add (:c::buf0) s))
+
 (:wat::core::defrecord :c::Out
-  [base <- :wat::core::i64  code <- :wat::core::String  tail <- :wat::core::String
+  [base <- :wat::core::i64  code <- :c::Buf  tail <- :c::Buf
    rax <- :wat::core::String])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
-  (:wat::core::assoc (:wat::core::assoc o :code (:wat::string::concat (:c::Out/code o) hex))
+  (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
                      :rax ""))
 
 (:wat::core::defn :c::codelen [o <- :c::Out] -> :wat::core::i64
-  (:wat::core::/ (:wat::string::length (:c::Out/code o)) 2))
+  (:wat::core::/ (:c::buf-len (:c::Out/code o)) 2))
 
 ;; the virtual address of the next instruction, which is what a relocation needs
 (:wat::core::defn :c::here [o <- :c::Out] -> :wat::core::i64
@@ -708,13 +751,13 @@
 ;; they do not agree; every `if` and every `cond` clause lands on one of these, so clearing the
 ;; tracking in this one place covers all of them.
 (:wat::core::defn :c::patch [o <- :c::Out off <- :wat::core::i64 hex <- :wat::core::String] -> :c::Out
-  (:wat::core::let [code (:c::Out/code o)
+  (:wat::core::let [code (:c::buf-str (:c::Out/code o))
                     at (:wat::core::* off 2)]
     (:wat::core::assoc (:wat::core::assoc o :rax "") :code
-      (:wat::string::concat
+      (:c::buf-one (:wat::string::concat
         (:wat::string::subs code 0 at)
         hex
-        (:wat::string::subs code (:wat::core::+ at (:wat::string::length hex)) (:wat::string::length code))))))
+        (:wat::string::subs code (:wat::core::+ at (:wat::string::length hex)) (:wat::string::length code)))))))
 
 ;; ---------------------------------------------------------------- names, in both spellings
 
@@ -1220,14 +1263,15 @@
   (:wat::core::let
     [n (:wat::string::length text)
 
-     addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
+     addr (:wat::core::+ tb (:wat::core::/ (:c::buf-len (:c::Out/tail o)) 2))
      pad (:wat::core::rem (:wat::core::- 8 (:wat::core::rem n 8)) 8)
      o1 (:wat::core::assoc o :tail
           ;; a reference count of ZERO in front of it. Every heap object carries its count at
           ;; [p-8] and starts at 1; a literal lives in the read-only segment and must never be
           ;; mistaken for a unique heap object, so it gets a count no allocation can produce.
-          (:wat::string::concat (:c::Out/tail o) (:asm::le 0 8) (:asm::le n 8)
-            (:asm::ascii text 0 "") (:c::zeros pad "")))]
+          (:c::buf-add (:c::Out/tail o)
+            (:wat::string::concat (:asm::le 0 8) (:asm::le n 8)
+              (:asm::ascii text 0 "") (:c::zeros pad ""))))]
     (:c::emit o1 (:c::mov-rax (:wat::core::+ addr 8)))))
 
 (:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
@@ -2485,8 +2529,8 @@
                                     rt <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
   (:wat::core::let
     [text (:wat::string::concat (:c::text pg a) "\n")
-     addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
-     o1 (:wat::core::assoc o :tail (:wat::string::concat (:c::Out/tail o) (:asm::ascii text 0 "")))]
+     addr (:wat::core::+ tb (:wat::core::/ (:c::buf-len (:c::Out/tail o)) 2))
+     o1 (:wat::core::assoc o :tail (:c::buf-add (:c::Out/tail o) (:asm::ascii text 0 "")))]
     ;; through the buffer like everything else -- a literal written straight to fd 1 would
     ;; overtake whatever `println` had buffered before it
     (:c::call (:c::emit o1 (:wat::string::concat (:c::mov-rsi addr)
@@ -2612,7 +2656,7 @@
 
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :wat::core::i64 tb <- :wat::core::i64
-                                  tail-in <- :wat::core::String] -> :c::Out
+                                  tail-in <- :c::Buf] -> :c::Out
   (:wat::core::let
     [ks (:c::kidsof pg node)
      pv (:c::kidsof pg (:wat::core::nth ks 2))
@@ -2646,7 +2690,7 @@
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
-     o0 (:c::Out :base base :code "" :tail tail-in :rax "")
+     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "")
      ;; push rbp / mov rbp,rsp / make room / save the registers this function will use / load
      ;; the parameters into them. The saves come AFTER the frame so that a `let` slot at
      ;; [rbp-8k] does not land on a saved register.
@@ -2779,7 +2823,7 @@
 ;; one pass over every function: each is compiled at the address the table says, and the lengths
 ;; come back so the next table can be built
 (:wat::core::defrecord :c::PassR
-  [code <- :wat::core::String  tail <- :wat::core::String
+  [code <- :c::Buf  tail <- :c::Buf
    lens <- (:wat::core::Vector :- [:wat::core::i64])])
 
 (:wat::core::defn :c::pass [pg <- :c::Prog i <- :wat::core::i64 rt <- :wat::core::i64 tb <- :wat::core::i64
@@ -2789,12 +2833,14 @@
       [f (:wat::core::nth (:c::Prog/fns pg) i)
        o (:c::compile-fn (:c::Fn/node f) (:c::Fn/addr f) pg rt tb (:c::PassR/tail acc))]
       (:c::pass pg (:wat::core::+ i 1) rt tb
-        (:c::PassR :code (:wat::string::concat (:c::PassR/code acc) (:c::Out/code o))
+        ;; one function's code, flattened once and appended as a single chunk: the flatten is
+        ;; linear and happens once per function, so the whole program's code is still O(n)
+        (:c::PassR :code (:c::buf-add (:c::PassR/code acc) (:c::buf-str (:c::Out/code o)))
                    :tail (:c::Out/tail o)
                    :lens (:wat::core::conj (:c::PassR/lens acc) (:c::codelen o)))))))
 
 (:wat::core::defn :c::empty-pass [] -> :c::PassR
-  (:c::PassR :code "" :tail "" :lens (:wat::core::Vector :- [:wat::core::i64])))
+  (:c::PassR :code (:c::buf0) :tail (:c::buf0) :lens (:wat::core::Vector :- [:wat::core::i64])))
 
 ;; the entry stub, and the only code not compiled from a defn: one mmap for both the output
 ;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
@@ -2826,7 +2872,7 @@
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
-    [o (:c::Out :base (:asm::entry) :code "" :tail "" :rax "")
+    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "")
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
@@ -2840,7 +2886,7 @@
           "49894e08"))                                       ;; mov [r14+8], rcx
      o2 (:c::call o1 main-addr)
      o3 (:c::call o2 (:c::at-flush rt))]
-    (:c::Out/code (:c::emit o3 (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05")))))
+    (:c::buf-str (:c::Out/code (:c::emit o3 (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05"))))))
 
 ;; place every function end to end after the stub
 (:wat::core::defn :c::place [pg <- :c::Prog lens <- (:wat::core::Vector :- [:wat::core::i64])
@@ -3293,20 +3339,21 @@
 
      ;; PASS TWO: now they do
      p2 (:c::pass pg1 0 rt-addr tail-base (:c::empty-pass))
-     text (:wat::string::concat (:c::stub main-addr rt-addr) (:c::PassR/code p2) (:c::runtime lvl))
-     written (:asm::link out-path text (:c::PassR/tail p2))]
+     text (:wat::string::concat (:c::stub main-addr rt-addr) (:c::buf-str (:c::PassR/code p2))
+            (:c::runtime lvl))
+     written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)
         (:wat::kernel::assertion-failed! :message "compile: no user/main") nil)
       ;; the invariant the two-pass technique rests on
       (:c::same-lens (:c::PassR/lens p1) (:c::PassR/lens p2) 0)
-      (:wat::test::assert-eq (:wat::string::length (:c::PassR/tail p1))
-                             (:wat::string::length (:c::PassR/tail p2)))
+      (:wat::test::assert-eq (:c::buf-len (:c::PassR/tail p1))
+                             (:c::buf-len (:c::PassR/tail p2)))
       (:wat::kernel::println
         (:wat::string::concat "compile: " (:asm::pad src-path 22) " -> " (:asm::pad out-path 24)
           (:asm::pad (:wat::i64::to-string written) 5) " bytes   fns " (:asm::pad (:wat::i64::to-string (:wat::core::length (:c::Prog/fns pg0))) 3)
           "  code " (:asm::pad (:wat::i64::to-string code-total) 5)
-          "  data " (:asm::pad (:wat::i64::to-string (:wat::core::/ (:wat::string::length (:c::PassR/tail p2)) 2)) 4)
+          "  data " (:asm::pad (:wat::i64::to-string (:wat::core::/ (:c::buf-len (:c::PassR/tail p2)) 2)) 4)
           "  verified")))))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil

@@ -10059,7 +10059,8 @@ complete at check time. Any openness either moves it to link time or gives it up
   `elf/src/strown.wat` (new), `tools/elf-run.sh`. The item C-140 flagged twice and left open,
   now with a wrong answer behind it instead of a note. **`tools/bootstrap.sh` green from the
   interpreter — 52 binaries byte-identical, fixpoint at 136,662 bytes; `elf-run`, `mem`, `vs-c`,
-  `loop` green.**
+  `loop` green.** **C-152 buys back 94% of the price this entry measures, without touching the
+  ownership model at all.**
 - **`elf/src/strown.wat` prints a string that grew after it was read.** A record whose String
   field is filled from an expression, read back, and concatenated:
 
@@ -10158,6 +10159,51 @@ complete at check time. Any openness either moves it to link time or gives it up
   which is where `strown` went too.
 - **Class:** FIX.
 - **Repro:** `./elf/out/strown.elf` against `wat elf/src/strown.wat`; `tools/elf-run.sh`.
+
+
+### C-152: the accumulator stops needing an ownership proof — 444,556 KiB to 162,908, and correctness keeps its 94%
+
+- **Where:** `elf/compile.wat` (`:c::Buf`, `:c::buf-add`, `:c::buf-str`, `:c::Out`, `:c::PassR`,
+  `:c::emit`, `:c::patch`, `:c::static-str`, `:c::print-string`, `:c::pass`, the driver).
+  Answers F-127's price directly, sixteen edits, no change to what any binary contains.
+- **F-127 left the compiler correct and 3.06x hungrier**, and named three roads out. Two of them
+  — check the container's count, decrement when a reference dies — are the ownership model, and
+  C-143 already crashed into that wall. This is the third, which is **C-144's move**: when the
+  ownership model cannot win, *stop asking the compiler* and change the data structure.
+- **A `Buf` is the string as a VECTOR OF CHUNKS.** `concat` can only extend in place when
+  nothing else holds the string, which a record field can never promise. `conj` on the promoting
+  vector's tree arm (C-145) needs no such promise: `tree_push` copies the root and one node per
+  level and **shares everything else**, so an append costs about 850 bytes regardless of how
+  much has been accumulated, and nothing is mutated, so there is nothing to prove.
+- **The string only has to exist whole twice** — when a patch reaches into it, and at the end.
+  `:c::buf-str` is that fold, and **its** accumulator is a linear parameter read once on every
+  path, so C-127's in-place rule applies to it honestly and the flatten is linear.
+- **Measured, interleaved on three retained binaries, minimum of each:**
+
+  | | peak KiB | wall (min of 15, load 0.85) |
+  | --- | --- | --- |
+  | the old UNSOUND rule (pre-F-127) | 145,920 | 280 ms |
+  | F-127's correct rule, String accumulators | 444,556 | 379 ms |
+  | **correct rule, chunk accumulators** | **162,908** | **293 ms** |
+
+  **94% of the memory and 87% of the time, bought with no ownership analysis whatever.** The
+  compiler costs 416 bytes more (137,078 vs 136,662) and produces byte-identical output for all
+  52 binaries.
+- **And it moves the whole question.** The compiler no longer depends on appending in place
+  through a container field anywhere. F-127's defect made that path CORRECT; this makes it
+  UNNECESSARY, which is a better place for a language to be: the fast path is now the one that
+  needs no proof, and the one that needs a proof is a user-program optimisation rather than the
+  thing the compiler is built out of.
+- **What is left is `:c::patch`, and now it is the largest single item.** Compiled with the patch
+  leaving the buffer alone, the same compiler peaks at **146,612 KiB against 164,444 — 10.9%**;
+  and 146,612 is where the old unsound rule sat. **A free patch would make the correct compiler
+  exactly as cheap as the incorrect one.** It costs that because a patch is the one operation
+  that needs the string whole, and it needs it whole because **F-104**: there is no positional
+  update, so a four-byte displacement cannot be written where it goes. C-124 measured that gap
+  at 49 bytes of machine code wat does not expose; this measures it again, at 10.9% of the
+  compiler's memory, on the compiler itself.
+- **Class:** IMPROVE.
+- **Repro:** `tools/loop.sh`; `elf/bench/out_maxrss ./elf/out/compiler.elf`.
 
 
 ## Predicted, unverified

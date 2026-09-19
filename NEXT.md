@@ -33,7 +33,36 @@ measurement lives, and why it was not done at the time.
 
 **Performance — the compute gap against `gcc -O2`, currently ~1.7x.**
 
-3a. **A share count that can come down.** C-126 chose increment-only and said what it buys;
+3a. ~~**A share count that can come down.**~~ **RE-SCOPED 2026-09-19 by C-152.** The chunk
+   accumulator recovered 94% of F-127's price (444,556 → 162,908 KiB) with no ownership analysis
+   whatever, so **the compiler no longer depends on appending in place through a container field
+   anywhere**. Decrements are still the honest answer to the question C-126 left open, and the
+   text below is still the specification — but the motivation is now a USER-PROGRAM
+   optimisation, not the thing the compiler is built out of. It has dropped below the compute
+   items.
+
+3b. **`:c::patch` is the largest single item in the compiler's memory now.** With the patch
+   leaving the buffer alone the same compiler peaks at **146,612 KiB against 164,444 — 10.9%** —
+   and 146,612 is exactly where the old UNSOUND rule sat, so a free patch would make the correct
+   compiler as cheap as the incorrect one. It costs that because a patch needs the accumulated
+   string WHOLE, and it needs it whole because **F-104**: no positional update, so a four-byte
+   displacement cannot be written where it goes. Three routes, none needing a language change:
+   flatten only the SUFFIX from the patch point (the distance is usually short); emit the
+   placeholder as its own chunk and substitute by the `assocn.wat` fold; or compute forward
+   displacements in pass one, since they are pass-invariant, and emit them directly in pass two
+   with no patch at all.
+
+3c. **Short branch encodings.** `elf/out/fib32.elf` decodes to 184 `jcc rel32` and 46 `jmp
+   rel32`; **all 46 of the non-`jo` conditionals and 24 of the jumps are within rel8 range**,
+   which is 256 bytes of a ~1,200-byte code section — about a fifth. The other 138 are the
+   overflow `jo`, which needs a handler within 127 bytes to shorten and so wants a per-function
+   trampoline. The obstacle is the two-pass invariant: choosing an encoding by distance makes
+   the length depend on the distance, so it needs branch RELAXATION iterated to a fixpoint
+   rather than a peephole. Measured, not guessed: the counter is in the entry.
+
+(the original 3a text, which is still the specification:)
+
+**A share count that can come down.** C-126 chose increment-only and said what it buys;
    C-128 and C-143 both named decrements as the next step, both for MEMORY. **F-127 makes it a
    correctness constraint**: without a count that falls, a compiled wat cannot both answer
    correctly and append in place through a container field, and the honest rule costs 3.06x peak
@@ -42,8 +71,7 @@ measurement lives, and why it was not done at the time.
    first claimed. Three repairs were tried on paper and all three hit the same wall — the
    container's own count is never 1, because `:c::push-args` increments every pointer-typed
    symbol argument. C-143 tried to make that a move and was reverted over four aliasing holes,
-   which are written up in its entry and are the real specification for this work. **This is now
-   the largest single item in the queue and the one with the most evidence behind it.**
+   which are written up in its entry and are the real specification for this work.
 4. **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
    levels are live at once and C-146 has three registers, because `rbp` is the frame pointer and
    `r14`/`r15` hold the buffer and the heap. Dropping `rbp` frees a fourth AND removes
