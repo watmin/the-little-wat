@@ -9650,12 +9650,22 @@ complete at check time. Any openness either moves it to link time or gives it up
   | `moved.wat` — the same, in a record | 75,760 KiB | **1,564,432 KiB** |
 
   **The interpreter does not notice the shape change at all** -- it is flat at ~75 MB across all
-  three, because its vector shares structure. The compiled runtime swings **1,580x** on it,
-  because `vec_conj` copies a flat array whenever the compiler cannot prove uniqueness. So this
-  is not a gap in wat and not a missing language feature: **it is our own data structure**, and
-  the ownership proof C-143 could not construct is only needed because of it. A compiled Vector
-  that shared structure would not need the proof at all -- and would fix every user program,
-  not just the one reader we own.
+  three. **An earlier version of this entry said that was because its vector shares structure.
+  That was invented, not read, and it is false.** `vector_conj_inner` in wat-rs is
+  `let mut out = (**xs).clone(); out.push(item)` -- it clones the whole `Vec` on every `conj`,
+  unconditionally. wat's `Vector` is copy-on-append exactly as ours is.
+
+  The interpreter is flat in memory because **`Arc` frees each dead copy**, and it pays the copy
+  in TIME instead -- measured, `pass20000` at four times the size is **18.2x** slower (6,027 ms
+  -> 109,402 ms), which is the quadratic showing itself. Our bump allocator frees nothing except
+  by rewinding `r15` at a statement boundary, so we pay the same quadratic in memory.
+
+  So the difference is **reclamation, not representation** -- which is what C-143 concluded
+  before this entry talked itself out of it. And it means the chunked arena is right for a
+  different reason than the one first given here: it does not dodge an ownership proof, it
+  attacks the O(n^2) **work**, which is why it fixed the memory *and* left the time alone.
+  `(:wat::core::PersistentVector)` is a separate wat type and is presumably the structure-sharing
+  one; this compiler does not implement it.
 - **What it is, said plainly: a workaround, and the right one for now.** `elf/src/moved.wat` still costs
   1.5 GB, because C-143's limitation is still exactly true for any user program that threads a
   collection through a call. We routed around it in the one place we own; we did not fix it. The
