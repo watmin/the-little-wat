@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 501 bytes this compiler embeds itself.
+libc, and no runtime but the 619 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -68,6 +68,20 @@ that is not a symbol, keyword or string literal, and a tree walk meets those con
 
 integer literals, negatives included, nested to any depth — and both spellings of every name
 (`wat.core/+` and `:wat::core::+`), because the reader keeps whichever the source used.
+
+**Vectors and records**:
+
+```clojure
+(:wat::core::defrecord :user::P [x <- :wat::core::i64 ...])   ; keyword spelling only, F-122
+(:wat::core::typealias :user::Row (...))                      ; keyword spelling only, F-122
+(wat.core/Vector :- [T] E ...)        ; allocate and fill
+(wat.core/nth V I)                    ; mov rax, [rax + rcx*8 + 8]
+(wat.core/length V)                   ; a peek at the header -- String, Vector and record alike
+(wat.core/conj V X)                   ; a longer copy
+(:user::P :x A :y B)                  ; slots filled in DECLARATION order
+(:user::P/x R)                        ; a load at a constant offset
+(wat.core/assoc R :field V)           ; a copy with one slot replaced
+```
 
 **Strings**, as values:
 
@@ -336,6 +350,43 @@ a general-purpose formatter, and the gap is the generality, not the engineering.
 (Numbers from one machine, one run, best-of-5. They move with load. They are here to set terms,
 not to win an argument.)
 
+## Vectors and records are the same object
+
+`[count:8][slot:8]...`, every slot a machine word — which is also what a String is if the payload
+is read as bytes. So one layout answers everything:
+
+| | String | Vector | record |
+| --- | --- | --- | --- |
+| `length` | `mov rax,[rax]` | `mov rax,[rax]` | `mov rax,[rax]` |
+| element | `subs` (not yet) | `nth` → indexed load | field → load at a **constant** offset |
+| copy-with-change | `concat` | `conj` | `assoc` |
+
+The only difference between a Vector and a record is that a record's field names are known at
+compile time. That is what lets its constructor fill slots in **declaration** order no matter
+what order the caller wrote the keywords in, and its accessors compile to a fixed displacement.
+
+Three routines, 118 bytes: `vec_new` (21) bumps `r15` past a header and n slots, `vec_conj` (48)
+copies with `rep movsq` and appends, `slot_set` (49) copies with one slot replaced. Everything is
+copy-on-write, because **F-104 is true in machine code as well** — there is no positional update,
+so `assoc` makes a new one, and `conj` is O(n) per call exactly as the interpreter's Vector is.
+
+### The one place wat turned out to be narrower
+
+`(wat.core/assoc v 1 99)` on a **Vector** is rejected by the interpreter:
+
+```
+:wat::core::assoc: expected (HashMap :- [K V]), (PersistentMap :- [K V]), or :wat::core::Record,
+got wat::core::Vector `[10, 20, 30, 40]`
+```
+
+That is F-104, in the language itself. The machine code for it was already here and cost nothing
+extra — `slot_set` takes an index and does not care where it came from — so compiling it was
+free. Doing so would have made the compiled language a **superset** of the interpreted one, which
+is the same drift F-119 warns about, so it is refused instead.
+
+The refusal is also the measurement: **positional vector update is 49 bytes of runtime that wat
+does not expose.**
+
 ## Buffered output, and the oldest bug in it
 
 `println` used to be one `write` syscall per line. Now bytes go into a 4 KiB buffer at **r14**,
@@ -433,7 +484,7 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Six routines, 501 bytes — the only part of the output not computed from the source, and the
+Nine routines, 619 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
@@ -444,6 +495,9 @@ part a C toolchain would call libc for.
 | `print_bool` | 64 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
 | `buf_put` | 70 | **the thing libc calls stdio** — a 4 KiB buffer at `r14`, one syscall per buffer instead of one per `println`. |
 | `flush` | 36 | write what is buffered and empty it. |
+| `vec_new` | 21 | bump `r15` past a header and n slots. |
+| `vec_conj` | 48 | a longer copy, `rep movsq` plus the new element. |
+| `slot_set` | 49 | a copy with one slot replaced — `assoc`, for a record field and a vector index alike. |
 
 They are assembled as **one block**, so they can call each other — which is why the order is
 load-bearing: the relative offsets inside it were fixed when it was assembled. The first build of
@@ -514,29 +568,29 @@ using the same `read-string` walk the compiler uses.
 ```
 $ wat elf/census.wat
   rank  count  form
-  1   65       :wat::core::nth
-  2   54       :wat::core::length
-  3   21       :wat::core::ast->source
-  4   13       :wat::core::ast->children
-  5   12       :wat::core::Vector
-  6   8        :wat::string::subs
+  1   28       :wat::core::ast->source
+  2   17       :wat::core::ast->children
+  3   16       :wat::string::subs
+  4   7        :wat::kernel::assertion-failed!
+  5   5        :wat::string::contains?
+  6   5        :wat::test::assert-eq
   ...
-  51 distinct forms, 274 occurrences -- that is the distance to self-hosting
+  26 distinct forms, 106 occurrences -- that is the distance to self-hosting
 ```
 
 The first count was **56 forms, 297 occurrences**. What the table said to build first was not
 what intuition suggested: not `match` (3 uses) or closures (1), but `cond` (18), `/` (14) and the
-logical operators — 46 occurrences needing **no new codegen idea at all**. Those are done, and
-the total is 274.
+logical operators — 46 occurrences needing **no new codegen idea at all** (C-123) — and then
+vectors and records, which were 61% of what remained (C-124). The total is now **106**.
 
 **It also moves as you build.** `nth` went 55 → 65 and `length` 44 → 54 over that same change,
 because the compiler that has to be compiled had itself grown by five forms. A self-hosting
 target is not stationary, and the honest measure is the ratio rather than the count.
 
-`nth` + `length` + `Vector` + `conj` is **137 of the 274 — exactly half — and it is one
-feature**: growable indexed sequences on the heap. After that comes the AST surface
-(`ast->source`, `ast->children`) and the I/O surface, which are F-119: Rust inside the
-interpreter, with no ABI for a compiled program to reach.
+What is left at the top is no longer a data structure. It is the **AST surface** —
+`ast->source` (28), `ast->children` (17) — and the I/O surface, which are F-119: Rust inside the
+interpreter, with no ABI a compiled program can reach. A self-hosting compiler either
+reimplements the reader in wat, or the language grows an intrinsic contract.
 
 ## What is still missing, in order of what it would prove
 
@@ -547,15 +601,17 @@ compiler that could compile *itself*:
 1. ~~**Strings as values**~~ — done (C-119). A String is a pointer to `[len:8][bytes...]`,
    literals in the data tail and everything else bump-allocated out of an `mmap`'d megabyte.
    `subs` (8 uses) and `contains?` (5) are still missing, and so is any way to give memory back.
-2. **Vectors and records** — **half the remaining census**, and every one of this compiler's own
-   data structures. Allocation is solved; what is left is field offsets, a length that can grow,
-   and either something to free them or a stated decision not to.
-3. **`match`** — which is `if` with a tag test and destructuring, so the hard part is the data
-   representation rather than the control flow. Same blocker as (2).
-4. **The wat runtime's verbs** — `read-string` itself, `ast->children`, `Bytes::from-hex`. A
-   self-hosting compiler either reimplements them or links against the substrate.
+2. ~~**Vectors and records**~~ — done (C-124), and it was 61% of the census: 274 occurrences
+   down to 106. One layout, three routines, 118 bytes.
+3. **String slicing** — `subs` (16 uses), `contains?` (5), `starts-with?` (4). Cheap now that
+   strings are values; a `subs` is a header and a `rep movsb`.
+4. **`match`** (3 uses) and closures (`fn`, 1 use, called 4 times as `int`).
+5. **The AST surface** — `ast->source` (28), `ast->children` (17), `ast-kind`, `read-string`.
+   **This is now the top of the census**, and it is F-119: Rust inside the interpreter, with no
+   ABI a compiled program can reach. A self-hosting compiler either reimplements the reader in
+   wat — which is a lexer and a parser, and entirely doable — or the language grows an intrinsic
+   contract. The same goes for the ten I/O verbs beneath it.
 
-That is the honest distance, and it moved: the control flow, the calling convention and the heap
-are solved, and everything remaining is about **aggregate** data. The bump allocator that carries
-strings will carry vectors too — what it will not carry is a compiler that runs long enough to
-need the memory back.
+That is the honest distance, and it moved a long way: control flow, the calling convention, the
+heap and aggregate data are all solved. **What is left is not a language feature — it is the
+boundary between the compiler and the runtime it is written against**, which is exactly F-119.

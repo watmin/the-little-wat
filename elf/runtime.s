@@ -195,3 +195,47 @@ flush:                           # write whatever is buffered, and empty it
     syscall
     movq $0, (%r14)
 1:  ret
+
+# ---- vectors and records share one layout: [count:8][slot:8]... , every slot a machine word.
+# So `length` is a peek at the header for a String, a Vector and a record alike, and `nth` and a
+# field access are the same indexed load.
+
+vec_new:                         # rax = count  ->  rax = vector, slots uninitialised
+    movq %r15, %r10
+    movq %rax, (%r15)
+    leaq 8(,%rax,8), %rcx        # 8 + 8n, already a multiple of eight
+    addq %rcx, %r15
+    movq %r10, %rax
+    ret
+
+vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
+    movq %rcx, %r10              # the element, before rcx becomes the copy count
+    movq (%rax), %r8
+    movq %r15, %r9
+    leaq 1(%r8), %rdx
+    movq %rdx, (%r15)            # new count
+    leaq 8(%r15), %rdi
+    leaq 8(%rax), %rsi
+    movq %r8, %rcx
+    rep movsq
+    movq %r10, (%rdi)            # and the new element on the end
+    leaq 16(,%r8,8), %rdx
+    addq %rdx, %r15
+    movq %r9, %rax
+    ret
+
+slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
+    movq (%rax), %r8             # with that one slot replaced; this is `assoc`
+    movq %r15, %r9
+    movq %r8, (%r15)
+    leaq 8(%r15), %rdi
+    leaq 8(%rax), %rsi
+    movq %rcx, %r10
+    movq %rdx, %r11
+    movq %r8, %rcx
+    rep movsq
+    leaq 8(,%r8,8), %rdx
+    addq %rdx, %r15
+    movq %r9, %rax
+    movq %r11, 8(%rax,%r10,8)
+    ret

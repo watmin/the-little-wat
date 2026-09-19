@@ -24,6 +24,10 @@
   (:wat::core::Vector :- [:wat::core::String]
     "wat.core/defn" "wat.core/if" "wat.core/let" "wat.core/do"
     "wat.core/cond" "wat.core/and" "wat.core/or" "wat.core/not" ":wat::core::/"
+    "wat.core/nth" "wat.core/length" "wat.core/conj" "wat.core/assoc" "wat.core/Vector"
+    "wat.core/defrecord" "wat.core/typealias"
+    ":wat::core::nth" ":wat::core::length" ":wat::core::conj" ":wat::core::assoc"
+    ":wat::core::Vector" ":wat::core::defrecord" ":wat::core::typealias"
     "wat.core/+" "wat.core/-" "wat.core/*" "wat.core/quot" "wat.core/rem"
     "wat.core/<" "wat.core/>" "wat.core/<=" "wat.core/>=" "wat.core/=" "wat.core/not="
     "wat.string/concat" "wat.string/length" "wat.kernel/println"
@@ -44,10 +48,8 @@
 
 ;; a call to something this program defines is compilable; the compiler resolves those itself.
 ;;
-;; But `:c::Out/code` is NOT one of those -- it is a defrecord accessor, which is a form the
-;; compiler would have to generate, not a function the program defines. In the keyword spelling
-;; the slash is what tells them apart; in the Clojure spelling the slash is the namespace
-;; separator, so only keyword-spelled names get the test.
+;; `:c::Out/code` is a defrecord accessor rather than a function the program defines -- and as of
+;; C-124 the compiler generates those too, so both count as translatable.
 (:wat::core::defn :cn::own-ns? [s <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or (:wat::string::starts-with? s "user/")
     (:wat::core::or (:wat::string::starts-with? s ":user::")
@@ -55,9 +57,7 @@
         (:wat::core::or (:wat::string::starts-with? s ":asm::") (:wat::string::starts-with? s ":cn::"))))))
 
 (:wat::core::defn :cn::local-call? [s <- :wat::core::String] -> :wat::core::bool
-  (:wat::core::and (:cn::own-ns? s)
-    (:wat::core::not (:wat::core::and (:wat::string::starts-with? s ":")
-                                      (:wat::string::contains? s "/")))))
+  (:cn::own-ns? s))
 
 ;; ---------------------------------------------------------------- the walk
 
