@@ -19,23 +19,33 @@
     (:asm::le-pos (:wat::core::/ n 256) (:wat::core::- width 1)
       (:wat::string::concat acc (:asm::u8 (:wat::core::rem n 256))))))
 
-;; two's complement, done the way the hardware does it: complement each byte and add one,
-;; carrying. wat has no bit operations (F-035), so `& 0xff` is `rem 256` and `~b` is `255 - b`,
-;; and the carry has to be threaded by hand. Adding 2^64 would have been the obvious route and
-;; it overflows i64 -- which TRAPS here rather than wrapping, so the obvious route is loud.
-(:wat::core::defn :asm::le-neg [m <- :wat::core::i64 width <- :wat::core::i64 carry <- :wat::core::i64
+;; two's complement, stepped with FLOOR division rather than by complementing a magnitude.
+;;
+;; The obvious route -- negate, complement each byte, carry -- needs the magnitude, and **the
+;; magnitude of the most negative i64 does not exist**: `(- 0 -9223372036854775808)` has no
+;; answer. That was a trap waiting for the first program to write the literal, and it waited
+;; from C-116 until one did; the compiler's own read-back check is what caught it, comparing the
+;; bytes it wrote against the bytes on disk.
+;;
+;; So the bytes come out of the number directly. wat's `rem` takes the sign of its dividend, so
+;; a negative byte is brought into range by adding 256 and borrowing one from the next step --
+;; which is floor division, spelled out, because `/` truncates toward zero. Nothing here ever
+;; holds a value the range cannot represent.
+(:wat::core::defn :asm::le-neg [n <- :wat::core::i64 width <- :wat::core::i64
                                 acc <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::core::= width 0) acc
-    (:wat::core::let [b (:wat::core::rem m 256)
-                      c (:wat::core::+ (:wat::core::- 255 b) carry)]
-      (:asm::le-neg (:wat::core::/ m 256) (:wat::core::- width 1)
-        (:wat::core::if (:wat::core::= c 256) 1 0)
-        (:wat::string::concat acc (:asm::u8 (:wat::core::if (:wat::core::= c 256) 0 c)))))))
+    (:wat::core::let [r (:wat::core::rem n 256)
+                      b (:wat::core::if (:wat::core::< r 0) (:wat::core::+ r 256) r)
+                      q (:wat::core::if (:wat::core::< r 0)
+                          (:wat::core::- (:wat::core::/ n 256) 1)
+                          (:wat::core::/ n 256))]
+      (:asm::le-neg q (:wat::core::- width 1)
+        (:wat::string::concat acc (:asm::u8 b))))))
 
 ;; little-endian, `width` bytes, signed
 (:wat::core::defn :asm::le [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::String
   (:wat::core::if (:wat::core::>= n 0) (:asm::le-pos n width "")
-    (:asm::le-neg (:wat::core::- 0 n) width 1 "")))
+    (:asm::le-neg n width "")))
 
 ;; ---------------------------------------------------------------- ASCII, without a char type
 ;;

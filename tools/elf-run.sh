@@ -131,6 +131,16 @@ int=$("$WAT" elf/bad/overflow.wat 2>&1); irc=$?
 if printf '%s' "$got" | grep -qF 'i64 overflow' && [ $rc -ne 0 ] \
    && printf '%s' "$int" | grep -qF 'IntegerOverflow'; then
   echo "  (+ 9223372036854775807 1) stops both ways -- compiled exit $rc, interpreted refuses"
+  dgot=$(./elf/out/divzero.elf 2>&1); drc=$?
+  dint=$("$WAT" elf/bad/divzero.wat 2>&1)
+  if printf '%s' "$dgot" | grep -qF 'division by zero' && [ $drc -ne 0 ] \
+     && printf '%s' "$dint" | grep -qF 'DivisionByZero'; then
+    echo "  (quot 1 0) stops both ways too -- compiled exit $drc, not SIGFPE"
+  else
+    echo "  FAIL: division by zero did not stop both ways (compiled rc=$drc)"
+    printf '%s\n' "$dgot" | head -2 | sed 's/^/      /'
+    fail=1
+  fi
 else
   echo "  FAIL: overflow did not stop both ways (compiled rc=$rc irc=$irc)"
   printf '%s\n' "$got" | head -2 | sed 's/^/      /'

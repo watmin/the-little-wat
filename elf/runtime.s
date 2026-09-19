@@ -32,6 +32,7 @@ flush:                           # write whatever is buffered, and empty it
 
 
 
+
 # ---- i64 traps, so the compiled language must trap too.
 #
 # wat's `+` answers `IntegerOverflow: ... does not fit in 64 bits` and stops the program. This
@@ -61,6 +62,7 @@ ovf:                             # signed overflow: say which, and stop
 
 
 
+
 buf_put:                         # rsi = bytes, rdx = count
     movq (%r14), %rax            # how much is already in the buffer
     leaq (%rax,%rdx), %rcx
@@ -84,6 +86,7 @@ buf_put:                         # rsi = bytes, rdx = count
     movq %rdx, %rcx
     rep movsb
     ret
+
 
 
 # ---- r14 = [used:8][heap_limit:8][4096 bytes] ;  r15 = heap bump pointer
@@ -124,6 +127,7 @@ print_i64:                       # rax = value
 
 
 
+
 print_bool:                      # rax = 0 or 1
     push %rbp
     movq %rsp, %rbp
@@ -141,6 +145,7 @@ print_bool:                      # rax = 0 or 1
     call buf_put
     leave
     ret
+
 
 
 
@@ -164,6 +169,7 @@ oom:                             # no memory left: say so on stderr rather than 
 
 
 
+
 die:                             # rax = String  ->  it on stderr, then exit 70
     movq %rax, %r10
     call flush                   # anything stdout had buffered is still worth having
@@ -182,6 +188,65 @@ die:                             # rax = String  ->  it on stderr, then exit 70
     movq $70, %rdi
     movq $60, %rax
     syscall
+
+
+
+
+# ---- division traps too, and `idiv` does not set a flag -- it FAULTS.
+#
+# `(quot 1 0)` compiled to a bare `idiv` took SIGFPE: core dumped, exit 136, no message. The
+# interpreter says `DivisionByZero: division by zero` and stops cleanly, and `MIN / -1` it calls
+# `IntegerOverflow` -- two different diagnostics for the two different faults. So the divisor is
+# checked BEFORE the divide rather than after, because after is a signal (F-126).
+#
+# They are routines rather than inline guards because a division is rare and seven instructions
+# at every site is not: one `call` costs five bytes and the cost lands only where it is used.
+
+divzero:                         # say which, rather than take SIGFPE
+    call flush
+    subq $32, %rsp
+    movabsq $0x766964203a746177, %rax    # "wat: div"
+    movq %rax, (%rsp)
+    movabsq $0x7962206e6f697369, %rax    # "ision by"
+    movq %rax, 8(%rsp)
+    movabsq $0x00000a6f72657a20, %rax    # " zero\n"
+    movq %rax, 16(%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $22, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall
+
+
+
+i64_quot:                        # rax = a, rcx = b  ->  rax = a quot b
+    testq %rcx, %rcx
+    {disp32} jz divzero         # 32-bit, like every cross-routine reference
+    cmpq $-1, %rcx
+    jne 1f
+    negq %rax                    # a / -1 IS -a, and -MIN overflows exactly where the divide
+    jo ovf                       # would have -- so the one case idiv faults on is a `neg`
+    ret
+1:  cqo                          # sign-extend into rdx:rax, which is what idiv divides
+    idivq %rcx
+    ret
+
+
+
+i64_rem:                         # rax = a, rcx = b  ->  rax = a rem b
+    testq %rcx, %rcx
+    {disp32} jz divzero         # 32-bit, like every cross-routine reference
+    cmpq $-1, %rcx
+    jne 1f
+    xorq %rax, %rax              # a % -1 is 0 for every a, and cannot overflow
+    ret
+1:  cqo
+    idivq %rcx
+    movq %rdx, %rax
+    ret
 
 
 
@@ -244,6 +309,7 @@ print_str:                       # rax = string, rendered as EDN
 
 
 
+
 # `str_cat(rax = a, rcx = b) -> rax`: the two lengths added, a header written at the heap top,
 # both payloads copied, r15 bumped past the whole block. The block is the next power of two at
 # or above `16 + len`, which is what gives the in-place path above room to grow into. The slack
@@ -277,6 +343,7 @@ str_cat:                         # rax = a, rcx = b  ->  rax
     rep movsb                    # then b's
     movq %rdx, %rax
     ret
+
 
 
 
@@ -317,6 +384,7 @@ str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->
 
 
 
+
 # ---- the string verbs a reader needs. All of them work on [rc:8][len:8][bytes], so none of them
 # needs to know anything the rest of the runtime does not already know.
 
@@ -343,6 +411,7 @@ str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a ne
     rep movsb
     movq %r10, %rax
     ret
+
 
 
 
@@ -392,6 +461,7 @@ i64_to_str:                      # rax = n  ->  rax = a new String
 
 
 
+
 str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
     movq (%rcx), %r8
     cmpq (%rax), %r8
@@ -407,6 +477,7 @@ str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
     ret
 9:  xorq %rax, %rax
     ret
+
 
 
 
@@ -438,6 +509,7 @@ str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
 
 
 
+
 str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
     movq (%rax), %r8
     cmpq (%rcx), %r8             # different lengths cannot be equal
@@ -453,6 +525,7 @@ str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
     ret
 9:  xorq %rax, %rax
     ret
+
 
 
 
@@ -480,6 +553,7 @@ vec_new:                         # rax = count  ->  rax = record, slots uninitia
     movq %r11, %r15
     movq %r10, %rax
     ret
+
 
 
 
@@ -520,6 +594,7 @@ varr_new:                        # rax = count  ->  rax = array-arm vector, slot
 
 
 
+
 # A tree node is thirty-two slots, and is itself an ordinary `[rc][count][slot]...` object --
 # the same shape a record has, so nothing new has to know how to read one.
 node_new:                        # -> rax = a node of 32 zeroed slots
@@ -541,6 +616,7 @@ node_new:                        # -> rax = a node of 32 zeroed slots
 
 
 
+
 node_copy:                       # rax = node  ->  rax = a fresh copy of it
     push %rbx
     movq %rax, %rbx
@@ -551,6 +627,7 @@ node_copy:                       # rax = node  ->  rax = a fresh copy of it
     rep movsq
     pop %rbx
     ret
+
 
 
 
@@ -586,6 +663,7 @@ tree_get:                        # rax = tree, rcx = index  ->  rax = element
     pop %rsi
     pop %rdx
     ret
+
 
 
 
@@ -654,6 +732,7 @@ tree_push:                       # rax = tree, rcx = element  ->  rax = a new tr
 
 
 
+
 # The one-way promotion. It happens once per vector, at the threshold, so the cost of walking
 # the array into the tree is paid against every append that follows it.
 tree_from_arr:                   # rax = array-arm vector  ->  rax = the same elements, as a tree
@@ -690,6 +769,7 @@ tree_from_arr:                   # rax = array-arm vector  ->  rax = the same el
 
 
 
+
 # `vec_conj` is the SHARED path -- the compiler could not prove the container dead, so the value
 # must survive. That is the path F-124 measured as quadratic, and the one that promotes.
 vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer vector
@@ -722,6 +802,7 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
     movq %r11, %r15
     movq %r9, %rax
     ret
+
 
 
 
@@ -795,6 +876,7 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
 
 
 
+
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     push %rbx                    # rbx, r12 and r13 hold the caller's parameters now
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
@@ -818,6 +900,7 @@ slot_set:                        # rax = vector/record, rcx = index, rdx = value
     movq %rbx, 8(%rax,%r10,8)
     pop %rbx
     ret
+
 
 
 
@@ -847,12 +930,14 @@ hexval:                          # rax = one ascii hex digit  ->  rax = 0..15
 
 
 
+
 hexchar:                         # rax = 0..15  ->  al = one ascii hex digit
     cmpq $10, %rax
     jb 1f
     addq $39, %rax
 1:  addq $48, %rax
     ret
+
 
 
 
@@ -906,6 +991,7 @@ prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes writte
     pop %r12
     pop %rbx
     ret
+
 
 
 
@@ -977,6 +1063,7 @@ prim_read_hex:                   # rax = path  ->  rax = a String of hex
 5:  movq %r10, %rax
     pop %r12
     ret
+
 
 
 
