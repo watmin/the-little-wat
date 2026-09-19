@@ -167,7 +167,7 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Nine routines, 619 bytes, assembled as ONE block so they can call each other -- which is why
+;; Ten routines, 782 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -177,17 +177,17 @@
   (:wat::string::concat
     "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
     "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e836010000c9c3"))
+    "85c0740648ffcec6062d488d55ff4829f248ffc2e84d010000c9c3"))
 
 ;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
 ;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
 ;; r10 carries the result because rax is the copy loops' scratch byte.
 (:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
   (:wat::string::concat
-    "4c8b004c8b09488d5008488d49084c89c04c01c84989074d89fa498d7f08"
-    "4883c00f4883e0f84901c74889d64d89c34d85db740f8a06880748ffc648"
-    "ffc749ffcbebec4889ce4d89cb4d85db740f8a06880748ffc648ffc749ff"
-    "cbebec4c89d0c3"))
+    "4c8b004c8b09488d5008488d49084c89c04c01c84883c00f4883e0f84d89"
+    "fb4901c34d3b5e087605e8310200004c89c04c01c84989074d89fa498d7f"
+    "084d89df4889d64d89c34d85db740f8a06880748ffc648ffc749ffcbebec"
+    "4889ce4d89cb4d85db740f8a06880748ffc648ffc749ffcbebec4c89d0c3"))
 
 ;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
 ;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
@@ -217,29 +217,31 @@
 (:wat::core::defn :c::rt-buf-put [] -> :wat::core::String
   (:wat::string::concat
     "498b06488d0c104881f90010000076265652e82f0000005a5e4881fa0010"
-    "0000761148c7c70100000048c7c0010000000f05c34831c0498d7e084801"
+    "0000761148c7c70100000048c7c0010000000f05c34831c0498d7e104801"
     "c74901164889d1f3a4c3"))
 
 ;; `flush()`, 36 bytes: write whatever is buffered and empty it. Called before `exit`, before
 ;; `fork` and before `clone`, and at the end of the entry stub -- see each for why.
 (:wat::core::defn :c::rt-flush [] -> :wat::core::String
   (:wat::string::concat
-    "498b164885d2741b498d760848c7c70100000048c7c0010000000f0549c7"
+    "498b164885d2741b498d761048c7c70100000048c7c0010000000f0549c7"
     "0600000000c3"))
 
 ;; `vec_new(rax = count) -> rax`, 21 bytes: bump r15 past a header and count slots, leaving
 ;; them uninitialised because the caller is about to fill every one.
 (:wat::core::defn :c::rt-vec-new [] -> :wat::core::String
   (:wat::string::concat
-    "4d89fa498907488d0cc5080000004901cf4c89d0c3"))
+    "488d0cc5080000004d89fb4901cb4d3b5e087605e8900000004d89fa4989"
+    "074d89df4c89d0c3"))
 
 ;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
 ;; the end. `rep movsq` moves the old slots in three bytes of code. This is `conj`, and it is
 ;; O(n) every time, which is the same thing the interpreter's Vector does (F-023).
 (:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
   (:wat::string::concat
-    "4989ca4c8b004d89f9498d5001498917498d7f08488d70084c89c1f348a5"
-    "4c89174a8d14c5100000004901d74c89c8c3"))
+    "4989ca4c8b004a8d14c5100000004d89fb4901d34d3b5e087605e8640000"
+    "004d89f9498d5001498917498d7f08488d70084c89c1f348a54c89174d89"
+    "df4c89c8c3"))
 
 ;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax`, 49 bytes: a copy with one slot
 ;; replaced. This is `assoc`, for a record field and a vector index alike, since they are the
@@ -247,13 +249,24 @@
 ;; a new one.
 (:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
   (:wat::string::concat
-    "4c8b004d89f94d8907498d7f08488d70084989ca4989d34c89c1f348a54a"
-    "8d14c5080000004901d74c89c84e895cd008c3"))
+    "4c8b004d89fb4e8d14c5080000004d01d34d3b5e087605e8260000004d89"
+    "f94d8907498d7f08488d70084989ca4889d34c89c1f348a54d89df4c89c8"
+    "4a895cd008c3"))
+
+;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
+;; `[r14+8]` BEFORE it writes anything, and jumps here when it will not fit: flush whatever
+;; stdout had buffered, put "wat: heap exhausted" on stderr, exit 70. That is the difference
+;; between a compiler and a demo -- running out of memory should be a sentence, not a signal.
+(:wat::core::defn :c::rt-oom [] -> :wat::core::String
+  (:wat::string::concat
+    "e82effffff4883ec2048b87761743a206865614889042448b87020657868"
+    "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
+    "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
-                        (:c::rt-vec-new) (:c::rt-vec-conj) (:c::rt-slot-set)))
+                        (:c::rt-vec-new) (:c::rt-vec-conj) (:c::rt-slot-set) (:c::rt-oom)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -1479,13 +1492,14 @@
 ;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
 ;;
 ;; **r14 and r15 are the whole memory model.** r15 is the heap bump pointer and r14 is the base
-;; of the output buffer, laid out as `[used:8][4096 bytes]`; both are callee-saved in the System
+;; of a block laid out `[used:8][heap_limit:8][4096 bytes]`; both are callee-saved in the System
 ;; V ABI, and nothing here ever calls anything this compiler did not emit, so two reserved
 ;; registers are the entire runtime state. `used` needs no initialising because MAP_ANONYMOUS
 ;; memory arrives zero-filled.
 ;;
-;; There is no free, no collector and no bounds check: the heap is a megabyte, and a program
-;; that wants more gets a segmentation fault rather than an error message.
+;; There is no free and no collector, but there IS a bounds check: the limit sits at `[r14+8]`
+;; and every allocator tests against it before it writes, so a program that wants more than the
+;; heap gets `wat: heap exhausted` on stderr and exit 70 rather than a segmentation fault.
 ;;
 ;; **The flush at the end is not optional.** Buffering means the last `println` of a program is
 ;; still in memory when main returns, so the stub writes it before exit(0) -- and every other
@@ -1498,7 +1512,7 @@
 (:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 67108864)
 (:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
 
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64 106)
+(:wat::core::defn :c::stub-len [] -> :wat::core::i64 117)
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
@@ -1509,7 +1523,11 @@
           (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
           (:wat::string::concat (:c::mov-r8 -1) (:c::mov-r9 0))
           (:wat::string::concat "0f05" "4989c6")            ;; syscall ; mov r14, rax
-          (:wat::string::concat "4c8db8" (:asm::le (:c::buf-bytes) 4))))   ;; lea r15,[rax+8192]
+          (:wat::string::concat "4c8db8" (:asm::le (:c::buf-bytes) 4))     ;; lea r15,[rax+8192]
+          ;; and the end of the heap, where every allocator checks before it writes
+          (:wat::string::concat "488d88"                                   ;; lea rcx,[rax+total]
+            (:asm::le (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes)) 4))
+          "49894e08"))                                       ;; mov [r14+8], rcx
      o2 (:c::call o1 main-addr)
      o3 (:c::call o2 (:c::at-flush rt))]
     (:c::Out/code (:c::emit o3 (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05")))))

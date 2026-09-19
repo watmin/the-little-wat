@@ -1,3 +1,4 @@
 elf/bench/out_*
+elf/bench/out_maxrss
 elf/out/*.elf
 /target

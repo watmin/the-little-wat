@@ -18,7 +18,11 @@
 # the lengths, so the internal calls only line up if nothing is reordered.
 #
 .text
-# ---- r14 = [used:8][4096 bytes] output buffer;  r15 = heap bump pointer
+# ---- r14 = [used:8][heap_limit:8][4096 bytes] ;  r15 = heap bump pointer
+#
+# The heap limit lives beside the output buffer because there is no third callee-saved register
+# to spare and no writable data section to put it in. Every allocator checks against it BEFORE
+# it writes anything, so running out of memory is a message rather than a segmentation fault.
 
 print_i64:                       # rax = value
     push %rbp
@@ -57,12 +61,19 @@ str_cat:                         # rax = a, rcx = b  ->  rax
     leaq 8(%rcx), %rcx
     movq %r8, %rax
     addq %r9, %rax
+    addq $15, %rax
+    andq $-8, %rax               # 8 + total, rounded up to eight
+    movq %r15, %r11
+    addq %rax, %r11
+    cmpq 8(%r14), %r11
+    jbe 9f
+    call oom
+9:  movq %r8, %rax
+    addq %r9, %rax
     movq %rax, (%r15)            # the new header
     movq %r15, %r10
     leaq 8(%r15), %rdi
-    addq $15, %rax
-    andq $-8, %rax
-    addq %rax, %r15              # bump, rounded up to eight
+    movq %r11, %r15
     movq %rdx, %rsi
     movq %r8, %r11
 1:  testq %r11, %r11
@@ -178,7 +189,7 @@ buf_put:                         # rsi = bytes, rdx = count
     syscall
     ret
 1:  xorq %rax, %rax
-2:  leaq 8(%r14), %rdi
+2:  leaq 16(%r14), %rdi
     addq %rax, %rdi
     addq %rdx, (%r14)
     movq %rdx, %rcx
@@ -189,7 +200,7 @@ flush:                           # write whatever is buffered, and empty it
     movq (%r14), %rdx
     testq %rdx, %rdx
     jz 1f
-    leaq 8(%r14), %rsi
+    leaq 16(%r14), %rsi
     movq $1, %rdi
     movq $1, %rax
     syscall
@@ -201,17 +212,28 @@ flush:                           # write whatever is buffered, and empty it
 # field access are the same indexed load.
 
 vec_new:                         # rax = count  ->  rax = vector, slots uninitialised
-    movq %r15, %r10
-    movq %rax, (%r15)
     leaq 8(,%rax,8), %rcx        # 8 + 8n, already a multiple of eight
-    addq %rcx, %r15
+    movq %r15, %r11
+    addq %rcx, %r11
+    cmpq 8(%r14), %r11           # check BEFORE writing the header
+    jbe 1f
+    call oom
+1:  movq %r15, %r10
+    movq %rax, (%r15)
+    movq %r11, %r15
     movq %r10, %rax
     ret
 
 vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
     movq %rcx, %r10              # the element, before rcx becomes the copy count
     movq (%rax), %r8
-    movq %r15, %r9
+    leaq 16(,%r8,8), %rdx
+    movq %r15, %r11
+    addq %rdx, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq %r15, %r9
     leaq 1(%r8), %rdx
     movq %rdx, (%r15)            # new count
     leaq 8(%r15), %rdi
@@ -219,23 +241,45 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
     movq %r8, %rcx
     rep movsq
     movq %r10, (%rdi)            # and the new element on the end
-    leaq 16(,%r8,8), %rdx
-    addq %rdx, %r15
+    movq %r11, %r15
     movq %r9, %rax
     ret
 
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
-    movq %r15, %r9
+    movq %r15, %r11
+    leaq 8(,%r8,8), %r10
+    addq %r10, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq %r15, %r9
     movq %r8, (%r15)
     leaq 8(%r15), %rdi
     leaq 8(%rax), %rsi
     movq %rcx, %r10
-    movq %rdx, %r11
+    movq %rdx, %rbx
     movq %r8, %rcx
     rep movsq
-    leaq 8(,%r8,8), %rdx
-    addq %rdx, %r15
+    movq %r11, %r15
     movq %r9, %rax
-    movq %r11, 8(%rax,%r10,8)
+    movq %rbx, 8(%rax,%r10,8)
     ret
+
+oom:                             # no memory left: say so on stderr rather than fault
+    call flush                   # whatever stdout had buffered is still worth having
+    subq $32, %rsp
+    movabsq $0x616568203a746177, %rax    # "wat: hea"
+    movq %rax, (%rsp)
+    movabsq $0x7375616878652070, %rax    # "p exhaus"
+    movq %rax, 8(%rsp)
+    movl $0x0a646574, %eax               # "ted\n"
+    movl %eax, 16(%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $20, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall

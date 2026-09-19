@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 619 bytes this compiler embeds itself.
+libc, and no runtime but the 782 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -365,10 +365,46 @@ The only difference between a Vector and a record is that a record's field names
 compile time. That is what lets its constructor fill slots in **declaration** order no matter
 what order the caller wrote the keywords in, and its accessors compile to a fixed displacement.
 
-Three routines, 118 bytes: `vec_new` (21) bumps `r15` past a header and n slots, `vec_conj` (48)
-copies with `rep movsq` and appends, `slot_set` (49) copies with one slot replaced. Everything is
+Three routines, 169 bytes: `vec_new` (38) bumps `r15` past a header and n slots, `vec_conj` (65)
+copies with `rep movsq` and appends, `slot_set` (66) copies with one slot replaced — each
+checking the heap limit before it writes. Everything is
 copy-on-write, because **F-104 is true in machine code as well** — there is no positional update,
 so `assoc` makes a new one, and `conj` is O(n) per call exactly as the interpreter's Vector is.
+
+### Does it free anything it should not?
+
+No, and `elf/src/memory.wat` is built to catch it if it did: `keep` and `p` are allocated
+**first**, so they sit below the release mark; then four heavy discarded statements allocate
+about 4 MB, so the later ones **reuse the addresses the earlier ones used**; then `keep` and `p`
+are read back. A release that rewound too far would have had them overwritten. The binary agrees
+with the interpreter.
+
+It stays sound now that heap objects can hold pointers, for one reason: **everything is
+copy-on-write**. A store always creates a *fresh* object rather than writing into an older one,
+so a pointer can only ever land in something created at or after it — and both are inside the
+statement being released.
+
+`tools/mem.sh` measures the rest:
+
+| peak resident memory, `memory.wat` | |
+| --- | --- |
+| compiled, release on | **31,908 KiB** |
+| compiled, release compiled out | 94,592 KiB |
+| the wat interpreter | 70,688 KiB |
+
+**What it cannot reclaim** is loop-carried allocation. In `(user/grow (- n 1) (conj acc n))`
+every intermediate vector is the next call's argument, so all n are live at once and scope cannot
+help: memory is O(n²), measured at 17,580 KiB for n=2000 and 63,548 KiB for n=4000 against a 4n²
+prediction of 15,625 and 62,500. Freeing those needs **reachability, not scope** — a collector,
+or linear types that let `conj` mutate when the old vector is provably dead.
+
+**Running out says so.** `grow 8000` wants about 250 MB against a 64 MiB heap. It used to
+segfault. Every allocator now checks `r15 + need` against a limit at `[r14+8]` *before it writes
+anything*, and jumps to an 89-byte `oom` that flushes stdout, puts `wat: heap exhausted` on
+stderr and exits 70.
+
+Correct, incomplete, and bounded: nothing is freed too early, plenty is freed too late, and the
+ceiling is reported rather than hit.
 
 ### The one place wat turned out to be narrower
 
@@ -484,7 +520,7 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Nine routines, 619 bytes — the only part of the output not computed from the source, and the
+Ten routines, 782 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
@@ -495,9 +531,10 @@ part a C toolchain would call libc for.
 | `print_bool` | 64 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
 | `buf_put` | 70 | **the thing libc calls stdio** — a 4 KiB buffer at `r14`, one syscall per buffer instead of one per `println`. |
 | `flush` | 36 | write what is buffered and empty it. |
-| `vec_new` | 21 | bump `r15` past a header and n slots. |
-| `vec_conj` | 48 | a longer copy, `rep movsq` plus the new element. |
-| `slot_set` | 49 | a copy with one slot replaced — `assoc`, for a record field and a vector index alike. |
+| `vec_new` | 38 | bump `r15` past a header and n slots. |
+| `vec_conj` | 65 | a longer copy, `rep movsq` plus the new element. |
+| `slot_set` | 66 | a copy with one slot replaced — `assoc`, for a record field and a vector index alike. |
+| `oom` | 89 | flush, `wat: heap exhausted` on stderr, exit 70. |
 
 They are assembled as **one block**, so they can call each other — which is why the order is
 load-bearing: the relative offsets inside it were fixed when it was assembled. The first build of
