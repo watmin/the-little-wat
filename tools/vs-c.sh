@@ -57,9 +57,9 @@ printf '  %-34s %6s ms\n' "C, gcc -O0"             "$(best 5 ./$B/out_fib_O0)"
 printf '  %-34s %6s ms\n' "C, gcc -O2"             "$(best 5 ./$B/out_fib_O2)"
 
 echo
-echo "== 4. output: 100000 integers, best of 5 =="
+echo "== 4. output: 100000 integers, best of 5 -- both sides buffer, ~150 write syscalls =="
 diff <(./elf/out/spew.elf) <(./$B/out_spew) >/dev/null || { echo "  FAIL: different output"; fail=1; }
-printf '  %-34s %6s ms   (100000 write syscalls, unbuffered)\n' "ours" "$(best 5 ./elf/out/spew.elf)"
+printf '  %-34s %6s ms   (4 KiB buffer, 70 bytes of runtime)\n' "ours" "$(best 5 ./elf/out/spew.elf)"
 printf '  %-34s %6s ms   (glibc stdio, 4 KiB buffered)\n' "C, gcc -O2" "$(best 5 ./$B/out_spew)"
 
 echo

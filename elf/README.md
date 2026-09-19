@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 435 bytes this compiler embeds itself.
+libc, and no runtime but the 501 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -298,7 +298,7 @@ normally is (glibc), and C with libc *removed* — `-nostdlib -nostartfiles`, ra
 
 | a program that prints `4` | bytes |
 | --- | --- |
-| **ours** | **695** |
+| **ours** | **773** |
 | C, libc removed | 968 |
 | C, glibc, dynamic | 15,968 |
 | C, glibc, static | 856,720 |
@@ -312,19 +312,53 @@ normally is (glibc), and C with libc *removed* — `-nostdlib -nostartfiles`, ra
 
 | | ours | gcc -O0 | gcc -O2 |
 | --- | --- | --- | --- |
-| fib(32) | 44 ms | 42 ms | **12 ms** |
-| 100000 integers to stdout | 27 ms | — | **11 ms** |
+| fib(32) | 53 ms | 51 ms | **13 ms** |
+| 100000 integers to stdout | **6 ms** | — | 13 ms |
 
 **What that says, without the flattery.** On size and startup we are *level with C that has had
-libc removed* — and against C with glibc we are 1200× smaller and ~30% faster to start, all of
-which is libc rather than anything clever here. On compute we are a naive stack machine with no
-register allocator and we land exactly on **gcc -O0**; `-O2` is 3.5× ahead, and closing that is
-register allocation and inlining, not tricks. On output we lose 2.5× for a reason with a name:
-every `println` is a `write` syscall, where glibc's stdio buffers 4 KiB. That is the clearest
-thing left on the table and it is a dozen instructions.
+libc removed* — and against C with glibc we are 1100× smaller and quicker to start, all of which
+is libc rather than anything clever here. On compute we are a naive stack machine with no
+register allocator and we land exactly on **gcc -O0**; `-O2` is 4× ahead, and closing that is
+register allocation and inlining, not tricks.
+
+On output we are now **2.2× faster than glibc**, and that one is worth being precise about. Both
+sides do the same ~150 `write` syscalls; the difference is what happens per line on the way to
+the buffer. glibc's `printf` walks a format string at runtime, takes the `FILE` lock, checks
+stream orientation and consults the locale. Ours knows at compile time that it is printing an
+integer, so `print_i64` is a divide loop and `buf_put` is `rep movsb`. That is 70 bytes against
+a general-purpose formatter, and the gap is the generality, not the engineering.
 
 (Numbers from one machine, one run, best-of-5. They move with load. They are here to set terms,
 not to win an argument.)
+
+## Buffered output, and the oldest bug in it
+
+`println` used to be one `write` syscall per line. Now bytes go into a 4 KiB buffer at **r14**,
+laid out as `[used:8][4096 bytes]`, and the syscall happens once per buffer. `buf_put` is 70
+bytes, `flush` is 36, and the copy is `rep movsb`.
+
+Buffering is a promise you have to keep on every way out of the program:
+
+* **the entry stub flushes** after `main` returns, or the last line of every program is lost;
+* **`exit` flushes** before the syscall, and parks the status on the stack while it does, because
+  a flush clobbers `rax`, `rcx`, `rdx`, `rsi` and `rdi`;
+* **`fork` flushes** — and this is the interesting one;
+* **`clone` flushes**, because `CLONE_VM` means the child shares the buffer rather than copying
+  it.
+
+### The fork trap, demonstrated
+
+`fork` duplicates the address space, buffer included. Anything still pending is written **twice**,
+once by each side. Compile `elf/native/fork.wat` with the flush removed and the program says so:
+
+```
+without flush-before-fork:   1 2 1 7 1 1 4
+with    flush-before-fork:   1 2 7 1 1 4
+```
+
+The parent had buffered `1\n` and had not written it yet; the child inherited a copy and flushed
+it on `exit(7)`. This is the oldest bug in buffered I/O and it has the oldest fix, which is why
+the C rule — flush before you fork — is a rule.
 
 ## Two negative tests
 
@@ -394,19 +428,23 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Four routines, 435 bytes — the only part of the output not computed from the source, and the
+Six routines, 501 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
 | --- | --- | --- |
-| `print_i64` | 105 | sign handling, a divide-by-ten loop building digits backwards **on the stack** (so the segment never needs to be writable), and one `write`. Checked against a negative, a small value, zero and `i64::MAX` before it was embedded. |
+| `print_i64` | 87 | sign handling, a divide-by-ten loop building digits backwards **on the stack** (so the segment never needs to be writable), and one `write`. Checked against a negative, a small value, zero and `i64::MAX` before it was embedded. |
 | `str_cat` | 97 | two lengths added, a header written at the heap top, two byte-at-a-time copy loops, `r15` bumped past the result. |
-| `print_str` | 158 | a quote, a byte loop emitting one byte or two, a quote, a newline, one `write` — **wat's EDN escaping, in machine code**. |
-| `print_bool` | 75 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
+| `print_str` | 147 | a quote, a byte loop emitting one byte or two, a quote, a newline, one `write` — **wat's EDN escaping, in machine code**. |
+| `print_bool` | 64 | `true` and `false` built on the stack a word at a time, so it needs no data section and no relocation. |
+| `buf_put` | 70 | **the thing libc calls stdio** — a 4 KiB buffer at `r14`, one syscall per buffer instead of one per `println`. |
+| `flush` | 36 | write what is buffered and empty it. |
 
-`print_i64` was hand-assembled. `str_cat` and `print_str` were hand-encoded too, and then checked
-against `as` and `objdump` byte for byte before being embedded — 97 bytes and 158 bytes, both
-matching on the first comparison.
+They are assembled as **one block**, so they can call each other — which is why the order is
+load-bearing: the relative offsets inside it were fixed when it was assembled. The first build of
+that block printed nothing at all, because `as` had left `call flush` as `e8 00000000`, an
+unresolved relocation that `objcopy` does not apply; the symbols were `.globl`. Making them local
+resolved them in place, and `objdump -r` showing no relocations left is the check.
 
 ## The differential test, and what it caught
 

@@ -114,16 +114,20 @@
 ;;
 ;; ## The runtime
 ;;
-;; Four routines, 435 bytes, the only part of the output not computed from the source, and the
+;; Six routines, 501 bytes, the only part of the output not computed from the source, and the
 ;; part a C toolchain would call libc for:
 ;;
-;;   `print_i64`  105 bytes   sign handling, a divide-by-ten loop building digits backwards on
+;;   `print_i64`   87 bytes   sign handling, a divide-by-ten loop building digits backwards on
 ;;                            the stack, and one `write`. Checked against four values (a
 ;;                            negative, a small one, zero, and i64::MAX) before it was embedded.
 ;;   `str_cat`     97 bytes   two lengths added, a header written at the heap top, two copy
 ;;                            loops, r15 bumped.
-;;   `print_str`  158 bytes   wat's EDN escaping, in machine code.
-;;   `print_bool`  75 bytes   `true` and `false` built on the stack, so it needs no relocation.
+;;   `print_str`  147 bytes   wat's EDN escaping, in machine code.
+;;   `print_bool`  64 bytes   `true` and `false` built on the stack, so it needs no relocation.
+;;   `buf_put`     70 bytes   the thing libc calls stdio: a 4 KiB buffer at r14, one syscall
+;;                            per buffer instead of one per `println`.
+;;   `flush`       36 bytes   write what is buffered and empty it -- which every way out of the
+;;                            program has to do, `exit` and `fork` and `clone` included.
 ;;
 ;; That last one is the interesting one. `println` renders a String as EDN, so agreeing with the
 ;; interpreter means reproducing its escaping exactly -- and every escape in it was found by
@@ -137,35 +141,21 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;;   push rbp / mov rbp,rsp / sub rsp,32        a 32-byte digit buffer on the stack
-;;   lea rsi,[rbp-1] / mov byte [rsi],10        newline goes in last
-;;   test rax,rax / jns / neg rax / mov r8,1    remember and remove the sign
-;;   mov rcx,10 / xor rdx,rdx / div rcx         digits, least significant first
-;;   add dl,'0' / mov [rsi],dl / dec rsi        written backwards into the buffer
-;;   test rax,rax / jnz                         until the value is used up
-;;   cmp r8,0 / je / mov byte [rsi],'-'         put the sign back
-;;   lea rdx,[rbp-1] / sub rdx,rsi / inc rdx    length = end - start + 1
-;;   mov rax,1 / mov rdi,1 / syscall            write(1, rsi, rdx)
-;;   leave / ret
+;; Six routines, 501 bytes, assembled as ONE block so they can call each other -- which is why
+;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
+;; for, and `buf_put` is the part libc calls stdio.
+
+;; `print_i64(rax)`, 87 bytes: sign handling, a divide-by-ten loop building digits
+;; backwards ON THE STACK (so the segment never needs to be writable), then `buf_put`.
 (:wat::core::defn :c::rt-print-i64 [] -> :wat::core::String
   (:wat::string::concat
-    "554889e54883ec20488d75ffc6060a48ffce4d31c04885c0790a48f7d8"
-    "49c7c00100000048c7c10a0000004831d248f7f180c230881648ffce48"
-    "85c075ed4983f8007406c6062d48ffce48ffc6488d55ff4829f248ffc2"
-    "48c7c00100000048c7c7010000000f05c9c3"))
+    "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
+    "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
+    "85c0740648ffcec6062d488d55ff4829f248ffc2e836010000c9c3"))
 
-;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes. The two lengths are added, the total is written
-;; at the heap top, the bytes are copied across with two byte-at-a-time loops, and r15 is bumped
-;; past the result rounded up to eight. r10 carries the result pointer, because rax is needed as
-;; the copy loops' scratch byte.
-;;
-;;   mov r8,[rax] / mov r9,[rcx]                 the two lengths
-;;   lea rdx,[rax+8] / lea rcx,[rcx+8]           the two sources
-;;   mov rax,r8 / add rax,r9 / mov [r15],rax     total, written as the new header
-;;   mov r10,r15 / lea rdi,[r15+8]               result pointer and destination cursor
-;;   add rax,15 / and rax,-8 / add r15,rax       bump, rounded up
-;;   <copy r8 bytes> <copy r9 bytes>
-;;   mov rax,r10 / ret
+;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
+;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
+;; r10 carries the result because rax is the copy loops' scratch byte.
 (:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
   (:wat::string::concat
     "4c8b004c8b09488d5008488d49084c89c04c01c84989074d89fa498d7f08"
@@ -173,42 +163,53 @@
     "ffc749ffcbebec4889ce4d89cb4d85db740f8a06880748ffc648ffc749ff"
     "cbebec4c89d0c3"))
 
-;; `print_str(rax = s)`, 158 bytes. **This routine is wat's EDN escaping, in machine code.**
-;; `:wat::kernel::println` renders a String as EDN -- quotes around it, and quote, backslash,
-;; newline, tab and carriage return escaped, everything else passed through raw -- so agreeing
-;; with the interpreter means doing exactly that: a quote, a byte loop that emits one byte or
-;; two, a quote, a newline, and ONE write. The escaped copy is built at the heap top WITHOUT
-;; bumping r15, because nothing allocates while a string is being printed.
-;;
-;; Every one of those five escapes was found by ASKING THE INTERPRETER, not by reading a
-;; specification, because there is no specification. That is F-120.
+;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
+;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
+;; copy is built at the heap top WITHOUT bumping r15, because nothing allocates while a string is
+;; being printed. Every escape in it was found by asking the interpreter what it printed, because
+;; nothing says so: that is F-120.
 (:wat::core::defn :c::rt-print-str [] -> :wat::core::String
   (:wat::string::concat
     "4989c04d8b08498d70084c89ff4d89fac6072248ffc74d31db4d39cb7d5a"
     "8a063c2274173c5c74133c0a741c3c0974263c0d7430880748ffc7eb35c6"
     "075c48ffc7880748ffc7eb28c6075c48ffc7c6076e48ffc7eb1ac6075c48"
     "ffc7c6077448ffc7eb0cc6075c48ffc7c6077248ffc748ffc649ffc3eba1"
-    "c6072248ffc7c6070a48ffc74889fa4c29d24c89d648c7c70100000048c7"
-    "c0010000000f05c3"))
+    "c6072248ffc7c6070a48ffc74889fa4c29d24c89d6e841000000c3"))
 
-;; `print_bool(rax)`, 75 bytes. `true` and `false` are built on the stack a word at a time --
-;; "true" is one `mov` of 0x65757274 and a newline byte -- so this routine needs no data section
-;; and no relocation, the same trick `print_i64` uses for its digit buffer.
+;; `print_bool(rax)`, 64 bytes: `true` and `false` built on the stack a word at a time, so the
+;; routine needs no data section and no relocation.
 (:wat::core::defn :c::rt-print-bool [] -> :wat::core::String
   (:wat::string::concat
-    "554889e54883ec104885c07414c745f874727565c645fc0a48c7c205000000"
-    "eb14c745f866616c7366c745fc650a48c7c206000000488d75f848c7c00100"
-    "000048c7c7010000000f05c9c3"))
+    "554889e54883ec104885c07414c745f874727565c645fc0a48c7c2050000"
+    "00eb14c745f866616c7366c745fc650a48c7c206000000488d75f8e80200"
+    "0000c9c3"))
+
+;; `buf_put(rsi = bytes, rdx = count)`, 70 bytes -- **the thing libc calls stdio.** Bytes go
+;; into a 4 KiB buffer at r14, and the syscall happens once per buffer rather than once per
+;; `println`. If the run would overflow, flush first; if it is bigger than the whole buffer even
+;; when empty, write it straight out. `rep movsb` does the copy in two bytes of code.
+(:wat::core::defn :c::rt-buf-put [] -> :wat::core::String
+  (:wat::string::concat
+    "498b06488d0c104881f90010000076265652e82f0000005a5e4881fa0010"
+    "0000761148c7c70100000048c7c0010000000f05c34831c0498d7e084801"
+    "c74901164889d1f3a4c3"))
+
+;; `flush()`, 36 bytes: write whatever is buffered and empty it. Called before `exit`, before
+;; `fork` and before `clone`, and at the end of the entry stub -- see each for why.
+(:wat::core::defn :c::rt-flush [] -> :wat::core::String
+  (:wat::string::concat
+    "498b164885d2741b498d760848c7c70100000048c7c0010000000f0549c7"
+    "0600000000c3"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)
-                        (:c::rt-print-bool)))
+                        (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
   (:wat::core::/ (:wat::string::length h) 2))
 
-;; the three entry points, laid out in that order at `rt`
+;; the six entry points, at `rt`, in the order they were assembled in
 (:wat::core::defn :c::at-i64 [rt <- :wat::core::i64] -> :wat::core::i64 rt)
 (:wat::core::defn :c::at-cat [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ rt (:c::hexlen (:c::rt-print-i64))))
@@ -216,6 +217,10 @@
   (:wat::core::+ (:c::at-cat rt) (:c::hexlen (:c::rt-str-cat))))
 (:wat::core::defn :c::at-bool [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-str rt) (:c::hexlen (:c::rt-print-str))))
+(:wat::core::defn :c::at-put [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-bool rt) (:c::hexlen (:c::rt-print-bool))))
+(:wat::core::defn :c::at-flush [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-put rt) (:c::hexlen (:c::rt-buf-put))))
 
 ;; ---------------------------------------------------------------- instructions
 
@@ -628,12 +633,21 @@
           ;; a no-argument syscall: the number goes in rax, the result comes back in rax
           ((:wat::core::>= (:c::syscall-nr head) 0)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1) (:c::fail "syscall arity" a)
-              (:c::emit o (:wat::string::concat (:c::mov-rax (:c::syscall-nr head)) "0f05"))))
+              ;; fork duplicates the address space, buffer included -- so anything still pending
+              ;; would be written TWICE, once by each side. This is the oldest bug in buffered
+              ;; I/O and the fix is the oldest fix: flush before forking.
+              (:c::emit (:wat::core::if (:wat::core::= (:c::syscall-nr head) 57)
+                          (:c::call o (:c::at-flush rt)) o)
+                (:wat::string::concat (:c::mov-rax (:c::syscall-nr head)) "0f05"))))
           ;; exit(status): the argument is computed, then moved into rdi
           ((:c::exit? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "exit arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
-                (:wat::string::concat (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05"))))
+              ;; the status is computed first, parked on the stack while the buffer is written,
+              ;; and taken back -- because a flush clobbers rax, rcx, rdx, rsi and rdi
+              (:wat::core::let
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) "50")
+                 o2 (:c::call o1 (:c::at-flush rt))]
+                (:c::emit o2 (:wat::string::concat "58" (:c::mov-rdi-rax) (:c::mov-rax 60) "0f05")))))
 ;; mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
           ;; -- the only way to get writable memory, since the one PT_LOAD is read+execute
           ((:c::mmap? head)
@@ -652,7 +666,9 @@
           ;; a child in wait's sense, and this compiler has no futex.
           ((:c::clone? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "clone arity" a)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail))
+              (:c::emit (:c::emit (:c::call
+                          (:c::emit (:c::expr (:wat::core::nth ks 1) o env fns rt tb slot (:c::no-tail)) "50")
+                          (:c::at-flush rt)) "58")       ;; the child shares the buffer: empty it first
                 (:wat::string::concat
                   (:wat::string::concat (:c::mov-rsi-rax) (:c::mov-rdi 1809))
                   (:wat::string::concat (:c::mov-rdx 0) (:c::mov-r10 0) (:c::mov-r8 0))
@@ -835,37 +851,41 @@
                       ty (:c::type-of arg env fns)]
       (:wat::core::cond
         ;; a literal is its own EDN rendering, so it goes out as bytes with no runtime at all
-        ((:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb))
+        ((:wat::core::= (:c::kind arg) "string") (:c::print-string arg o tb rt))
         ((:wat::core::= ty "str") (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-str rt)))
         ;; `(println (> 3 2))` prints `true`, not `1`. The type pass is the only thing standing
         ;; between the compiler and a SILENT disagreement with the interpreter here, which is why
         ;; every one of these four paths has a program in elf/src that exercises it.
         ((:wat::core::= ty "bool") (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-bool rt)))
-        ((:wat::core::= ty "nil") (:c::print-nil (:c::expr arg o env fns rt tb slot (:c::no-tail))))
+        ((:wat::core::= ty "nil") (:c::print-nil (:c::expr arg o env fns rt tb slot (:c::no-tail)) rt))
         (:else (:c::call (:c::expr arg o env fns rt tb slot (:c::no-tail)) (:c::at-i64 rt)))))))
 
 ;; nil renders as four bytes and never varies, so it is written straight out of the stack rather
 ;; than costing the output a runtime routine: `mov dword [rsp], "nil\n"` and one write.
-(:wat::core::defn :c::print-nil [o <- :c::Out] -> :c::Out
-  (:c::emit o (:wat::string::concat
-    (:c::sub-rsp 16)
-    "c704246e696c0a"                                   ;; mov dword [rsp], 0x0a6c696e
-    (:wat::string::concat "4889e6" (:c::mov-rdx 4))     ;; rsi = rsp ; rdx = 4
-    (:wat::string::concat (:c::mov-rax 1) (:c::mov-rdi 1) "0f05")
-    (:c::add-rsp 16))))
+(:wat::core::defn :c::print-nil [o <- :c::Out rt <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:wat::string::concat
+          (:c::sub-rsp 16)
+          "c704246e696c0a"                                  ;; mov dword [rsp], 0x0a6c696e
+          (:wat::string::concat "4889e6" (:c::mov-rdx 4)))) ;; rsi = rsp ; rdx = 4
+     o2 (:c::call o1 (:c::at-put rt))]
+    (:c::emit o2 (:c::add-rsp 16))))
 
 ;; `:wat::kernel::println` renders a String as EDN -- `(println "a\nb")` writes `"a\nb"` and a
 ;; newline, quotes kept and the escape NOT expanded -- so the faithful compilation of a string
 ;; literal is its SOURCE TEXT, verbatim. The first version stripped the quotes and unescaped,
 ;; and the differential test against the interpreter caught it on the first run.
-(:wat::core::defn :c::print-string [a <- :wat::WatAST o <- :c::Out tb <- :wat::core::i64] -> :c::Out
+(:wat::core::defn :c::print-string [a <- :wat::WatAST o <- :c::Out tb <- :wat::core::i64
+                                    rt <- :wat::core::i64] -> :c::Out
   (:wat::core::let
     [text (:wat::string::concat (:wat::core::ast->source a) "\n")
      addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
      o1 (:wat::core::assoc o :tail (:wat::string::concat (:c::Out/tail o) (:asm::ascii text 0 "")))]
-    (:c::emit (:c::emit (:c::emit (:c::emit o1 (:c::mov-rax 1)) (:c::mov-rdi 1))
-                (:wat::string::concat (:c::mov-rsi addr) (:c::mov-rdx (:wat::string::length text))))
-      "0f05")))
+    ;; through the buffer like everything else -- a literal written straight to fd 1 would
+    ;; overtake whatever `println` had buffered before it
+    (:c::call (:c::emit o1 (:wat::string::concat (:c::mov-rsi addr)
+                             (:c::mov-rdx (:wat::string::length text))))
+      (:c::at-put rt))))
 
 ;; ---------------------------------------------------------------- calling a user function
 ;;
@@ -993,28 +1013,40 @@
 (:wat::core::defn :c::empty-pass [] -> :c::PassR
   (:c::PassR :code "" :tail "" :lens (:wat::core::Vector :- [:wat::core::i64])))
 
-;; the entry stub, and the only code not compiled from a defn: mmap a heap, park its address in
-;; r15, call main, exit(0). 94 bytes.
+;; the entry stub, and the only code not compiled from a defn: one mmap for both the output
+;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
 ;;
-;; **r15 is the whole memory model.** It is the bump pointer, it is callee-saved in the System V
-;; ABI, and nothing here ever calls anything this compiler did not emit -- so one register
-;; reserved for the program's lifetime is the entire allocator. There is no free, no collector
-;; and no bounds check: the heap is a megabyte, and a program that wants more gets a
-;; segmentation fault rather than an error message.
+;; **r14 and r15 are the whole memory model.** r15 is the heap bump pointer and r14 is the base
+;; of the output buffer, laid out as `[used:8][4096 bytes]`; both are callee-saved in the System
+;; V ABI, and nothing here ever calls anything this compiler did not emit, so two reserved
+;; registers are the entire runtime state. `used` needs no initialising because MAP_ANONYMOUS
+;; memory arrives zero-filled.
+;;
+;; There is no free, no collector and no bounds check: the heap is a megabyte, and a program
+;; that wants more gets a segmentation fault rather than an error message.
+;;
+;; **The flush at the end is not optional.** Buffering means the last `println` of a program is
+;; still in memory when main returns, so the stub writes it before exit(0) -- and every other
+;; way out of the program has to do the same, which is why `exit`, `fork` and `clone` all flush
+;; first. That is the same rule C has, and the same bug C programs have when they forget it.
 (:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1048576)
+(:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
 
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64 94)
+(:wat::core::defn :c::stub-len [] -> :wat::core::i64 106)
 
-(:wat::core::defn :c::stub [main-addr <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
     [o (:c::Out :base (:asm::entry) :code "" :tail "")
      o1 (:c::emit o (:wat::string::concat
-          (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0) (:c::mov-rsi (:c::heap-bytes)))
+          (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
+            (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
           (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
           (:wat::string::concat (:c::mov-r8 -1) (:c::mov-r9 0))
-          (:wat::string::concat "0f05" "4989c7")))]        ;; syscall ; mov r15, rax
-    (:c::Out/code (:c::emit (:c::call o1 main-addr)
-                    (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05")))))
+          (:wat::string::concat "0f05" "4989c6")            ;; syscall ; mov r14, rax
+          (:wat::string::concat "4c8db8" (:asm::le (:c::buf-bytes) 4))))   ;; lea r15,[rax+8192]
+     o2 (:c::call o1 main-addr)
+     o3 (:c::call o2 (:c::at-flush rt))]
+    (:c::Out/code (:c::emit o3 (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05")))))
 
 ;; place every function end to end after the stub
 (:wat::core::defn :c::place [fns <- :c::Fns lens <- (:wat::core::Vector :- [:wat::core::i64])
@@ -1052,7 +1084,7 @@
 
      ;; PASS TWO: now they do
      p2 (:c::pass fns1 0 rt-addr tail-base (:c::empty-pass))
-     text (:wat::string::concat (:c::stub main-addr) (:c::PassR/code p2) (:c::runtime))
+     text (:wat::string::concat (:c::stub main-addr rt-addr) (:c::PassR/code p2) (:c::runtime))
      written (:asm::link out-path text (:c::PassR/tail p2))
      int (:wat::core::fn [n <- :wat::core::i64] -> :wat::core::String (:wat::i64::to-string n))]
     (:wat::core::do
