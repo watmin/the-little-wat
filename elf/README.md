@@ -727,6 +727,41 @@ C's answer is libc. wat has no equivalent. Its OS surface — `:wat::io::`, `:wa
 intrinsic set defined independently of the interpreter, or the two languages drift apart exactly
 here.
 
+## It compiles itself
+
+```
+$ tools/bootstrap.sh
+== stage 0: the interpreter runs the compiler ==
+   36 binaries in 64877 ms, the compiler among them (96793 bytes)
+== stage 1: the compiler, compiled, runs itself ==
+   the same work in 425 ms -- 152x faster than the interpreter
+== every binary, from both ==
+   35 binaries, all byte-identical
+== the fixpoint ==
+   stage1 == stage2, byte for byte (96793 bytes)
+   The compiler reproduces itself.
+```
+
+A wat program, compiled to a 96,793-byte static ELF by a compiler written in wat, compiles that
+same compiler to the same 96,793 bytes. 235 functions, 73,736 bytes of code, 20,878 of data, no
+libc and no interpreter.
+
+### The two bugs that only this could find
+
+**`syscall` destroys `rcx` and `r11`** — the instruction uses them to save `rip` and `rflags`.
+The file primitives parked their buffer pointer in `r11` across `open`, so `write` got a garbage
+address and answered `-14`, EFAULT.
+
+**`:c::body-start` scanned forward for the first child that was a LIST.** Right for every body
+that is a call; wrong for every body that is not. `:asm::printable` returns a bare string literal,
+so the scan ran off the end, the body compiled to nothing, and a 95-character table came back with
+**length 0**. That had been in the compiler since its first commit. No program in `elf/src` had a
+literal for a body, so the differential test — which caught five silent divergences over this
+project — could not see it.
+
+That is the argument for bootstrapping, in one line: **compiling the compiler is a test with
+1,900 lines of adversarial input, written by someone who was not trying to break it.**
+
 ## How far from compiling itself
 
 `elf/census.wat` answers that with a number instead of a feeling. It reads the AST of
@@ -737,14 +772,8 @@ using the same `read-string` walk the compiler uses.
 ```
 $ wat elf/census.wat
   rank  count  form
-  1   33       :wat::core::ast->source
-  2   21       :wat::core::ast->children
-  3   7        :wat::kernel::assertion-failed!
-  4   5        :wat::test::assert-eq
-  5   4        int
-  6   3        :wat::core::match
-  ...
-  22 distinct forms, 89 occurrences -- that is the distance to self-hosting
+
+  0 distinct forms, 0 occurrences -- that is the distance to self-hosting
 ```
 
 The first count was **56 forms, 297 occurrences**. What the table said to build first was not

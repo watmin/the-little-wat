@@ -1,4 +1,5 @@
 elf/bench/out_*
 elf/bench/out_maxrss
 elf/out/*.elf
+elf/out/stage1.elf
 /target

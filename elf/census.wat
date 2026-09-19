@@ -11,6 +11,7 @@
 ;; Run from the repository root:
 ;;   wat elf/census.wat
 
+(:wat::load-file! "lib/prim.wat")
 (:wat::load-file! "lib/asm.wat")
 
 (:wat::core::typealias :cn::Tally (:wat::core::HashMap :- [:wat::core::String :wat::core::i64]))
@@ -25,7 +26,10 @@
     "wat.core/defn" "wat.core/if" "wat.core/let" "wat.core/do"
     "wat.core/cond" "wat.core/and" "wat.core/or" "wat.core/not" ":wat::core::/"
     "wat.string/subs" "wat.string/starts-with?" "wat.string/contains?" "wat.i64/to-string"
-    ":wat::load-file!"
+    ":wat::load-file!" ":wat::test::assert-eq" ":wat::kernel::assertion-failed!"
+    "wat.test/assert-eq" "wat.kernel/assertion-failed!"
+    ":prim::write-hex" ":prim::read-hex" "prim/write-hex" "prim/read-hex"
+    ":wat::io::read-file" "wat.io/read-file"
     ":wat::string::subs" ":wat::string::starts-with?" ":wat::string::contains?"
     ":wat::i64::to-string"
     "wat.core/nth" "wat.core/length" "wat.core/conj" "wat.core/assoc" "wat.core/Vector"

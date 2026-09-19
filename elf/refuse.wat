@@ -163,12 +163,13 @@
 ;;   wat elf/compile.wat        # compiles elf/src/*.wat to elf/out/*.elf and verifies each
 ;;   tools/elf-run.sh           # chmod +x, run them, compare their output
 
+(:wat::load-file! "lib/prim.wat")
 (:wat::load-file! "lib/asm.wat")
 (:wat::load-file! "lib/reader.wat")
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Seventeen routines, 1294 bytes, assembled as ONE block so they can call each other -- which is why
+;; Twenty-three routines, 1942 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -329,13 +330,58 @@
     "4c8b004c3b01751c488d7008488d79084c89c14885c97404f3a6750848c7"
     "c001000000c34831c0c3"))
 
+;; `die(rax = String)`, 81 bytes: flush whatever stdout had, put the string on stderr with a
+;; newline, exit 70. This is what `assertion-failed!` and a failed `assert-eq` compile to. The
+;; interpreter raises a structured error with a span; a compiled program has neither, so the two
+;; agree on every successful run and differ only on the path that stops the program.
+(:wat::core::defn :c::rt-die [] -> :wat::core::String
+  (:wat::string::concat
+    "4989c2e830fdffff498b12498d720848c7c70200000048c7c0010000000f"
+    "054883ec08c604240a48c7c7020000004889e648c7c20100000048c7c001"
+    "0000000f0548c7c74600000048c7c03c0000000f05"))
+
+;; **The last mile: a file, as bytes.** 611 bytes covering `hexval`, `hexchar`,
+;; `prim_write_hex` and `prim_read_hex`, in that order.
+;;
+;; A compiled program can open and write a file in three syscalls. What it cannot do is call
+;; wat's `:wat::io::` verbs, because those are Rust inside the evaluator -- and it cannot route
+;; around them through a String, because a String is UTF-8 there and a byte array here, so the
+;; two disagree on the first byte above 0x7f, which an ELF header has in its second byte.
+;;
+;; So these are **F-119's contract made concrete**: `prim/read-hex` and `prim/write-hex`
+;; have a wat definition for the interpreter (`elf/lib/prim.wat`) and this implementation for the
+;; compiler, and a program using them still runs both ways. Hex is the carrier for the same
+;; reason the rest of `elf/` uses it: it is the only byte representation a wat String can hold
+;; (F-118).
+(:wat::core::defn :c::rt-prim [] -> :wat::core::String
+  (:wat::string::concat
+    "4883e8304883f80976044883e827c34883f80a72044883c0274883c030c3"
+    "4989c04989c94d89fa498d70084c89d7498b08f3a4c6070048ffc74989fc"
+    "498b1148d1ea4889d3498d71084885d2742b480fb606e8a9ffffff48c1e0"
+    "044889c1480fb64601e898ffffff4809c888074883c60248ffc748ffca75"
+    "d548c7c0020000004c89d748c7c64102000048c7c2ed0100000f054989c1"
+    "48c7c0010000004c89cf4c89e64889da0f054989c248c7c0030000004c89"
+    "cf0f054c89d0c34d89fa488d70084c89d7488b08f3a4c6070048ffc74989"
+    "fc48c7c0020000004c89d74831f64831d20f054989c04d89e148c7c00000"
+    "00004c89c74c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0"
+    "030000004c89c70f054c89ca4c29e24d8d41074983e0f84889d04801c048"
+    "8d48174883e1f84c89c64801ce493b76087605e8bcfcffff4989f749c700"
+    "010000004d8d5008498902498d7a084c89e64885d2742e480fb6064889c1"
+    "48c1e804e89efeffff880748ffc74889c84883e00fe88dfeffff880748ff"
+    "c748ffc648ffca75d24c89d0c34d89fa488d70084c89d7488b08f3a4c607"
+    "0048ffc74989fc48c7c0020000004c89d74831f64831d20f054989c04d89"
+    "e148c7c0000000004c89c74c89ce48c7c2000001000f054885c07e054901"
+    "c1ebe048c7c0030000004c89c70f054c89ca4c29e24d8d41074983e0f848"
+    "8d4a174883e1f84c89c64801ce493b76087605e8eafbffff4989f749c700"
+    "010000004d8d5008498912498d7a084c89e64889d1f3a44c89d0c3"))
+
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
                         (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
                         (:c::rt-slot-set) (:c::rt-oom)
                         (:c::rt-str-subs) (:c::rt-str-starts) (:c::rt-str-contains)
-                        (:c::rt-i64-to-str) (:c::rt-str-eq)))
+                        (:c::rt-i64-to-str) (:c::rt-str-eq) (:c::rt-die) (:c::rt-prim)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -365,6 +411,15 @@
   (:wat::core::+ (:c::at-contains rt) (:c::hexlen (:c::rt-str-contains))))
 (:wat::core::defn :c::at-streq [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-tostr rt) (:c::hexlen (:c::rt-i64-to-str))))
+(:wat::core::defn :c::at-die [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-streq rt) (:c::hexlen (:c::rt-str-eq))))
+;; hexval is 15 bytes and hexchar 15, so the two entry points sit 30 and 45 bytes in
+(:wat::core::defn :c::at-wrhex [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:wat::core::+ (:c::at-die rt) (:c::hexlen (:c::rt-die))) 30))
+(:wat::core::defn :c::at-rdhex [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-wrhex rt) 157))
+(:wat::core::defn :c::at-rdfile [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-rdhex rt) 216))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
 (:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
@@ -550,6 +605,18 @@
   (:c::is? s "wat.core/not" ":wat::core::not"))
 (:wat::core::defn :c::concat? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/concat" ":wat::string::concat"))
+(:wat::core::defn :c::wrhex? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "prim/write-hex" ":prim::write-hex"))
+(:wat::core::defn :c::rdhex? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "prim/read-hex" ":prim::read-hex"))
+(:wat::core::defn :c::prim-name? [s <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:c::wrhex? s) (:c::rdhex? s)))
+(:wat::core::defn :c::rdfile? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.io/read-file" ":wat::io::read-file"))
+(:wat::core::defn :c::die? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.kernel/assertion-failed!" ":wat::kernel::assertion-failed!"))
+(:wat::core::defn :c::asserteq? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.test/assert-eq" ":wat::test::assert-eq"))
 (:wat::core::defn :c::subs? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/subs" ":wat::string::subs"))
 (:wat::core::defn :c::starts? [s <- :wat::core::String] -> :wat::core::bool
@@ -571,11 +638,27 @@
   (:wat::kernel::assertion-failed!
     :message (:wat::string::concat "compile: cannot compile " what ": " (:c::text pg a))))
 
+;; digits, by hand. `:wat::string::to-i64` answers an `Option`, and an Option needs `match`,
+;; and `match` is one of the last things standing between this compiler and compiling itself --
+;; so the parse is a fold over the characters instead, which needs nothing but arithmetic.
+(:wat::core::defn :c::digit-val [c <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= c "0") 0) ((:wat::core::= c "1") 1) ((:wat::core::= c "2") 2)
+    ((:wat::core::= c "3") 3) ((:wat::core::= c "4") 4) ((:wat::core::= c "5") 5)
+    ((:wat::core::= c "6") 6) ((:wat::core::= c "7") 7) ((:wat::core::= c "8") 8)
+    ((:wat::core::= c "9") 9) (:else -1)))
+
+(:wat::core::defn :c::digits-val [s <- :wat::core::String i <- :wat::core::i64
+                                  acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::string::length s)) acc
+    (:c::digits-val s (:wat::core::+ i 1)
+      (:wat::core::+ (:wat::core::* acc 10)
+        (:c::digit-val (:wat::string::subs s i (:wat::core::+ i 1)))))))
+
 (:wat::core::defn :c::to-int [s <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::match (:wat::string::to-i64 s)
-    [:wat::core::Option.Some {:value n} n]
-    [:wat::core::Option.None {}
-      (:wat::kernel::assertion-failed! :message (:wat::string::concat "compile: not an integer: " s))]))
+  (:wat::core::if (:wat::string::starts-with? s "-")
+    (:wat::core::- 0 (:c::digits-val (:wat::string::subs s 1 (:wat::string::length s)) 0 0))
+    (:c::digits-val s 0 0)))
 
 ;; the three verbs the reader replaces. `pg` carries the arena, so a node is an index and these
 ;; are exactly `ast-kind`, `ast->source` and `ast->children` -- except that `:c::text` answers
@@ -687,13 +770,16 @@
       ((:wat::core::= (:c::Fn/name (:wat::core::nth v i)) name) (:c::Fn/addr (:wat::core::nth v i)))
       (:else (:c::fn-addr pg name (:wat::core::+ i 1))))))
 
-;; the body of a `defn` is every child from the first list onwards, which skips the name, the
-;; parameter vector and the return type without caring which spelling they were in
+;; A `defn`'s children are: the word, the name, the parameter vector, the `:-` or `->` marker,
+;; the return type, and then the body. So the body starts at five, always.
+;;
+;; This used to scan forward for the first child that was a LIST, which is right for every body
+;; that is a call and wrong for every body that is not. `:asm::printable` returns a bare string
+;; literal, so the scan ran off the end, the body compiled to nothing, and the function answered
+;; whatever was in rax -- a 95-character table that came back with length 0. The compiler had
+;; been carrying that since the first commit; nothing noticed until it compiled itself.
 (:wat::core::defn :c::body-start [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::cond
-    ((:wat::core::>= i (:wat::core::length ks)) i)
-    ((:wat::core::= (:c::kind (:wat::core::nth ks i) pg) "list") i)
-    (:else (:c::body-start ks (:wat::core::+ i 1) pg))))
+  (:wat::core::if (:wat::core::< (:wat::core::length ks) 5) (:wat::core::length ks) 5))
 
 ;; ---------------------------------------------------------------- what type an expression has
 ;;
@@ -772,6 +858,7 @@
       (:wat::core::cond
         ((:c::concat? head) "str")
         ((:c::println? head) "nil")
+        ((:wat::core::or (:c::die? head) (:c::asserteq? head)) "nil")
         ;; a branch is typed by its consequent; the alternative has to agree, and if it does not
         ;; the program is wrong in a way this compiler does not check
         ((:c::if? head) (:c::type-of (:wat::core::nth ks 2) env pg))
@@ -797,6 +884,7 @@
               (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
                 (:wat::string::concat "vec:" (:c::ty-of-node (:wat::core::nth tv 0) pg))))))
         ((:wat::core::or (:c::subs? head) (:c::tostr? head)) "str")
+        ((:wat::core::or (:c::rdhex? head) (:c::rdfile? head)) "str")
         ((:wat::core::or (:c::starts? head) (:c::contains? head)) "bool")
         ((:c::nth? head)
           (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
@@ -858,11 +946,11 @@
     (:c::zeros (:wat::core::- n 1) (:wat::string::concat acc "00"))))
 
 ;; a header is eight bytes, so the bytes after it are padded back up to a multiple of eight
-(:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+;; a String constant in the read-only tail, and the address of it in rax
+(:wat::core::defn :c::static-str [text <- :wat::core::String o <- :c::Out tb <- :wat::core::i64] -> :c::Out
   (:wat::core::let
-    [src (:c::text pg a)
-     text (:c::unescape (:wat::string::subs src 1 (:wat::core::- (:wat::string::length src) 1)) 0 "")
-     n (:wat::string::length text)
+    [n (:wat::string::length text)
+
      addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
      pad (:wat::core::rem (:wat::core::- 8 (:wat::core::rem n 8)) 8)
      o1 (:wat::core::assoc o :tail
@@ -872,6 +960,12 @@
           (:wat::string::concat (:c::Out/tail o) (:asm::le 0 8) (:asm::le n 8)
             (:asm::ascii text 0 "") (:c::zeros pad "")))]
     (:c::emit o1 (:c::mov-rax (:wat::core::+ addr 8)))))
+
+(:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+  (:wat::core::let [src (:c::text pg a)]
+    (:c::static-str
+      (:c::unescape (:wat::string::subs src 1 (:wat::core::- (:wat::string::length src) 1)) 0 "")
+      o tb)))
 
 ;; ---------------------------------------------------------------- frame size
 ;;
@@ -1076,6 +1170,35 @@
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "to-string arity" a pg)
               (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                 (:c::at-tostr rt))))
+          ;; the two diagnostics. The interpreter raises a structured error with a span; a
+          ;; compiled program has neither, so these print and exit 70 -- which means the two
+          ;; agree on every successful run and differ only on the path that stops the program.
+          ((:c::die? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3)
+              (:c::fail "assertion-failed! shape" a pg)
+              (:c::call (:c::expr (:wat::core::nth ks 2) o env pg rt tb slot (:c::no-tail))
+                (:c::at-die rt))))
+          ((:c::asserteq? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3)
+              (:c::fail "assert-eq arity" a pg)
+              (:c::asserteq-form ks a o env pg rt tb slot)))
+          ;; the two primitives that reach the disk. A wat definition of the same name exists
+          ;; for the interpreter; the compiler implements them instead, which is the whole of
+          ;; F-119's contract in two verbs.
+          ((:c::wrhex? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "write-hex arity" a pg)
+              (:wat::core::let
+                [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
+                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58")) (:c::at-wrhex rt)))))
+          ((:c::rdfile? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "read-file arity" a pg)
+              (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                (:c::at-rdfile rt))))
+          ((:c::rdhex? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "read-hex arity" a pg)
+              (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                (:c::at-rdhex rt))))
           ((:c::vector? head) (:c::vec-form ks a o env pg rt tb slot))
           ((:c::nth? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "nth arity" a pg)
@@ -1344,6 +1467,26 @@
       ;; warns about, so it is refused instead -- and the refusal is the measurement: positional
       ;; vector update is 49 bytes of runtime that wat does not expose.
       (:c::fail "assoc on a vector (F-104: wat has no positional vector update either)" a pg))))
+
+;; `assert-eq` compiles to the comparison it names and a jump over the diagnostic. The message
+;; is the assertion's own SOURCE TEXT, which the compiler has and the interpreter's error does
+;; not put anywhere as legible.
+(:wat::core::defn :c::asserteq-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out
+                                     env <- :c::Env pg <- :c::Prog rt <- :wat::core::i64
+                                     tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [str? (:wat::core::and (:wat::core::= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
+                           (:wat::core::= (:c::type-of (:wat::core::nth ks 2) env pg) "str"))
+     o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+     o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
+     o3 (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+     o4 (:wat::core::if str? (:c::call o3 (:c::at-streq rt)) (:c::emit o3 (:c::op-hex "=")))
+     o5 (:c::emit (:c::emit o4 "4885c0") "0f8500000000")      ;; test ; jnz over the diagnostic
+     at (:wat::core::- (:c::codelen o5) 4)
+     o6 (:c::static-str (:wat::string::concat "assert failed: " (:c::text pg a)) o5 tb)
+     o7 (:c::call o6 (:c::at-die rt))
+     o8 (:c::patch o7 at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ at 4)) 4))]
+    (:c::emit o8 (:c::mov-rax 0))))
 
 (:wat::core::defn :c::vec-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                 pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
@@ -1726,6 +1869,14 @@
             (:c::collect-in tops (:wat::core::+ i 1)
               (:c::collect-in (:rd::St/kids st2) 0 pg2 (:c::dir-of path))
               dir)))
+        ;; **a primitive's wat definition is for the interpreter, and is skipped here.** That is
+        ;; the contract stated plainly: `prim/write-hex` and `prim/read-hex` mean the same thing
+        ;; in both worlds, and each world supplies its own implementation. Without this the
+        ;; compiler would try to compile the interpreter's version, which uses `match` and
+        ;; `Bytes::from-hex` and is exactly what a compiled program cannot reach (F-119).
+        ((:wat::core::and (:c::defn? head)
+           (:c::prim-name? (:c::text pg (:wat::core::nth ks 1))))
+          (:c::collect-in tops (:wat::core::+ i 1) pg dir))
         ((:c::defn? head)
           (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc pg :fns
@@ -1792,11 +1943,11 @@
 ;; still in memory when main returns, so the stub writes it before exit(0) -- and every other
 ;; way out of the program has to do the same, which is why `exit`, `fork` and `clone` all flush
 ;; first. That is the same rule C has, and the same bug C programs have when they forget it.
-;; 64 MiB, and it costs nothing to ask for: MAP_ANONYMOUS is lazy, so pages are committed only
-;; when they are first touched. A megabyte was enough while the only thing that allocated was
-;; string concatenation; `conj` is O(n) per call, so building a 1000-element vector one element
-;; at a time touches about 4 MB and a megabyte segfaults.
-(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 67108864)
+;; A gibibyte, and it costs nothing to ask for: MAP_ANONYMOUS is lazy, so pages are committed only
+;; when they are first touched. A megabyte was enough while the only thing that
+;; allocated was string concatenation, and 64 MiB until the compiler compiled itself -- which
+;; touches more than that, because nothing is reclaimed except at statement boundaries (C-125).
+(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1073741824)
 (:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
 
 (:wat::core::defn :c::stub-len [] -> :wat::core::i64 117)
@@ -1853,13 +2004,16 @@
             (:wat::core::+ (:asm::entry) (:c::stub-len)) (:wat::core::Vector :- [:c::Fn]))
      rt-addr (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len)) code-total)
      tail-base (:wat::core::+ rt-addr (:wat::core::/ (:wat::string::length (:c::runtime)) 2))
-     main-addr (:c::fn-addr pg1 "user/main" 0)
+     ;; either spelling of the entry point, because a program is allowed to be written in
+     ;; either -- and this compiler's own source happens to use the keyword one
+     main-clj (:c::fn-addr pg1 "user/main" 0)
+     main-addr (:wat::core::if (:wat::core::>= main-clj 0) main-clj
+                 (:c::fn-addr pg1 ":user::main" 0))
 
      ;; PASS TWO: now they do
      p2 (:c::pass pg1 0 rt-addr tail-base (:c::empty-pass))
      text (:wat::string::concat (:c::stub main-addr rt-addr) (:c::PassR/code p2) (:c::runtime))
-     written (:asm::link out-path text (:c::PassR/tail p2))
-     int (:wat::core::fn [n <- :wat::core::i64] -> :wat::core::String (:wat::i64::to-string n))]
+     written (:asm::link out-path text (:c::PassR/tail p2))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)
         (:wat::kernel::assertion-failed! :message "compile: no user/main") nil)
@@ -1869,9 +2023,9 @@
                              (:wat::string::length (:c::PassR/tail p2)))
       (:wat::kernel::println
         (:wat::string::concat "compile: " (:asm::pad src-path 22) " -> " (:asm::pad out-path 24)
-          (:asm::pad (int written) 5) " bytes   fns " (:asm::pad (int (:wat::core::length (:c::Prog/fns pg0))) 3)
-          "  code " (:asm::pad (int code-total) 5)
-          "  data " (:asm::pad (int (:wat::core::/ (:wat::string::length (:c::PassR/tail p2)) 2)) 4)
+          (:asm::pad (:wat::i64::to-string written) 5) " bytes   fns " (:asm::pad (:wat::i64::to-string (:wat::core::length (:c::Prog/fns pg0))) 3)
+          "  code " (:asm::pad (:wat::i64::to-string code-total) 5)
+          "  data " (:asm::pad (:wat::i64::to-string (:wat::core::/ (:wat::string::length (:c::PassR/tail p2)) 2)) 4)
           "  verified")))))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil

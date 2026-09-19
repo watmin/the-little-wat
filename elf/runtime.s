@@ -474,3 +474,216 @@ str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
     ret
 9:  xorq %rax, %rax
     ret
+
+die:                             # rax = String  ->  it on stderr, then exit 70
+    movq %rax, %r10
+    call flush                   # anything stdout had buffered is still worth having
+    movq (%r10), %rdx
+    leaq 8(%r10), %rsi
+    movq $2, %rdi
+    movq $1, %rax
+    syscall
+    subq $8, %rsp
+    movb $10, (%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $1, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall
+
+# ---- the last mile: a file, as bytes.
+#
+# A compiled program can open and write a file in three syscalls. What it cannot do is call
+# wat's `:wat::io::` verbs, because those are Rust inside the evaluator -- and it cannot route
+# around them through a String, because a String is UTF-8 there and a byte array here, so the two
+# disagree on the first byte above 0x7f, which an ELF header has in its second byte. So these two
+# are the F-119 contract made concrete: `wat.prim/read-hex` and `wat.prim/write-hex` have a wat
+# definition for the interpreter (elf/lib/prim.wat) and this implementation for the compiler, and
+# the program that uses them still runs both ways.
+#
+# Hex is the carrier for the same reason the rest of elf/ uses it: it is the only byte
+# representation wat can hold in a String (F-118).
+#
+# **These three park their buffers in r12, not r11.** `syscall` destroys rcx and r11 -- the
+# instruction uses them to save rip and rflags -- so a pointer left in r11 across an `open` comes
+# back as garbage and `write` answers -14, EFAULT. Which it did.
+
+hexval:                          # rax = one ascii hex digit  ->  rax = 0..15
+    subq $48, %rax
+    cmpq $9, %rax
+    jbe 1f
+    subq $39, %rax               # 'a' lands on 10
+1:  ret
+
+hexchar:                         # rax = 0..15  ->  al = one ascii hex digit
+    cmpq $10, %rax
+    jb 1f
+    addq $39, %rax
+1:  addq $48, %rax
+    ret
+
+prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes written
+    movq %rax, %r8
+    movq %rcx, %r9
+    movq %r15, %r10              # a NUL-terminated path, at the heap top as scratch
+    leaq 8(%r8), %rsi
+    movq %r10, %rdi
+    movq (%r8), %rcx
+    rep movsb
+    movb $0, (%rdi)
+    incq %rdi
+    movq %rdi, %r12              # and the decoded bytes after it
+    movq (%r9), %rdx
+    shrq $1, %rdx
+    movq %rdx, %rbx              # how many there will be
+    leaq 8(%r9), %rsi
+    testq %rdx, %rdx
+    jz 3f
+2:  movzbq (%rsi), %rax
+    call hexval
+    shlq $4, %rax
+    movq %rax, %rcx
+    movzbq 1(%rsi), %rax
+    call hexval
+    orq %rcx, %rax
+    movb %al, (%rdi)
+    addq $2, %rsi
+    incq %rdi
+    decq %rdx
+    jnz 2b
+3:  movq $2, %rax                # open(path, O_WRONLY|O_CREAT|O_TRUNC, 0755)
+    movq %r10, %rdi
+    movq $577, %rsi
+    movq $493, %rdx
+    syscall
+    movq %rax, %r9
+    movq $1, %rax                # write(fd, bytes, n)
+    movq %r9, %rdi
+    movq %r12, %rsi
+    movq %rbx, %rdx
+    syscall
+    movq %rax, %r10
+    movq $3, %rax                # close(fd)
+    movq %r9, %rdi
+    syscall
+    movq %r10, %rax
+    ret
+
+prim_read_hex:                   # rax = path  ->  rax = a String of hex
+    movq %r15, %r10
+    leaq 8(%rax), %rsi
+    movq %r10, %rdi
+    movq (%rax), %rcx
+    rep movsb
+    movb $0, (%rdi)
+    incq %rdi
+    movq %rdi, %r12              # the file lands after the path
+    movq $2, %rax                # open(path, O_RDONLY)
+    movq %r10, %rdi
+    xorq %rsi, %rsi
+    xorq %rdx, %rdx
+    syscall
+    movq %rax, %r8
+    movq %r12, %r9
+1:  movq $0, %rax                # read(fd, cursor, 65536) until it stops giving
+    movq %r8, %rdi
+    movq %r9, %rsi
+    movq $65536, %rdx
+    syscall
+    testq %rax, %rax
+    jle 2f
+    addq %rax, %r9
+    jmp 1b
+2:  movq $3, %rax                # close(fd)
+    movq %r8, %rdi
+    syscall
+    movq %r9, %rdx
+    subq %r12, %rdx              # how many bytes that was
+    leaq 7(%r9), %r8             # the String goes ABOVE the scratch, aligned
+    andq $-8, %r8
+    movq %rdx, %rax
+    addq %rax, %rax              # two hex digits a byte
+    leaq 23(%rax), %rcx
+    andq $-8, %rcx
+    movq %r8, %rsi
+    addq %rcx, %rsi
+    cmpq 8(%r14), %rsi
+    jbe 3f
+    call oom
+3:  movq %rsi, %r15
+    movq $1, (%r8)
+    leaq 8(%r8), %r10
+    movq %rax, (%r10)
+    leaq 8(%r10), %rdi
+    movq %r12, %rsi
+    testq %rdx, %rdx
+    jz 5f
+4:  movzbq (%rsi), %rax
+    movq %rax, %rcx
+    shrq $4, %rax
+    call hexchar
+    movb %al, (%rdi)
+    incq %rdi
+    movq %rcx, %rax
+    andq $15, %rax
+    call hexchar
+    movb %al, (%rdi)
+    incq %rdi
+    incq %rsi
+    decq %rdx
+    jnz 4b
+5:  movq %r10, %rax
+    ret
+
+io_read_file:                    # rax = path  ->  rax = a String of the file's bytes
+    movq %r15, %r10
+    leaq 8(%rax), %rsi
+    movq %r10, %rdi
+    movq (%rax), %rcx
+    rep movsb
+    movb $0, (%rdi)
+    incq %rdi
+    movq %rdi, %r12
+    movq $2, %rax                # open(path, O_RDONLY)
+    movq %r10, %rdi
+    xorq %rsi, %rsi
+    xorq %rdx, %rdx
+    syscall
+    movq %rax, %r8
+    movq %r12, %r9
+1:  movq $0, %rax                # read until it stops giving
+    movq %r8, %rdi
+    movq %r9, %rsi
+    movq $65536, %rdx
+    syscall
+    testq %rax, %rax
+    jle 2f
+    addq %rax, %r9
+    jmp 1b
+2:  movq $3, %rax                # close(fd)
+    movq %r8, %rdi
+    syscall
+    movq %r9, %rdx
+    subq %r12, %rdx
+    leaq 7(%r9), %r8             # the String goes above the scratch, aligned
+    andq $-8, %r8
+    leaq 23(%rdx), %rcx
+    andq $-8, %rcx
+    movq %r8, %rsi
+    addq %rcx, %rsi
+    cmpq 8(%r14), %rsi
+    jbe 3f
+    call oom
+3:  movq %rsi, %r15
+    movq $1, (%r8)
+    leaq 8(%r8), %r10
+    movq %rdx, (%r10)
+    leaq 8(%r10), %rdi
+    movq %r12, %rsi
+    movq %rdx, %rcx
+    rep movsb
+    movq %r10, %rax
+    ret

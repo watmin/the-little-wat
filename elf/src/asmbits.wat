@@ -1,0 +1,21 @@
+;; The hex layer, both ways -- the arithmetic elf/lib/asm.wat is built out of.
+(:wat::load-file! "../lib/prim.wat")
+(:wat::load-file! "../lib/asm.wat")
+
+(wat.core/defn user/main [] :- wat.type/nil
+  (wat.kernel/println (:asm::nibble 0))
+  (wat.kernel/println (:asm::nibble 15))
+  (wat.kernel/println (:asm::u8 0))
+  (wat.kernel/println (:asm::u8 127))
+  (wat.kernel/println (:asm::u8 255))
+  (wat.kernel/println (:asm::le 0 8))
+  (wat.kernel/println (:asm::le 1 4))
+  (wat.kernel/println (:asm::le 4194304 8))
+  (wat.kernel/println (:asm::le -1 8))
+  (wat.kernel/println (:asm::le -7 4))
+  (wat.kernel/println (wat.string/length (:asm::ehdr (:asm::entry))))
+  (wat.kernel/println (wat.string/length (:asm::phdr (:asm::base) 166)))
+  (wat.kernel/println (:asm::ehdr (:asm::entry)))
+  (wat.kernel/println (:asm::phdr (:asm::base) 166))
+  (wat.kernel/println (:asm::ascii "hi\n" 0 ""))
+  (wat.kernel/println (:asm::pad "x" 5)))

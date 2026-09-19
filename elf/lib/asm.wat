@@ -93,20 +93,14 @@
 
 ;; ---------------------------------------------------------------- writing and checking
 
+;; the two verbs that reach the disk. Their definitions live in elf/lib/prim.wat for the
+;; interpreter; elf/compile.wat implements them natively for a compiled program. Same meaning,
+;; two implementations -- F-119's contract, in the only two places elf/ needs it.
 (:wat::core::defn :asm::write-bytes [path <- :wat::core::String hex <- :wat::core::String] -> :wat::core::i64
-  (:wat::core::match (:wat::core::Bytes::from-hex hex)
-    [:wat::core::Option.None {}
-      (:wat::kernel::assertion-failed! :message "assembled hex did not decode")]
-    [:wat::core::Option.Some {:value bs}
-      (:wat::core::let [w (:wat::io::IOWriter/open-file path)]
-        (:wat::core::do
-          (:wat::io::IOWriter/write-all w bs)
-          (:wat::io::IOWriter/flush w)
-          (:wat::io::IOWriter/close w)
-          (:wat::core::length bs)))]))
+  (:prim::write-hex path hex))
 
 (:wat::core::defn :asm::read-hex [path <- :wat::core::String] -> :wat::core::String
-  (:wat::core::Bytes::to-hex (:wat::io::IOReader/read-all (:wat::io::IOReader/open-file path))))
+  (:prim::read-hex path))
 
 ;; wrap a finished text section in headers, write it, and read it back to check
 (:wat::core::defn :asm::link [path <- :wat::core::String text <- :wat::core::String tail <- :wat::core::String] -> :wat::core::i64
