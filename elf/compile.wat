@@ -2654,6 +2654,7 @@
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
     (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")
     (:c::compile "elf/bench/cat32000.wat"    "elf/out/cat32000.elf")
+    (:c::compile "elf/bench/catx.wat"        "elf/out/catx.elf")
     (:c::compile "elf/bench/grow20000.wat"   "elf/out/grow20000.elf")
     (:c::compile "elf/bench/grow200000.wat"  "elf/out/grow200000.elf")
     (:c::compile "elf/bench/grow2000000.wat" "elf/out/grow2000000.elf")
