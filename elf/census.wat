@@ -58,7 +58,10 @@
   (:wat::core::or (:wat::string::starts-with? s "user/")
     (:wat::core::or (:wat::string::starts-with? s ":user::")
       (:wat::core::or (:wat::string::starts-with? s ":c::")
-        (:wat::core::or (:wat::string::starts-with? s ":asm::") (:wat::string::starts-with? s ":cn::"))))))
+        (:wat::core::or (:wat::string::starts-with? s ":asm::")
+          (:wat::core::or (:wat::string::starts-with? s ":cn::")
+            (:wat::core::or (:wat::string::starts-with? s ":rd::")
+                            (:wat::string::starts-with? s "rd/"))))))))
 
 (:wat::core::defn :cn::local-call? [s <- :wat::core::String] -> :wat::core::bool
   (:cn::own-ns? s))

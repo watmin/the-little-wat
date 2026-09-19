@@ -169,10 +169,15 @@
       (wat.core/let [r (rd/form src (:rd::St :arena a :pos i :node -1 :kids acc))]
         (rd/tops src r (wat.core/conj acc (:rd::St/node r)))))))
 
+(wat.core/defn rd/empty-arena [] :- :rd::Arena (wat.core/Vector :- [:rd::Node]))
+
+;; read another file into the SAME arena, so that node indices from every file a program is made
+;; of live in one space. That is what `load-file!` needs: two arenas would give two node 7s.
+(wat.core/defn rd/read-into [a :- :rd::Arena src :- wat.type/String] :- :rd::St
+  (rd/tops src (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids)) (rd/empty-kids)))
+
 (wat.core/defn rd/read [src :- wat.type/String] :- :rd::St
-  (rd/tops src (:rd::St :arena (wat.core/Vector :- [:rd::Node]) :pos 0 :node -1
-                        :kids (rd/empty-kids))
-           (rd/empty-kids)))
+  (rd/read-into (rd/empty-arena) src))
 
 ;; ---------------------------------------------------------------- the surface it replaces
 
