@@ -34,7 +34,7 @@ chmod +x elf/out/*.elf
 
 echo
 echo "== the check that matters: compiled binary vs wat interpreter =="
-for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear freed strverbs; do
+for name in four arith greet branch fib bench strings shadow churn deep logic vectors memory linear freed strverbs reader; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$("$WAT" "$src" 2>&1); irc=$?
   native=$("./$bin" 2>&1); nrc=$?
@@ -107,8 +107,8 @@ refuses elf/refuse-nonascii.wat 'not encodable' \
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- twenty-two native binaries, twenty of them compiled from wat source."
-  echo "         Sixteen agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "elf-run: ok -- twenty-three native binaries, twenty-one of them compiled from wat source."
+  echo "         Seventeen agree with the interpreter; three use syscalls it cannot run (F-119)."
 else
   echo "elf-run: FAILED"
 fi

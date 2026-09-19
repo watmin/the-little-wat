@@ -458,3 +458,19 @@ i64_to_str:                      # rax = n  ->  rax = a new String
     movq %r10, %rax
     leave
     ret
+
+str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
+    movq (%rax), %r8
+    cmpq (%rcx), %r8             # different lengths cannot be equal
+    jne 9f
+    leaq 8(%rax), %rsi
+    leaq 8(%rcx), %rdi
+    movq %r8, %rcx
+    testq %rcx, %rcx
+    jz 8f                        # two empty strings are
+    repe cmpsb
+    jne 9f
+8:  movq $1, %rax
+    ret
+9:  xorq %rax, %rax
+    ret

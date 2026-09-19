@@ -168,7 +168,7 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Sixteen routines, 1254 bytes, assembled as ONE block so they can call each other -- which is why
+;; Seventeen routines, 1294 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -308,7 +308,7 @@
     "4c89de4801c64889d74c89c94885c97409f3a6740548ffc0ebe148c7c001"
     "000000c34831c0c3"))
 
-;; `i64_to_str(rax = n) -> rax`, 84 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
+;; `i64_to_str(rax = n) -> rax`, 128 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
 ;; instead of the output buffer.
 (:wat::core::defn :c::rt-i64-to-str [] -> :wat::core::String
   (:wat::string::concat
@@ -318,13 +318,24 @@
     "7605e898feffff49c707010000004d8d57084d890a498d7a084d89df4c89"
     "c9f3a44c89d0c9c3"))
 
+;; `str_eq(rax = a, rcx = b) -> 0 or 1`, 40 bytes. **This one closes a silent divergence.**
+;; `(wat.core/= a b)` on two Strings compiled to a machine-word compare, which compares
+;; POINTERS: `(= (concat "ab" "c") (concat "a" "bc"))` answered false where the interpreter
+;; answers true. The type pass knows both operand types, so `=` on two `str` operands now calls
+;; this instead. Nothing had noticed because no program in elf/src compared two strings -- a
+;; reader is the first thing that must.
+(:wat::core::defn :c::rt-str-eq [] -> :wat::core::String
+  (:wat::string::concat
+    "4c8b004c3b01751c488d7008488d79084c89c14885c97404f3a6750848c7"
+    "c001000000c34831c0c3"))
+
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat-own) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
                         (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
                         (:c::rt-slot-set) (:c::rt-oom)
                         (:c::rt-str-subs) (:c::rt-str-starts) (:c::rt-str-contains)
-                        (:c::rt-i64-to-str)))
+                        (:c::rt-i64-to-str) (:c::rt-str-eq)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -352,6 +363,8 @@
   (:wat::core::+ (:c::at-starts rt) (:c::hexlen (:c::rt-str-starts))))
 (:wat::core::defn :c::at-tostr [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-contains rt) (:c::hexlen (:c::rt-str-contains))))
+(:wat::core::defn :c::at-streq [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-tostr rt) (:c::hexlen (:c::rt-i64-to-str))))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
 (:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
@@ -1086,6 +1099,20 @@
                 (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:c::acc-index pg head)))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
+          ;; `=` on two Strings must compare CONTENT. The type pass knows both operands, so
+          ;; this is decidable at compile time -- and getting it wrong is silent (F-120's
+          ;; cousin): a machine-word compare answers false for equal strings.
+          ((:wat::core::and (:wat::core::or (:wat::core::= op "=") (:wat::core::= op "not="))
+             (:wat::core::and (:wat::core::= (:wat::core::length ks) 3)
+               (:wat::core::and (:wat::core::= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
+                                (:wat::core::= (:c::type-of (:wat::core::nth ks 2) env pg) "str"))))
+            (:wat::core::let
+              [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
+               o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
+               o3 (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58")) (:c::at-streq rt))]
+              (:wat::core::if (:wat::core::= op "not=")
+                (:c::emit o3 "4883f001")                ;; xor rax, 1
+                o3)))
           ((:wat::core::not (:wat::core::= op ""))
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "operator arity" a)
               (:c::fold op ks 2 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) env pg rt tb slot)))
@@ -1659,7 +1686,25 @@
     (:c::field-types fv (:wat::core::+ i 3) pg
       (:wat::core::conj acc (:c::ty-of-node (:wat::core::nth fv (:wat::core::+ i 2)) pg)))))
 
+;; everything up to and including the last "/", which is what a relative `load-file!` is
+;; relative to
+(:wat::core::defn :c::dir-of [path <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [at (:c::slash-at path (:wat::core::- (:wat::string::length path) 1))]
+    (:wat::core::if (:wat::core::< at 0) "" (:wat::string::subs path 0 (:wat::core::+ at 1)))))
+
+;; the string a `load-file!` names, without its quotes
+(:wat::core::defn :c::lit-text [a <- :wat::WatAST] -> :wat::core::String
+  (:wat::core::let [src (:wat::core::ast->source a)]
+    (:wat::string::subs src 1 (:wat::core::- (:wat::string::length src) 1))))
+
+(:wat::core::defn :c::load? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat/load-file!" ":wat::load-file!"))
+
 (:wat::core::defn :c::collect [tops <- :c::Kids i <- :wat::core::i64 acc <- :c::Prog] -> :c::Prog
+  (:c::collect-in tops i acc ""))
+
+(:wat::core::defn :c::collect-in [tops <- :c::Kids i <- :wat::core::i64 acc <- :c::Prog
+                                  dir <- :wat::core::String] -> :c::Prog
   (:wat::core::if (:wat::core::>= i (:wat::core::length tops)) acc
     (:wat::core::let
       [t (:wat::core::nth tops i)
@@ -1667,31 +1712,42 @@
        head (:wat::core::if (:wat::core::= (:c::kind t) "list")
               (:wat::core::ast->source (:wat::core::nth ks 0)) "")]
       (:wat::core::cond
+        ;; `load-file!` is a compile-time include: read that file, collect ITS top level, and
+        ;; carry on. Relative to the file that names it, the way the interpreter resolves it.
+        ((:c::load? head)
+          (:wat::core::let
+            [path (:wat::string::concat dir (:c::lit-text (:wat::core::nth ks 1)))]
+            (:c::collect-in tops (:wat::core::+ i 1)
+              (:c::collect-in (:wat::core::ast->children
+                                (:c::forms-of (:wat::io::read-file path))) 0 acc (:c::dir-of path))
+              dir)))
         ((:c::defn? head)
-          (:c::collect tops (:wat::core::+ i 1)
+          (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc acc :fns
               (:wat::core::conj (:c::Prog/fns acc)
                 (:c::Fn :name (:wat::core::ast->source (:wat::core::nth ks 1)) :node t :addr 0
                         :ret (:c::ty-of-node
-                               (:wat::core::nth ks (:wat::core::- (:c::body-start ks 3) 1)) acc))))))
+                               (:wat::core::nth ks (:wat::core::- (:c::body-start ks 3) 1)) acc)))) dir))
         ((:c::defrecord? head)
           (:wat::core::let [fv (:wat::core::ast->children (:wat::core::nth ks 2))]
-            (:c::collect tops (:wat::core::+ i 1)
+            (:c::collect-in tops (:wat::core::+ i 1)
               (:wat::core::assoc acc :recs
                 (:wat::core::conj (:c::Prog/recs acc)
                   (:c::Rec :name (:wat::core::ast->source (:wat::core::nth ks 1))
                            :fields (:c::field-names fv 0 (:wat::core::Vector :- [:wat::core::String]))
-                           :ftypes (:c::field-types fv 0 acc (:wat::core::Vector :- [:wat::core::String]))))))))
+                           :ftypes (:c::field-types fv 0 acc (:wat::core::Vector :- [:wat::core::String])))))
+              dir)))
         ((:c::typealias? head)
-          (:c::collect tops (:wat::core::+ i 1)
+          (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc acc :aliases
               (:wat::core::conj (:c::Prog/aliases acc)
                 (:c::Alias :name (:wat::core::ast->source (:wat::core::nth ks 1))
-                           :node (:wat::core::nth ks 2))))))
+                           :node (:wat::core::nth ks 2))))
+            dir))
         (:else
           (:wat::kernel::assertion-failed!
             :message (:wat::string::concat
-                       "compile: only defn, defrecord and typealias are allowed at the top level: "
+                       "compile: only defn, defrecord, typealias and load-file! at the top level: "
                        (:wat::core::ast->source t))))))))
 
 ;; one pass over every function: each is compiled at the address the table says, and the lengths
@@ -1780,7 +1836,7 @@
 (:wat::core::defn :c::compile [src-path <- :wat::core::String out-path <- :wat::core::String] -> :wat::core::nil
   (:wat::core::let
     [tops (:wat::core::ast->children (:c::forms-of (:wat::io::read-file src-path)))
-     pg0 (:c::collect tops 0 (:c::empty-prog))
+     pg0 (:c::collect-in tops 0 (:c::empty-prog) (:c::dir-of src-path))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one
      p1 (:c::pass pg0 0 0 0 (:c::empty-pass))
