@@ -435,10 +435,38 @@
 (:wat::core::defn :c::mov-rdx [n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat "48ba" (:asm::le n 8)))
 ;; mov [rbp+disp32], rax   and   mov rax, [rbp+disp32]
+;; ---------------------------------------------------------------- short forms
+;;
+;; x86 encodes a small displacement in one byte and a large one in four, and the same for an
+;; immediate. Every frame access here was four bytes of displacement where one would do, and
+;; every literal was a ten-byte `movabs`.
+;;
+;; **The two-pass technique is why this needed thinking about rather than just doing.** Pass one
+;; compiles with every address zero purely to measure, and pass two must come out the same
+;; length -- so anything whose value CHANGES between the passes has to stay fixed-width. Frame
+;; displacements and source literals do not change: the frame layout and the program text are
+;; the same both times. Addresses do, so `mov-rax` keeps its `movabs` and every call and jump
+;; keeps its rel32.
+(:wat::core::defn :c::disp8? [d <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::and (:wat::core::>= d -128) (:wat::core::<= d 127)))
+
+(:wat::core::defn :c::rbp-at [op1 <- :wat::core::String op4 <- :wat::core::String
+                              d <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:c::disp8? d)
+    (:wat::string::concat op1 (:asm::le d 1))
+    (:wat::string::concat op4 (:asm::le d 4))))
+
 (:wat::core::defn :c::store [d <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "488985" (:asm::le d 4)))
+  (:c::rbp-at "488945" "488985" d))
 (:wat::core::defn :c::load [d <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "488b85" (:asm::le d 4)))
+  (:c::rbp-at "488b45" "488b85" d))
+
+;; a source literal into rax: seven bytes when it fits in a sign-extended 32, ten when it does
+;; not. Addresses keep `:c::mov-rax`, which is always ten.
+(:wat::core::defn :c::mov-rax-lit [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:c::imm32? n)
+    (:wat::string::concat "48c7c0" (:asm::le n 4))
+    (:c::mov-rax n)))
 ;; the registers a Linux syscall takes its arguments in
 (:wat::core::defn :c::mov-r10 [n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat "49ba" (:asm::le n 8)))
@@ -457,10 +485,17 @@
 (:wat::core::defn :c::mov-rdi-rax [] -> :wat::core::String "4889c7")
 (:wat::core::defn :c::mov-rsi-rax [] -> :wat::core::String "4889c6")
 
+;; and nothing at all when the frame is empty, which is most leaf functions
 (:wat::core::defn :c::sub-rsp [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "4881ec" (:asm::le n 4)))
+  (:wat::core::cond
+    ((:wat::core::= n 0) "")
+    ((:c::disp8? n) (:wat::string::concat "4883ec" (:asm::le n 1)))
+    (:else (:wat::string::concat "4881ec" (:asm::le n 4)))))
 (:wat::core::defn :c::add-rsp [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "4881c4" (:asm::le n 4)))
+  (:wat::core::cond
+    ((:wat::core::= n 0) "")
+    ((:c::disp8? n) (:wat::string::concat "4883c4" (:asm::le n 1)))
+    (:else (:wat::string::concat "4881c4" (:asm::le n 4)))))
 
 (:wat::core::defn :c::op-hex [op <- :wat::core::String] -> :wat::core::String
   (:wat::core::cond
@@ -1028,7 +1063,7 @@
                             rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [k (:c::kind a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "int") (:c::emit o (:c::mov-rax (:c::to-int (:c::text pg a) pg))))
+      ((:wat::core::= k "int") (:c::emit o (:c::mov-rax-lit (:c::to-int (:c::text pg a) pg))))
       ((:wat::core::= k "symbol")
         (:wat::core::let [d (:c::lookup env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::if (:wat::core::= d 999999) (:c::fail "name" a pg) (:c::emit o (:c::load d)))))
@@ -1259,21 +1294,40 @@
 ;; `quot` and `rem` are excluded because `idiv` wants its divisor in rcx anyway, and a comparison
 ;; keeps its `setcc`/`movzx` tail -- only the compare itself gets shorter.
 
+(:wat::core::defn :c::imm-only [op <- :wat::core::String n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)]
+    (:wat::core::cond
+      ((:wat::core::= op "+")
+        (:wat::core::if short? (:wat::string::concat "4883c0" (:asm::le n 1))
+                               (:wat::string::concat "4805" (:asm::le n 4))))
+      ((:wat::core::= op "-")
+        (:wat::core::if short? (:wat::string::concat "4883e8" (:asm::le n 1))
+                               (:wat::string::concat "482d" (:asm::le n 4))))
+      ((:wat::core::= op "*")
+        (:wat::core::if short? (:wat::string::concat "486bc0" (:asm::le n 1))
+                               (:wat::string::concat "4869c0" (:asm::le n 4))))
+      ((:c::cmp? op)
+        (:wat::core::if short? (:wat::string::concat "4883f8" (:asm::le n 1))
+                               (:wat::string::concat "483d" (:asm::le n 4))))
+      (:else ""))))
+
 (:wat::core::defn :c::imm-op [op <- :wat::core::String n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [c (:c::imm-only op n)]
+    (:wat::core::if (:wat::core::= c "") ""
+      (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
+
+(:wat::core::defn :c::mem-only [op <- :wat::core::String d <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::= op "+") (:wat::string::concat "4805" (:asm::le n 4)))
-    ((:wat::core::= op "-") (:wat::string::concat "482d" (:asm::le n 4)))
-    ((:wat::core::= op "*") (:wat::string::concat "4869c0" (:asm::le n 4)))
-    ((:c::cmp? op) (:wat::string::concat "483d" (:asm::le n 4) (:c::setcc op) "480fb6c0"))
+    ((:wat::core::= op "+") (:c::rbp-at "480345" "480385" d))
+    ((:wat::core::= op "-") (:c::rbp-at "482b45" "482b85" d))
+    ((:wat::core::= op "*") (:c::rbp-at "480faf45" "480faf85" d))
+    ((:c::cmp? op) (:c::rbp-at "483b45" "483b85" d))
     (:else "")))
 
 (:wat::core::defn :c::mem-op [op <- :wat::core::String d <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond
-    ((:wat::core::= op "+") (:wat::string::concat "480385" (:asm::le d 4)))
-    ((:wat::core::= op "-") (:wat::string::concat "482b85" (:asm::le d 4)))
-    ((:wat::core::= op "*") (:wat::string::concat "480faf85" (:asm::le d 4)))
-    ((:c::cmp? op) (:wat::string::concat "483b85" (:asm::le d 4) (:c::setcc op) "480fb6c0"))
-    (:else "")))
+  (:wat::core::let [c (:c::mem-only op d)]
+    (:wat::core::if (:wat::core::= c "") ""
+      (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
 
 ;; an int literal small enough to be an immediate
 (:wat::core::defn :c::imm32? [n <- :wat::core::i64] -> :wat::core::bool
@@ -1353,12 +1407,11 @@
     (:wat::core::cond
       ((:wat::core::= k "int")
         (:wat::core::let [n (:c::to-int (:c::text pg a) pg)]
-          (:wat::core::if (:c::imm32? n) (:wat::string::concat "483d" (:asm::le n 4)) "")))
+          (:wat::core::if (:c::imm32? n) (:c::imm-only "=" n) "")))
       ((:wat::core::= k "symbol")
         (:wat::core::let [d (:c::lookup env (:c::text pg a)
                               (:wat::core::- (:wat::core::length env) 1))]
-          (:wat::core::if (:wat::core::= d 999999) ""
-            (:wat::string::concat "483b85" (:asm::le d 4)))))
+          (:wat::core::if (:wat::core::= d 999999) "" (:c::mem-only "=" d))))
       (:else ""))))
 
 ;; Is this condition a two-operand comparison of MACHINE WORDS, and therefore branchable?
@@ -1909,7 +1962,10 @@
                               (:wat::core::+ slots 1)))
      o0 (:c::Out :base base :code "" :tail tail-in)
      o1 (:c::emit o0 (:wat::string::concat "55" "4889e5" (:c::sub-rsp frame)))
-     ;; push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (7) = 11: the top of the body
+     ;; the top of the body is wherever the prologue ended -- which is NOT a constant any more,
+     ;; now that `sub rsp` is one byte of displacement when it fits and nothing at all when the
+     ;; frame is empty. It used to be hardcoded as eleven, and the first build after the short
+     ;; forms went in jumped every self tail call into the middle of its own body.
      ;;
      ;; ...unless the function clones. A tail call REUSES the frame, which is sound only while
      ;; the frame is private to this thread -- and `clone` hands a second thread an rbp pointing
@@ -1923,7 +1979,7 @@
      tc (:wat::core::if (:wat::string::contains? (:c::text pg node) "clone")
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n
-                  :target (:wat::core::+ base 11)))
+                  :target (:wat::core::+ base (:c::codelen o1))))
      o2 (:c::seq ks start o1 env pg rt tb 0 tc)]
     (:c::emit o2 "c9c3")))                       ;; leave ; ret
 
