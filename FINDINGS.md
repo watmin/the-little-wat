@@ -10283,6 +10283,61 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh` section 5; `taskset -c 2 perf stat -e cpu_core/instructions/ ./elf/out/loopsum.elf`.
 
 
+### C-154: the four redundancies C-153 named, taken — 26 instructions an iteration to 22
+
+- **Where:** `elf/compile.wat` (`:c::reg-cmp-imm`, `:c::reg-of`, `:c::imm-cmp?`, `:c::reg-to-scr`,
+  `:c::reg-of-name`, `:c::push-but-last`, `:c::tail-store`, `:c::call-user`, `:c::if-cmp`,
+  `:c::fold` and its call site, `:c::expr`).
+- **C-153 named four wasted instructions in one loop body.** Three of them were worth taking and
+  one was not, and the one that was not is the interesting entry.
+- **The comparison with a register on the left.** C-133 taught the RIGHT operand of a binop to
+  come straight from an immediate or the frame; the left one always went through rax, so every
+  `(if (= i 0) ...)` on a parameter cost a `mov` before a `cmp` that could have named the
+  register. `cmp $0x0,%rbx` where there were two instructions. It costs nothing, because
+  `:c::if-cmp` already restores what rax held across a compare-and-branch — and now rax holds it
+  because nothing overwrote it.
+- **The last argument of a self tail call never goes to the stack.** `:c::push-args` pushed every
+  argument and `:c::tail-store` popped them straight back; the last push and the first pop are
+  adjacent, which is a `mov` written as a store and a load, once per iteration of every
+  tail-recursive loop. `:c::push-but-last` leaves it in rax.
+- **The scratch copy comes from the source register.** `mov %r12,%rax ; mov %rax,%r9` is one
+  instruction. Taking it naively made the first of the two **dead** rather than absent, because
+  the caller had already emitted it — so the fix is that **the caller stops emitting it**:
+  `:c::fold` now takes `ar`, the register the accumulator is still in, and the two paths that
+  genuinely need rax load it themselves. That is the difference between 26 instructions an
+  iteration and 22.
+- **And the one that was not worth taking, which is why it is written down.** C-149 tracks what
+  rax holds but only ever SET the field where a `let` binding stored one; extending it to every
+  symbol load looked free. **It fired nowhere.** Every binary came out byte-identical and the
+  compiler executed *more* instructions, purely because its own source had grown. The reason is
+  structural: `:c::emit` clears the field, and any two reads of the same name have an emission
+  between them. It is kept only because `:c::fold`'s `ar` needs `:c::reg-of-name` to ask the
+  question — **as an optimisation it is worth zero, and C-149's tracking was already at its
+  useful limit.**
+- **Measured, minimum of five, pinned to a P-core:**
+
+  | | instructions | cycles |
+  | --- | --- | --- |
+  | `loopsum` (100M iterations, no calls) | 2,600,000,531 -> **2,200,000,488** (-15.4%) | 404,131,657 -> **354,547,663** (-12.3%) |
+  | `fib32` | 80,687,448 -> 79,389,357 (-1.6%) | 22,042,933 -> 21,940,583 (-0.5%) |
+  | the compiler compiling everything | 790,244,709 -> 781,849,361 (-1.1%) | 491,803,160 -> 492,511,199 (+0.1%) |
+
+- **Why the loop gets everything and fib almost nothing:** C-136 gives `rbx`/`r12`/`r13` to the
+  parameters of functions with a self call in TAIL position, and all four of these peepholes fire
+  on an operand that is already in a register. `fib` is not tail-recursive, so its parameters
+  live in the frame and there is no register on the left of anything. **The register allocator
+  decides how much the peepholes are worth**, which is an argument for widening C-136 rather than
+  for more peepholes.
+- **And what fib says next.** The peepholes DO fire in it -- `cmp $0x2,%rbx`, `%r12`, `%r13` --
+  and at the fourth level of inlining it runs out and spills: `mov %rax,-0x18(%rbp)`. That is the
+  spill C-147 predicted and the case NEXT.md item 4 is for, now with a disassembly behind it.
+  **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  140,594 bytes, and the compiled compiler is 568x the interpreter; `elf-run` 25/25, `mem`,
+  `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` section 5.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

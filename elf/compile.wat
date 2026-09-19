@@ -946,6 +946,27 @@
   (:wat::core::cond ((:wat::core::= r 0) "53") ((:wat::core::= r 1) "4154") (:else "4155")))
 (:wat::core::defn :c::reg-pop [r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond ((:wat::core::= r 0) "5b") ((:wat::core::= r 1) "415c") (:else "415d")))
+
+;; `cmp $imm, REG` -- the comparison with a register on the LEFT. C-133 taught the right operand
+;; of a binop to come straight from an immediate or the frame; the left one always went through
+;; rax, so every `(if (= i 0) ...)` on a parameter in a register cost a `mov` before the `cmp`
+;; it did not need. C-153 counted three of them in one loop body.
+(:wat::core::defn :c::reg-cmp-imm [r <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)
+                    pre (:wat::core::cond
+                          ((:wat::core::= r 0) (:wat::core::if short? "4883fb" "4881fb"))
+                          ((:wat::core::= r 1) (:wat::core::if short? "4983fc" "4981fc"))
+                          (:else (:wat::core::if short? "4983fd" "4981fd")))]
+    (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
+
+;; which register this operand already lives in, or -1
+(:wat::core::defn :c::reg-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "symbol") -1
+    (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))))
+
+(:wat::core::defn :c::imm-cmp? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
+                   (:c::imm32? (:c::to-int (:c::text pg a) pg))))
 ;; `mov <reg>, rax` -- a `let` binding landing in a register instead of a frame slot
 (:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4") (:else "4989c5")))
@@ -1345,9 +1366,31 @@
   (:wat::core::if (:wat::core::>= k n) o
     (:wat::core::let [i (:wat::core::- (:wat::core::- n 1) k)]
       (:c::tail-store (:wat::core::+ k 1) n
-        (:c::emit o (:wat::core::if (:wat::core::< i nr) (:c::reg-pop i)
-                      (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))))
+        (:c::emit o
+          ;; **k = 0 is the LAST argument, and it never went to the stack.** It used to be
+          ;; pushed by `:c::push-args` and popped back by the very next instruction -- a `mov`
+          ;; written as a store and a load, once per iteration of every tail-recursive loop
+          ;; (C-153 found the pair adjacent in `loopsum`). `:c::push-but-last` leaves it in rax.
+          (:wat::core::if (:wat::core::= k 0)
+            (:wat::core::if (:wat::core::< i nr) (:c::reg-mov-from i)
+              (:c::store (:wat::core::+ 16 (:wat::core::* 8 k))))
+            (:wat::core::if (:wat::core::< i nr) (:c::reg-pop i)
+              (:wat::string::concat "58" (:c::store (:wat::core::+ 16 (:wat::core::* 8 k)))))))
         nr))))
+
+;; every argument but the last pushed; the last computed into rax and LEFT there, because the
+;; only thing that reads it is `:c::tail-store`'s first store
+(:wat::core::defn :c::push-but-last [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                     pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                     slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
+    (:wat::core::if (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
+      (:c::share (:wat::core::nth ks i) env pg
+        (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)))
+      (:c::push-but-last ks (:wat::core::+ i 1)
+        (:c::emit (:c::share (:wat::core::nth ks i)  env pg
+                    (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+        env pg rt tb slot))))
 
 ;; ---------------------------------------------------------------- expressions
 
@@ -1362,9 +1405,15 @@
           (:wat::core::cond
             ;; already there, and nothing has been emitted since it was put there
             ((:wat::core::= (:c::Out/rax o) (:c::text pg a)) o)
-            ((:wat::core::>= r 0) (:c::emit o (:c::reg-mov-to r)))
+            ;; **and now it IS there, so say so.** C-149 tracked what rax held but only ever
+            ;; SET the field where a `let` binding stored one, so a name loaded from a register
+            ;; or a frame slot was reloaded the next time it was read. Every load is a fact
+            ;; about rax and every `:c::emit` after it clears the field again, which is what
+            ;; keeps this honest across a branch.
+            ((:wat::core::>= r 0)
+              (:wat::core::assoc (:c::emit o (:c::reg-mov-to r)) :rax (:c::text pg a)))
             ((:wat::core::= d 999999) (:c::fail "name" a pg))
-            (:else (:c::emit o (:c::load d))))))
+            (:else (:wat::core::assoc (:c::emit o (:c::load d)) :rax (:c::text pg a))))))
       ;; nil is a machine zero and a bool is 0 or 1, which is already what a comparison leaves
       ;; in rax -- so both are literals, and only `println` has to know which is which
       ((:wat::core::= k "nil") (:c::emit o (:c::mov-rax 0)))
@@ -1600,7 +1649,17 @@
                 o3)))
           ((:wat::core::not (:wat::core::= op ""))
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "operator arity" a pg)
-              (:c::fold op ks 2 (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) env pg rt tb slot)))
+              (:wat::core::let
+                [ar (:wat::core::if
+                      ;; already in rax and nothing emitted since: `:c::expr` will emit NOTHING,
+                      ;; which beats handing the register down and loading it again later
+                      (:wat::core::= (:c::Out/rax o) (:c::text pg (:wat::core::nth ks 1))) -1
+                      (:c::reg-of (:wat::core::nth ks 1) env pg))]
+                (:wat::core::if (:wat::core::>= ar 0)
+                  (:c::fold op ks 2 o env pg rt tb slot ar)
+                  (:c::fold op ks 2
+                    (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                    env pg rt tb slot -1)))))
           ((:wat::core::>= (:c::fn-addr pg head 0) 0) (:c::call-user ks head o env pg rt tb slot tc))
           (:else (:c::fail "call" a pg)))))))
 
@@ -1629,6 +1688,28 @@
 (:wat::core::defn :c::scr-save [r <- :wat::core::i64] -> :wat::core::String     ;; mov rN, rax
   (:wat::core::cond ((:wat::core::= r 0) "4989c0") ((:wat::core::= r 1) "4989c1")
                     ((:wat::core::= r 2) "4989c2") (:else "4989c3")))
+;; `mov SCRATCH, CALLEE-SAVED` -- the scratch copy taken from where rax got it, rather than from
+;; rax. `:c::expr` puts a register-resident name into rax and the scratch pool immediately copies
+;; rax onward, so the pair reads `mov %r12,%rax ; mov %rax,%r9` where one instruction does it and
+;; leaves rax alone (C-153 counted it in `loopsum`). Source rbx/r12/r13, destination r8..r11.
+(:wat::core::defn :c::reg-to-scr [lr <- :wat::core::i64 r <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= lr 0)
+      (:wat::core::cond ((:wat::core::= r 0) "4989d8") ((:wat::core::= r 1) "4989d9")
+                        ((:wat::core::= r 2) "4989da") (:else "4989db")))
+    ((:wat::core::= lr 1)
+      (:wat::core::cond ((:wat::core::= r 0) "4d89e0") ((:wat::core::= r 1) "4d89e1")
+                        ((:wat::core::= r 2) "4d89e2") (:else "4d89e3")))
+    (:else
+      (:wat::core::cond ((:wat::core::= r 0) "4d89e8") ((:wat::core::= r 1) "4d89e9")
+                        ((:wat::core::= r 2) "4d89ea") (:else "4d89eb")))))
+
+;; the register a tracked NAME lives in, or -1 -- including for the empty name, which is what
+;; `:c::Out/rax` holds when it knows nothing
+(:wat::core::defn :c::reg-of-name [name <- :wat::core::String env <- :c::Env] -> :wat::core::i64
+  (:wat::core::if (:wat::core::= name "") -1
+    (:c::lookup-reg env name (:wat::core::- (:wat::core::length env) 1))))
+
 (:wat::core::defn :c::scr-back [r <- :wat::core::i64] -> :wat::core::String     ;; mov rax, rN
   (:wat::core::cond ((:wat::core::= r 0) "4c89c0") ((:wat::core::= r 1) "4c89c8")
                     ((:wat::core::= r 2) "4c89d0") (:else "4c89d8")))
@@ -1831,10 +1912,21 @@
       (:asm::le (:wat::core::- (:c::at-ovf rt)
                   (:wat::core::+ (:c::here o) 6)) 4)))))
 
+;; **`ar` is the register the accumulator is still sitting in, or -1 for "it is in rax".**
+;; The first operand used to be materialised into rax before the fold began, and the scratch
+;; path's very next instruction copied rax onward -- `mov %r12,%rax ; mov %rax,%r9`. Copying
+;; from the source instead only turned the first of those into a DEAD load, because the caller
+;; had already emitted it. So the caller stops emitting it and hands the register down; the two
+;; paths that genuinely need rax load it themselves, which is one instruction in exactly the
+;; cases that need one. After the first operand is consumed the accumulator is in rax and `ar`
+;; is -1 forever after.
 (:wat::core::defn :c::fold [op <- :wat::core::String ks <- :c::Kids i <- :wat::core::i64
                             o <- :c::Out env <- :c::Env pg <- :c::Prog
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
-  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
+                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64
+                            ar <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
+    ;; a one-operand fold never ran a step, so the value is still where it started
+    (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
     (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg)
                       r (:c::scratch-need (:wat::core::nth ks i) env pg)
                       scr? (:wat::core::and (:wat::core::= fast "")
@@ -1843,24 +1935,37 @@
                                                 (:wat::core::< r (:c::nscratch)))))]
       (:wat::core::cond
         ((:wat::core::not= fast "")
-          (:c::fold op ks (:wat::core::+ i 1)
-            (:c::ovf-check op (:c::emit o fast) rt) env pg rt tb slot))
+          (:wat::core::let [o0 (:wat::core::if (:wat::core::>= ar 0)
+                                 (:c::emit o (:c::reg-mov-to ar)) o)]
+            (:c::fold op ks (:wat::core::+ i 1)
+              (:c::ovf-check op (:c::emit o0 fast) rt) env pg rt tb slot -1)))
         ;; the accumulator waits in a register instead of on the stack
         (scr?
           (:wat::core::let
-            [s1 (:c::emit o (:c::scr-save r))
+            [lr (:wat::core::if (:wat::core::>= ar 0) ar
+                  (:c::reg-of-name (:c::Out/rax o) env))
+             s1 (:wat::core::cond
+                  ;; never loaded into rax at all: copy straight from the parameter's register
+                  ((:wat::core::>= ar 0) (:c::emit o (:c::reg-to-scr lr r)))
+                  ;; rax was copied out of a register and nothing has been emitted since, so the
+                  ;; scratch copy comes from the SOURCE and rax keeps its value -- which is why
+                  ;; the tracking is put back rather than cleared
+                  ((:wat::core::>= lr 0)
+                    (:wat::core::assoc (:c::emit o (:c::reg-to-scr lr r)) :rax (:c::Out/rax o)))
+                  (:else (:c::emit o (:c::scr-save r))))
              s2 (:c::expr (:wat::core::nth ks i) s1 env pg rt tb slot (:c::no-tail))]
             (:c::fold op ks (:wat::core::+ i 1)
               (:c::ovf-check op (:c::emit s2 (:c::scr-op op r)) rt)
-              env pg rt tb slot)))
+              env pg rt tb slot -1)))
         (:else
           (:wat::core::let
-          [o1 (:c::emit o "50")                               ;; push rax
+          [o0 (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
+           o1 (:c::emit o0 "50")                              ;; push rax
            o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
            o3 (:c::emit o2 "4889c1")                          ;; mov rcx, rax
            o4 (:c::emit o3 "58")                              ;; pop rax
            o5 (:c::arith-emit op o4 rt)]
-          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot)))))))
+          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1)))))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
@@ -1938,8 +2043,17 @@
                               slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let
     [cks (:c::kidsof pg (:wat::core::nth ks 1))
-     o1 (:c::expr (:wat::core::nth cks 1) o env pg rt tb slot (:c::no-tail))
-     fast (:c::cmp-only (:wat::core::nth cks 2) env pg)
+     ;; **both operands in place: nothing is loaded at all.** A register on the left and a
+     ;; literal on the right is one instruction, and rax keeps whatever it was holding -- which
+     ;; the `o3k`/`o6k` restores below then carry into both arms, exactly as they already do for
+     ;; the right-operand fast path.
+     lr (:c::reg-of (:wat::core::nth cks 1) env pg)
+     both? (:wat::core::and (:wat::core::>= lr 0) (:c::imm-cmp? (:wat::core::nth cks 2) pg))
+     o1 (:wat::core::if both? o
+          (:c::expr (:wat::core::nth cks 1) o env pg rt tb slot (:c::no-tail)))
+     fast (:wat::core::if both?
+            (:c::reg-cmp-imm lr (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg))
+            (:c::cmp-only (:wat::core::nth cks 2) env pg))
      o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
           (:wat::core::let
             [p1 (:c::emit o1 "50")
@@ -2555,15 +2669,16 @@
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
                                  slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
-  (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
-                    o1 (:c::push-args ks 1 o env pg rt tb slot)]
+  (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)]
     (:wat::core::if (:c::tail-call? tc head n)
       ;; a self call in tail position: overwrite the incoming arguments and go round again, on
       ;; the SAME frame, so a tail-recursive loop runs in constant stack
-      (:wat::core::let [o2 (:c::tail-store 0 n o1 (:c::TC/nregs tc))]
+      (:wat::core::let [o1 (:c::push-but-last ks 1 o env pg rt tb slot)
+                        o2 (:c::tail-store 0 n o1 (:c::TC/nregs tc))]
         (:c::emit o2 (:wat::string::concat "e9"
           (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o2) 5)) 4))))
-      (:wat::core::let [o2 (:c::call o1 (:c::fn-addr pg head 0))]
+      (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
+                        o2 (:c::call o1 (:c::fn-addr pg head 0))]
         (:wat::core::if (:wat::core::= n 0) o2
           (:c::emit o2 (:c::add-rsp (:wat::core::* 8 n))))))))
 

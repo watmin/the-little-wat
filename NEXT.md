@@ -43,14 +43,28 @@ against gcc's 6** — and only 1.34x the cycles, because that loop is latency-bo
 machine hides the rest. It will stop hiding it on a throughput-bound loop. The fat is named
 instruction by instruction in C-153 and each item is a peephole:
 
-0a. **`cmp` against a register still routes the left operand through rax.** `mov %rbx,%rax` then
+**All four were taken in C-154 — three were worth it and one was worth exactly zero, which is
+why it is written down.** `loopsum` went 26 instructions an iteration to 22: **-15.4%
+instructions and -12.3% cycles**. `fib32` moved -1.6%/-0.5% and the compiler -1.1%/+0.1%,
+because C-136 gives registers only to functions with a self call in tail position and **every
+one of these peepholes fires on an operand that is already in a register** — so the register
+allocator decides what they are worth, which argues for widening C-136 rather than for more
+peepholes.
+
+0a. ~~**`cmp` against a register still routes the left operand through rax.**~~ **DONE.** `mov %rbx,%rax` then
    `cmp $0x0,%rax` where `test %rbx,%rbx` is one instruction and one byte shorter. C-133 took the
    RIGHT operand of a binop from a register or the frame and never took the left.
-0b. **An adjacent `push X` / `pop Y` is a `mov`.** `:c::tail-store` emits exactly that pair for
+0b. ~~**An adjacent `push X` / `pop Y` is a `mov`.**~~ **DONE.** `:c::tail-store` emits exactly that pair for
    the last argument of every self tail call — a store and a load per iteration.
-0c. **The scratch pool routes through rax** to reach a register it could be given directly:
+0c. ~~**The scratch pool routes through rax**~~ **DONE**, and not the obvious way: copying from
+   the source register only made the caller's load DEAD, so `:c::fold` now takes the accumulator's
+   register and the two paths that need rax load it themselves. to reach a register it could be given directly:
    `mov %r12,%rax` then `mov %rax,%r9`.
-0d. **C-149's rax tracking clears at a join** and never learns what both paths agree on, so
+0d. ~~**C-149's rax tracking clears at a join**~~ **STRUCK: it fires nowhere.** Extending it to
+   every symbol load left every binary byte-identical, because `:c::emit` clears the field and
+   any two reads of the same name have an emission between them. Kept only because `:c::fold`
+   needs `:c::reg-of-name` to ask the question. C-149's tracking was already at its useful limit.
+   (original text:) **C-149's rax tracking clears at a join** and never learns what both paths agree on, so
    `mov %rbx,%rax` is emitted on both sides of a branch that did not change rbx.
 
 
