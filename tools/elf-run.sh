@@ -123,6 +123,20 @@ refuses () {   # driver, needle, what it proves
     fail=1
   fi
 }
+# i64 TRAPS, and a compiled program must trap too -- both sides stop, and say why (F-125)
+echo
+echo "== and the arithmetic traps, both ways =="
+got=$(./elf/out/overflow.elf 2>&1); rc=$?
+int=$("$WAT" elf/bad/overflow.wat 2>&1); irc=$?
+if printf '%s' "$got" | grep -qF 'i64 overflow' && [ $rc -ne 0 ] \
+   && printf '%s' "$int" | grep -qF 'IntegerOverflow'; then
+  echo "  (+ 9223372036854775807 1) stops both ways -- compiled exit $rc, interpreted refuses"
+else
+  echo "  FAIL: overflow did not stop both ways (compiled rc=$rc irc=$irc)"
+  printf '%s\n' "$got" | head -2 | sed 's/^/      /'
+  fail=1
+fi
+
 refuses elf/refuse.wat          'cannot compile call: (wat.core/str 10)' \
         "refused elf/bad/unsupported.wat, naming the form:    (wat.core/str 10)"
 refuses elf/refuse-nonascii.wat 'not encodable' \

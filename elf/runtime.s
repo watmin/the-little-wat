@@ -31,6 +31,36 @@ flush:                           # write whatever is buffered, and empty it
 1:  ret
 
 
+
+# ---- i64 traps, so the compiled language must trap too.
+#
+# wat's `+` answers `IntegerOverflow: ... does not fit in 64 bits` and stops the program. This
+# compiler emitted a bare `add rax, rcx` and wrapped -- `(+ 9223372036854775807 1)` printed
+# -9223372036854775808 and exited 0 where the interpreter died. **A wrong answer, not a
+# refusal**, and nothing in forty programs overflowed, so nothing caught it (F-125).
+#
+# Every `+`, `-` and `*` now carries `jo` to here. The branch is never taken and predicts as
+# such; the cost is six bytes at each arithmetic site and nothing at run time.
+ovf:                             # signed overflow: say which, and stop
+    call flush                   # whatever stdout had buffered is still worth having
+    subq $32, %rsp
+    movabsq $0x343669203a746177, %rax    # "wat: i64"
+    movq %rax, (%rsp)
+    movabsq $0x6f6c667265766f20, %rax    # " overflo"
+    movq %rax, 8(%rsp)
+    movl $0x000a77, %eax                 # "w\n"
+    movl %eax, 16(%rsp)
+    movq $2, %rdi
+    movq %rsp, %rsi
+    movq $18, %rdx
+    movq $1, %rax
+    syscall
+    movq $70, %rdi
+    movq $60, %rax
+    syscall
+
+
+
 buf_put:                         # rsi = bytes, rdx = count
     movq (%r14), %rax            # how much is already in the buffer
     leaq (%rax,%rdx), %rcx
@@ -54,6 +84,7 @@ buf_put:                         # rsi = bytes, rdx = count
     movq %rdx, %rcx
     rep movsb
     ret
+
 
 # ---- r14 = [used:8][heap_limit:8][4096 bytes] ;  r15 = heap bump pointer
 #
@@ -92,6 +123,7 @@ print_i64:                       # rax = value
     ret
 
 
+
 print_bool:                      # rax = 0 or 1
     push %rbp
     movq %rsp, %rbp
@@ -109,6 +141,7 @@ print_bool:                      # rax = 0 or 1
     call buf_put
     leave
     ret
+
 
 
 oom:                             # no memory left: say so on stderr rather than fault
@@ -130,6 +163,7 @@ oom:                             # no memory left: say so on stderr rather than 
     syscall
 
 
+
 die:                             # rax = String  ->  it on stderr, then exit 70
     movq %rax, %r10
     call flush                   # anything stdout had buffered is still worth having
@@ -148,6 +182,7 @@ die:                             # rax = String  ->  it on stderr, then exit 70
     movq $70, %rdi
     movq $60, %rax
     syscall
+
 
 
 print_str:                       # rax = string, rendered as EDN
@@ -208,6 +243,7 @@ print_str:                       # rax = string, rendered as EDN
     ret
 
 
+
 # `str_cat(rax = a, rcx = b) -> rax`: the two lengths added, a header written at the heap top,
 # both payloads copied, r15 bumped past the whole block. The block is the next power of two at
 # or above `16 + len`, which is what gives the in-place path above room to grow into. The slack
@@ -241,6 +277,7 @@ str_cat:                         # rax = a, rcx = b  ->  rax
     rep movsb                    # then b's
     movq %rdx, %rax
     ret
+
 
 
 # `str_cat_own` is `concat` where the compiler has proved the left operand is a last use -- the
@@ -279,6 +316,7 @@ str_cat_own:                     # rax = a (proved dead after this), rcx = b  ->
     {disp32} jmp str_cat
 
 
+
 # ---- the string verbs a reader needs. All of them work on [rc:8][len:8][bytes], so none of them
 # needs to know anything the rest of the runtime does not already know.
 
@@ -305,6 +343,7 @@ str_subs:                        # rax = s, rcx = from, rdx = to  ->  rax = a ne
     rep movsb
     movq %r10, %rax
     ret
+
 
 
 i64_to_str:                      # rax = n  ->  rax = a new String
@@ -352,6 +391,7 @@ i64_to_str:                      # rax = n  ->  rax = a new String
     ret
 
 
+
 str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
     movq (%rcx), %r8
     cmpq (%rax), %r8
@@ -367,6 +407,7 @@ str_starts:                      # rax = s, rcx = prefix  ->  rax = 0 or 1
     ret
 9:  xorq %rax, %rax
     ret
+
 
 
 str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
@@ -396,6 +437,7 @@ str_contains:                    # rax = s, rcx = needle  ->  rax = 0 or 1
     ret
 
 
+
 str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
     movq (%rax), %r8
     cmpq (%rcx), %r8             # different lengths cannot be equal
@@ -411,6 +453,7 @@ str_eq:                          # rax = a, rcx = b  ->  rax = 0 or 1
     ret
 9:  xorq %rax, %rax
     ret
+
 
 
 # ---- every heap object carries a reference count in the word BELOW the pointer, so that all the
@@ -437,6 +480,7 @@ vec_new:                         # rax = count  ->  rax = record, slots uninitia
     movq %r11, %r15
     movq %r10, %rax
     ret
+
 
 
 # ---- A VECTOR is one of two things, and the word at [p-16] says which.
@@ -475,6 +519,7 @@ varr_new:                        # rax = count  ->  rax = array-arm vector, slot
     ret
 
 
+
 # A tree node is thirty-two slots, and is itself an ordinary `[rc][count][slot]...` object --
 # the same shape a record has, so nothing new has to know how to read one.
 node_new:                        # -> rax = a node of 32 zeroed slots
@@ -495,6 +540,7 @@ node_new:                        # -> rax = a node of 32 zeroed slots
     ret
 
 
+
 node_copy:                       # rax = node  ->  rax = a fresh copy of it
     push %rbx
     movq %rax, %rbx
@@ -505,6 +551,7 @@ node_copy:                       # rax = node  ->  rax = a fresh copy of it
     rep movsq
     pop %rbx
     ret
+
 
 
 # `shift` is 5 per level below the leaves, so the walk is one masked shift a level: at most
@@ -539,6 +586,7 @@ tree_get:                        # rax = tree, rcx = index  ->  rax = element
     pop %rsi
     pop %rdx
     ret
+
 
 
 # Persistent append: copy the path from the root to the new leaf and share everything else.
@@ -605,6 +653,7 @@ tree_push:                       # rax = tree, rcx = element  ->  rax = a new tr
     ret
 
 
+
 # The one-way promotion. It happens once per vector, at the threshold, so the cost of walking
 # the array into the tree is paid against every append that follows it.
 tree_from_arr:                   # rax = array-arm vector  ->  rax = the same elements, as a tree
@@ -640,6 +689,7 @@ tree_from_arr:                   # rax = array-arm vector  ->  rax = the same el
     ret
 
 
+
 # `vec_conj` is the SHARED path -- the compiler could not prove the container dead, so the value
 # must survive. That is the path F-124 measured as quadratic, and the one that promotes.
 vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer vector
@@ -672,6 +722,7 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
     movq %r11, %r15
     movq %r9, %rax
     ret
+
 
 
 # `vec_conj_own` is `conj` where the COMPILER has proved the container is a last use -- no later
@@ -743,6 +794,7 @@ vec_conj_own:                    # rax = vector (proved dead after this), rcx = 
     ret
 
 
+
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     push %rbx                    # rbx, r12 and r13 hold the caller's parameters now
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
@@ -766,6 +818,7 @@ slot_set:                        # rax = vector/record, rcx = index, rdx = value
     movq %rbx, 8(%rax,%r10,8)
     pop %rbx
     ret
+
 
 
 # ---- the last mile: a file, as bytes.
@@ -793,12 +846,14 @@ hexval:                          # rax = one ascii hex digit  ->  rax = 0..15
 1:  ret
 
 
+
 hexchar:                         # rax = 0..15  ->  al = one ascii hex digit
     cmpq $10, %rax
     jb 1f
     addq $39, %rax
 1:  addq $48, %rax
     ret
+
 
 
 prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes written
@@ -851,6 +906,7 @@ prim_write_hex:                  # rax = path, rcx = hex  ->  rax = bytes writte
     pop %r12
     pop %rbx
     ret
+
 
 
 prim_read_hex:                   # rax = path  ->  rax = a String of hex
@@ -921,6 +977,7 @@ prim_read_hex:                   # rax = path  ->  rax = a String of hex
 5:  movq %r10, %rax
     pop %r12
     ret
+
 
 
 io_read_file:                    # rax = path  ->  rax = a String of the file's bytes
