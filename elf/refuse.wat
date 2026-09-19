@@ -167,7 +167,7 @@
 
 ;; ---------------------------------------------------------------- the runtime
 ;;
-;; Ten routines, 782 bytes, assembled as ONE block so they can call each other -- which is why
+;; Eleven routines, 866 bytes, assembled as ONE block so they can call each other -- which is why
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
@@ -177,17 +177,18 @@
   (:wat::string::concat
     "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
     "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e84d010000c9c3"))
+    "85c0740648ffcec6062d488d55ff4829f248ffc2e855010000c9c3"))
 
 ;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
 ;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
 ;; r10 carries the result because rax is the copy loops' scratch byte.
 (:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
   (:wat::string::concat
-    "4c8b004c8b09488d5008488d49084c89c04c01c84883c00f4883e0f84d89"
-    "fb4901c34d3b5e087605e8310200004c89c04c01c84989074d89fa498d7f"
-    "084d89df4889d64d89c34d85db740f8a06880748ffc648ffc749ffcbebec"
-    "4889ce4d89cb4d85db740f8a06880748ffc648ffc749ffcbebec4c89d0c3"))
+    "4c8b004c8b09488d5008488d49084c89c04c01c84883c0174883e0f84d89"
+    "fb4901c34d3b5e087605e88502000049c707010000004d8d57084c89c04c"
+    "01c8498902498d7a084d89df4889d64d89c34d85db740f8a06880748ffc6"
+    "48ffc749ffcbebec4889ce4d89cb4d85db740f8a06880748ffc648ffc749"
+    "ffcbebec4c89d0c3"))
 
 ;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
 ;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
@@ -231,17 +232,28 @@
 ;; them uninitialised because the caller is about to fill every one.
 (:wat::core::defn :c::rt-vec-new [] -> :wat::core::String
   (:wat::string::concat
-    "488d0cc5080000004d89fb4901cb4d3b5e087605e8900000004d89fa4989"
-    "074d89df4c89d0c3"))
+    "488d0cc5100000004d89fb4901cb4d3b5e087605e8dc00000049c7070100"
+    "00004d8d57084989024d89df4c89d0c3"))
 
 ;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
 ;; the end. `rep movsq` moves the old slots in three bytes of code. This is `conj`, and it is
 ;; O(n) every time, which is the same thing the interpreter's Vector does (F-023).
+;; `vec_conj_own`, 52 bytes -- `conj` where the compiler has PROVED the container is a last use.
+;; That plus a reference count of 1 (never stored anywhere durable) plus being the top of the
+;; heap is enough to extend in place, which turns an accumulator loop from O(n^2) into O(n). It
+;; is Rust's `Vec::push` and Clojure's transient, assembled from the two halves neither wat nor
+;; this compiler had alone: the count rules out aliases, last-use rules out later reads. Any of
+;; the three tests failing falls through to the copying `vec_conj` below.
+(:wat::core::defn :c::rt-vec-conj-own [] -> :wat::core::String
+  (:wat::string::concat
+    "488378f801752d4c8b004a8d54c0084c39fa75204d89fb4983c3084d3b5e"
+    "087605e8a100000049890f4d89df498d5001488910c3"))
+
 (:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
   (:wat::string::concat
-    "4989ca4c8b004a8d14c5100000004d89fb4901d34d3b5e087605e8640000"
-    "004d89f9498d5001498917498d7f08488d70084c89c1f348a54c89174d89"
-    "df4c89c8c3"))
+    "4989ca4c8b004a8d14c5180000004d89fb4901d34d3b5e087605e8740000"
+    "0049c707010000004d8d4f08498d5001498911498d7908488d70084c89c1"
+    "f348a54c89174d89df4c89c8c3"))
 
 ;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax`, 49 bytes: a copy with one slot
 ;; replaced. This is `assoc`, for a record field and a vector index alike, since they are the
@@ -249,9 +261,9 @@
 ;; a new one.
 (:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
   (:wat::string::concat
-    "4c8b004d89fb4e8d14c5080000004d01d34d3b5e087605e8260000004d89"
-    "f94d8907498d7f08488d70084989ca4889d34c89c1f348a54d89df4c89c8"
-    "4a895cd008c3"))
+    "4c8b004d89fb4e8d14c5100000004d01d34d3b5e087605e82e00000049c7"
+    "07010000004d8d4f084d8901498d7908488d70084989ca4889d34c89c1f3"
+    "48a54d89df4c89c84a895cd008c3"))
 
 ;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
 ;; `[r14+8]` BEFORE it writes anything, and jumps here when it will not fit: flush whatever
@@ -259,14 +271,15 @@
 ;; between a compiler and a demo -- running out of memory should be a sentence, not a signal.
 (:wat::core::defn :c::rt-oom [] -> :wat::core::String
   (:wat::string::concat
-    "e82effffff4883ec2048b87761743a206865614889042448b87020657868"
+    "e8e2feffff4883ec2048b87761743a206865614889042448b87020657868"
     "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
     "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
 (:wat::core::defn :c::runtime [] -> :wat::core::String
   (:wat::string::concat (:c::rt-print-i64) (:c::rt-str-cat) (:c::rt-print-str)
                         (:c::rt-print-bool) (:c::rt-buf-put) (:c::rt-flush)
-                        (:c::rt-vec-new) (:c::rt-vec-conj) (:c::rt-slot-set) (:c::rt-oom)))
+                        (:c::rt-vec-new) (:c::rt-vec-conj-own) (:c::rt-vec-conj)
+                        (:c::rt-slot-set) (:c::rt-oom)))
 
 ;; how many bytes a hex string is
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -286,8 +299,10 @@
   (:wat::core::+ (:c::at-put rt) (:c::hexlen (:c::rt-buf-put))))
 (:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
-(:wat::core::defn :c::at-vconj [rt <- :wat::core::i64] -> :wat::core::i64
+(:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-vnew rt) (:c::hexlen (:c::rt-vec-new))))
+(:wat::core::defn :c::at-vconj [rt <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::at-vconj-own rt) (:c::hexlen (:c::rt-vec-conj-own))))
 (:wat::core::defn :c::at-slot [rt <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::at-vconj rt) (:c::hexlen (:c::rt-vec-conj))))
 
@@ -534,7 +549,8 @@
 ;; everything the compiler knows about the program it is compiling, threaded as one value so
 ;; that adding a table does not mean another parameter on every function
 (:wat::core::defrecord :c::Prog
-  [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases])
+  [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
+   linear <- (:wat::core::Vector :- [:wat::core::String])])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
 ;; the part before the LAST slash names a record. Scanning from the end is the only way to find
@@ -567,7 +583,8 @@
 (:wat::core::defn :c::empty-prog [] -> :c::Prog
   (:c::Prog :fns (:wat::core::Vector :- [:c::Fn])
             :recs (:wat::core::Vector :- [:c::Rec])
-            :aliases (:wat::core::Vector :- [:c::Alias])))
+            :aliases (:wat::core::Vector :- [:c::Alias])
+            :linear (:wat::core::Vector :- [:wat::core::String])))
 
 (:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let [v (:c::Prog/fns pg)]
@@ -760,9 +777,12 @@
      addr (:wat::core::+ tb (:wat::core::/ (:wat::string::length (:c::Out/tail o)) 2))
      pad (:wat::core::rem (:wat::core::- 8 (:wat::core::rem n 8)) 8)
      o1 (:wat::core::assoc o :tail
-          (:wat::string::concat (:c::Out/tail o) (:asm::le n 8) (:asm::ascii text 0 "")
-            (:c::zeros pad "")))]
-    (:c::emit o1 (:c::mov-rax addr))))
+          ;; a reference count of ZERO in front of it. Every heap object carries its count at
+          ;; [p-8] and starts at 1; a literal lives in the read-only segment and must never be
+          ;; mistaken for a unique heap object, so it gets a count no allocation can produce.
+          (:wat::string::concat (:c::Out/tail o) (:asm::le 0 8) (:asm::le n 8)
+            (:asm::ascii text 0 "") (:c::zeros pad "")))]
+    (:c::emit o1 (:c::mov-rax (:wat::core::+ addr 8)))))
 
 ;; ---------------------------------------------------------------- frame size
 ;;
@@ -954,8 +974,15 @@
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a)
               (:wat::core::let
                 [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
-                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58")) (:c::at-vconj rt)))))
+                 o2 (:c::share (:wat::core::nth ks 2) env pg
+                      (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)))
+                 ;; when the container is a parameter this function reads at most once on every
+                 ;; path, nothing can observe a change to it afterwards -- so the runtime is
+                 ;; allowed to try extending it in place instead of copying
+                 own? (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1)) "symbol")
+                        (:c::linear? pg (:wat::core::ast->source (:wat::core::nth ks 1)) 0))]
+                (:c::call (:c::emit o2 (:wat::string::concat "4889c1" "58"))
+                  (:wat::core::if own? (:c::at-vconj-own rt) (:c::at-vconj rt))))))
           ((:c::assoc? head) (:c::assoc-form ks a o env pg rt tb slot))
           ;; a record constructor, and a record field read -- the two forms `defrecord` makes
           ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) head 0) 0)
@@ -1018,6 +1045,98 @@
        o7 (:c::expr (:wat::core::nth ks 3) o6 env pg rt tb slot tc)]
       (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4)))))
 
+;; ---------------------------------------------------------------- last use
+;;
+;; **A reference count of 1 is not enough to mutate in place, and that is the trap.** In
+;; `(do (conj acc 1) (nth acc 0))` the slot holding `acc` is the only reference -- count 1 -- and
+;; mutating would still be wrong, because `conj` is pure and `acc` is read afterwards. Rust
+;; escapes this because `v.push(x)` takes `&mut v`, which makes the old value unreachable by
+;; construction; a pure `conj` has no such guarantee.
+;;
+;; So in-place needs two proofs: the count rules out ALIASES, and this rules out LATER READS.
+;;
+;; `:c::occ` counts how many times a name is read on the WORST path through a body -- the two
+;; arms of an `if` are alternatives, so they are maxed rather than summed, while everything else
+;; is sequential and sums. A parameter read at most once on every path is read at most once,
+;; full stop, so any read of it is the last one. Over-counting is safe: it only declines the
+;; optimisation.
+
+(:wat::core::defn :c::occ [a <- :wat::WatAST name <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a) "symbol")
+      (:wat::core::if (:wat::core::= (:wat::core::ast->source a) name) 1 0))
+    ((:wat::core::= (:c::kind a) "vector") (:c::occ-sum (:wat::core::ast->children a) 0 name 0))
+    ((:wat::core::not= (:c::kind a) "list") 0)
+    (:else
+      (:wat::core::let [ks (:wat::core::ast->children a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
+          (:wat::core::let [head (:wat::core::ast->source (:wat::core::nth ks 0))]
+            (:wat::core::cond
+              ;; the two arms of an `if` are alternatives: the worst path takes one of them
+              ((:wat::core::and (:c::if? head) (:wat::core::= (:wat::core::length ks) 4))
+                (:wat::core::+ (:c::occ (:wat::core::nth ks 1) name)
+                  (:c::imax (:c::occ (:wat::core::nth ks 2) name)
+                            (:c::occ (:wat::core::nth ks 3) name))))
+              ;; a `cond` is the same idea, but every test up to the taken clause runs, so the
+              ;; tests are summed and only the bodies are maxed -- an over-count, which is safe
+              ((:c::cond? head)
+                (:wat::core::+ (:c::occ-tests ks 1 name 0) (:c::occ-bodies ks 1 name 0)))
+              (:else (:c::occ-sum ks 0 name 0)))))))))
+
+(:wat::core::defn :c::occ-sum [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                               acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::occ-sum ks (:wat::core::+ i 1) name
+      (:wat::core::+ acc (:c::occ (:wat::core::nth ks i) name)))))
+
+(:wat::core::defn :c::occ-tests [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                 acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:wat::core::let [cks (:wat::core::ast->children (:wat::core::nth ks i))]
+      (:c::occ-tests ks (:wat::core::+ i 1) name
+        (:wat::core::+ acc (:wat::core::if (:wat::core::= (:wat::core::length cks) 0) 0
+                             (:c::occ (:wat::core::nth cks 0) name)))))))
+
+(:wat::core::defn :c::occ-bodies [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                  best <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
+    (:wat::core::let [cks (:wat::core::ast->children (:wat::core::nth ks i))]
+      (:c::occ-bodies ks (:wat::core::+ i 1) name
+        (:c::imax best (:c::occ-sum cks 1 name 0))))))
+
+;; the parameters of this function that are read at most once on every path
+(:wat::core::defn :c::linear-of [pv <- :c::Kids i <- :wat::core::i64 ks <- :c::Kids
+                                 start <- :wat::core::i64
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) acc
+    (:wat::core::let [nm (:wat::core::ast->source (:wat::core::nth pv i))]
+      (:c::linear-of pv (:wat::core::+ i 3) ks start
+        (:wat::core::if (:wat::core::<= (:c::occ-sum ks start nm 0) 1)
+          (:wat::core::conj acc nm) acc)))))
+
+(:wat::core::defn :c::linear? [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length (:c::Prog/linear pg))) false)
+    ((:wat::core::= (:wat::core::nth (:c::Prog/linear pg) i) name) true)
+    (:else (:c::linear? pg name (:wat::core::+ i 1)))))
+
+;; a value that lives on the heap, and therefore one whose sharing has to be counted
+(:wat::core::defn :c::ptr-ty? [t <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= t "str")
+    (:wat::core::or (:wat::string::starts-with? t "vec:") (:wat::string::starts-with? t "rec:"))))
+
+;; **the increment, and the only one there is.** A pointer read out of a variable and then stored
+;; somewhere durable is now reachable twice, so the count goes up. It never comes down: this is
+;; not reclamation, it is a "has this ever been shared?" flag that can only become more
+;; conservative. A freshly computed value is not incremented -- the slot takes the count of 1
+;; that the allocator already gave it.
+(:wat::core::defn :c::share [a <- :wat::WatAST env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::and (:wat::core::= (:c::kind a) "symbol")
+                    (:c::ptr-ty? (:c::type-of a env pg)))
+    (:c::emit o "48ff40f8")                         ;; incq [rax-8]
+    o))
+
 ;; ---------------------------------------------------------------- vectors and records
 ;;
 ;; A Vector and a record are the same object: `[count:8][slot:8]...`, every slot a machine word,
@@ -1037,7 +1156,8 @@
                                   slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-elems ks (:wat::core::+ i 1)
-      (:c::emit (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) "50")
+      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
       env pg rt tb slot)))
 
 ;; and popped back off into the slots, last first, because the last one is on top
@@ -1077,7 +1197,8 @@
         (:wat::core::if (:wat::core::< fi 0) (:c::fail "assoc field" a)
           (:wat::core::let
             [o1 (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50")
-             o2 (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail))]
+             o2 (:c::share (:wat::core::nth ks 3) env pg
+                  (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))]
             (:c::call (:c::emit o2 (:wat::string::concat "4889c2" "58" (:c::mov-rcx fi)))
               (:c::at-slot rt)))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
@@ -1130,7 +1251,8 @@
                                 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::rec-vals ks (:wat::core::+ i 2)
-      (:c::emit (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) "50")
+      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
       env pg rt tb slot)))
 
 ;; ---------------------------------------------------------------- cond, and, or
@@ -1198,7 +1320,8 @@
     (:wat::core::let
       [name (:wat::core::ast->source (:wat::core::nth bs i))
        ;; the initialiser is compiled in the OUTER scope, which is what makes `let` not `letrec`
-       o1 (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env pg rt tb slot (:c::no-tail))
+       o1 (:c::share (:wat::core::nth bs (:wat::core::+ i 1)) env pg
+            (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env pg rt tb slot (:c::no-tail)))
        disp (:wat::core::* -8 (:wat::core::+ slot 1))
        o2 (:c::emit o1 (:c::store disp))]
       (:c::bind-each bs (:wat::core::+ i 2) o2
@@ -1336,7 +1459,9 @@
                                  slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-args ks (:wat::core::+ i 1)
-      (:c::emit (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) "50") env pg rt tb slot)))
+      (:c::emit (:c::share (:wat::core::nth ks i)  env pg
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50")
+      env pg rt tb slot)))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
@@ -1395,6 +1520,8 @@
      ;; overwrote `i` while four children were still reading it, and the answer fell from 1000
      ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
      ;; break invariants the rest of the compiler is entitled to assume about wat.
+     pg (:wat::core::assoc pg :linear (:c::linear-of pv 0 ks start
+                                        (:wat::core::Vector :- [:wat::core::String])))
      tc (:wat::core::if (:wat::string::contains? (:wat::core::ast->source node) "clone")
           (:c::no-tail)
           (:c::TC :name (:wat::core::ast->source (:wat::core::nth ks 1)) :arity n

@@ -38,17 +38,25 @@ printf '  %-34s %7s KiB   (for comparison)\n' "the wat interpreter" "$(./$RSS "$
 echo "  (with the release compiled out, the same binary peaked at 94592 KiB -- 2.9x)"
 
 echo
-echo "== 3. what it does NOT reclaim: loop-carried allocation =="
-echo "  Every intermediate vector is the next call's argument, so all n are live at once and"
-echo "  scope cannot help. Memory is O(n^2): about 4n^2 bytes."
-for n in 2000 4000; do
-  printf '  grow %-5s  %7s KiB   (4n^2 = %s KiB)\n' "$n" "$(./$RSS ./elf/out/grow$n.elf)" "$((4*n*n/1024))"
+echo "== 3. loop-carried allocation, which scope cannot touch =="
+echo "  Every intermediate vector is the next call's argument, so all n are live at once."
+echo "  Scope cannot free them; last-use plus a share count lets conj EXTEND IN PLACE instead."
+for n in 20000 200000 2000000; do
+  got=$(./elf/out/grow$n.elf 2>&1)
+  [ "$got" = "$n" ] || { echo "  FAIL: grow$n printed '$got'"; fail=1; }
+  printf '  grow %-8s %7s KiB   (%s bytes/element)\n' "$n" "$(./$RSS ./elf/out/grow$n.elf)" \
+         "$(( ($(./$RSS ./elf/out/grow$n.elf) - 900) * 1024 / n ))"
 done
-out=$(./elf/out/grow8000.elf 2>&1); rc=$?
-if [ "$out" = "wat: heap exhausted" ] && [ $rc -eq 70 ]; then
-  echo "  grow 8000  needs ~250 MB against a 64 MiB heap, and says so: '$out' (exit $rc)"
+echo "  Before the in-place path this was 4n^2: 63,548 KiB at n=4000 and heap exhaustion at 8000."
+
+echo
+echo "== 4. and the two proofs the in-place path needs =="
+i=$("$WAT" elf/src/linear.wat 2>&1); n=$(./elf/out/linear.elf 2>&1)
+if [ "$i" = "$n" ]; then
+  echo "  linear.wat agrees. It fails loudly without EITHER half: drop the share increment and"
+  echo "  base comes back with 4 elements instead of 3 ('99 4 5 4' rather than '99 3 102 3')."
 else
-  echo "  FAIL: grow8000 should have reported heap exhaustion; got '$out' (exit $rc)"; fail=1
+  echo "  FAIL: linear.wat differs"; diff <(printf '%s\n' "$i") <(printf '%s\n' "$n"); fail=1
 fi
 
 echo

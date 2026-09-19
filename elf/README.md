@@ -31,7 +31,7 @@ This program —
 ```
 
 — becomes a **620-byte static ELF** that prints `4` and exits 0, with no interpreter, no
-libc, and no runtime but the 782 bytes this compiler embeds itself.
+libc, and no runtime but the 866 bytes this compiler embeds itself.
 
 ## Why it is a compiler and not a code generator
 
@@ -392,11 +392,56 @@ statement being released.
 | compiled, release compiled out | 94,592 KiB |
 | the wat interpreter | 70,688 KiB |
 
-**What it cannot reclaim** is loop-carried allocation. In `(user/grow (- n 1) (conj acc n))`
-every intermediate vector is the next call's argument, so all n are live at once and scope cannot
-help: memory is O(n²), measured at 17,580 KiB for n=2000 and 63,548 KiB for n=4000 against a 4n²
-prediction of 15,625 and 62,500. Freeing those needs **reachability, not scope** — a collector,
-or linear types that let `conj` mutate when the old vector is provably dead.
+### In-place `conj`: two proofs, not one
+
+Loop-carried allocation — `(user/grow (- n 1) (conj acc n))`, where every intermediate is the
+next call's argument — is the one thing scope cannot touch. It is also the shape wat's own
+`docs/ITERATION-PATTERNS.md` teaches for building up state. It used to be O(n²) and die at
+n=8000. It now extends the vector in place.
+
+**A reference count of 1 is not enough, and that is the trap.** In
+`(wat.core/do (conj acc 1) (nth acc 0))` the slot holding `acc` is the *only* reference — count 1
+— and mutating would still be wrong, because `conj` is pure and `acc` is read afterwards. Rust
+escapes this because `v.push(x)` takes `&mut v`, which makes the old value unreachable by
+construction. A pure `conj` has no such guarantee.
+
+So in-place needs **two** proofs:
+
+| proof | rules out | how |
+| --- | --- | --- |
+| a share count of 1 | **aliases** — someone else holding the same vector | a count at `[p-8]`, set to 1 by the allocator, incremented whenever a pointer read out of a variable is stored somewhere durable |
+| last use | **later reads** through the same variable | occurrences counted on the worst path: `if` arms are alternatives so they are *maxed*, everything sequential *sums* |
+
+The count is **increment-only**. It is not reclamation — it answers one question, *has this ever
+been shared?*, and never decrementing means the answer can only become more conservative, never
+wrong. String literals in the read-only tail get a count of **0**, which no allocation can
+produce, so one can never be mistaken for a unique heap object.
+
+`elf/src/linear.wat` proves both halves are load-bearing by failing without either:
+
+```
+                          correct:  99 3 102 3 ...
+without the share count:  99 4 5 4 ...      <- base came back with four elements
+```
+
+`user/bump` reads its parameter once, so the *compiler* offers the fast path — but the caller
+still holds the vector, the count is 2, and the *runtime* copies. `user/twice` reads its
+parameter twice on one path, so the compiler never offers it at all.
+
+| n | before | after | interpreter |
+| --- | --- | --- | --- |
+| 4,000 | 63,548 KiB | — | — |
+| 8,000 | **heap exhausted** | — | — |
+| 20,000 | — | 956 KiB · **3 ms** | 74,236 KiB · **4424 ms** |
+| 200,000 | — | 3,296 KiB · 3 ms | — |
+| 2,000,000 | — | 15,744 KiB · 19 ms | — |
+
+Eight bytes an element at two million — the vector and nothing else. The interpreter is quadratic
+in *time* here (F-123) and this is linear, so at n=20,000 it is **1400× faster and 78× smaller**.
+Unlike the other benchmark wins, this one is a change of complexity class rather than a constant.
+
+**What it still does not do** is reclaim a value that simply stops being used: the count never
+falls, so there is no `free`. This buys the loop, not the general case.
 
 ### Do we need a collector?
 
@@ -438,10 +483,9 @@ which one may free. `acc <- (Vector :- [T])` says nothing about whether the call
 reference, so no compiler can decide it statically. **That is a language question, not a compiler
 question** — and it is the interesting one on the road to rivalling C.
 
-What to build, in order: a refcount in the object header (matches what wat already does, needs no
-language change), and then in-place update when the count is 1 — Rust's `Vec::push`, Clojure's
-transient, Swift's `isKnownUniquelyReferenced`. wat-rs does not do that second one even though it
-could, which is F-123.
+What we built, and why the obvious order was wrong: not a refcount plus a free list, because a
+count of 1 does not license mutation — see the two proofs above. A **share count plus a last-use
+proof** does, and that is what the accumulator needed.
 
 **Running out says so.** `grow 8000` wants about 250 MB against a 64 MiB heap. It used to
 segfault. Every allocator now checks `r15 + need` against a limit at `[r14+8]` *before it writes
@@ -565,7 +609,7 @@ the deepest simultaneous `let` demand. The entry point is a 19-byte stub — `ca
 
 ## The runtime
 
-Ten routines, 782 bytes — the only part of the output not computed from the source, and the
+Eleven routines, 866 bytes — the only part of the output not computed from the source, and the
 part a C toolchain would call libc for.
 
 | routine | bytes | what it is |
@@ -577,7 +621,8 @@ part a C toolchain would call libc for.
 | `buf_put` | 70 | **the thing libc calls stdio** — a 4 KiB buffer at `r14`, one syscall per buffer instead of one per `println`. |
 | `flush` | 36 | write what is buffered and empty it. |
 | `vec_new` | 38 | bump `r15` past a header and n slots. |
-| `vec_conj` | 65 | a longer copy, `rep movsq` plus the new element. |
+| `vec_conj_own` | 52 | `conj` where the compiler proved the container is a last use: extend in place if the count is 1 and it is the top of the heap, else fall through. |
+| `vec_conj` | 73 | a longer copy, `rep movsq` plus the new element. |
 | `slot_set` | 66 | a copy with one slot replaced — `assoc`, for a record field and a vector index alike. |
 | `oom` | 89 | flush, `wat: heap exhausted` on stderr, exit 70. |
 

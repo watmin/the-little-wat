@@ -61,18 +61,19 @@ str_cat:                         # rax = a, rcx = b  ->  rax
     leaq 8(%rcx), %rcx
     movq %r8, %rax
     addq %r9, %rax
-    addq $15, %rax
-    andq $-8, %rax               # 8 + total, rounded up to eight
+    addq $23, %rax
+    andq $-8, %rax               # 8 rc + 8 length + total, rounded up to eight
     movq %r15, %r11
     addq %rax, %r11
     cmpq 8(%r14), %r11
     jbe 9f
     call oom
-9:  movq %r8, %rax
+9:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %r10           # the pointer is the word after the rc
+    movq %r8, %rax
     addq %r9, %rax
-    movq %rax, (%r15)            # the new header
-    movq %r15, %r10
-    leaq 8(%r15), %rdi
+    movq %rax, (%r10)            # the new length
+    leaq 8(%r10), %rdi
     movq %r11, %r15
     movq %rdx, %rsi
     movq %r8, %r11
@@ -207,36 +208,69 @@ flush:                           # write whatever is buffered, and empty it
     movq $0, (%r14)
 1:  ret
 
+# ---- every heap object carries a reference count in the word BELOW the pointer, so that all the
+# payload offsets stay where they were: `[rc:8]` at [p-8], then [count:8] at [p], then the slots.
+# The count is INCREMENT-ONLY -- it is never decremented, so it answers exactly one question:
+# "has this pointer ever been stored anywhere durable?" A count of 1 means no, and that is the
+# only thing an in-place update needs to know about aliasing. Never decrementing means the answer
+# can only get more conservative, never wrong.
+#
 # ---- vectors and records share one layout: [count:8][slot:8]... , every slot a machine word.
 # So `length` is a peek at the header for a String, a Vector and a record alike, and `nth` and a
 # field access are the same indexed load.
 
 vec_new:                         # rax = count  ->  rax = vector, slots uninitialised
-    leaq 8(,%rax,8), %rcx        # 8 + 8n, already a multiple of eight
+    leaq 16(,%rax,8), %rcx       # 8 rc + 8 count + 8n
     movq %r15, %r11
     addq %rcx, %r11
-    cmpq 8(%r14), %r11           # check BEFORE writing the header
+    cmpq 8(%r14), %r11           # check BEFORE writing anything
     jbe 1f
     call oom
-1:  movq %r15, %r10
-    movq %rax, (%r15)
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %r10           # the pointer is the word AFTER the count
+    movq %rax, (%r10)
     movq %r11, %r15
     movq %r10, %rax
+    ret
+
+# `vec_conj_own` is `conj` where the COMPILER has proved the container is a last use -- no later
+# read of that variable can observe a change. That plus a reference count of 1 (never stored
+# anywhere durable) plus being the top of the heap is enough to extend in place, which is what
+# turns an accumulator loop from O(n^2) into O(n). It is Rust's `Vec::push` and Clojure's
+# transient, arrived at from the two halves neither implementation has alone: the count rules out
+# aliases, last-use rules out later reads.
+vec_conj_own:                    # rax = vector (proved dead after this), rcx = element
+    cmpq $1, -8(%rax)            # ever stored anywhere?
+    jne vec_conj
+    movq (%rax), %r8
+    leaq 8(%rax,%r8,8), %rdx     # one past the last slot
+    cmpq %r15, %rdx              # is this object still the top of the heap?
+    jne vec_conj
+    movq %r15, %r11
+    addq $8, %r11
+    cmpq 8(%r14), %r11
+    jbe 1f
+    call oom
+1:  movq %rcx, (%r15)            # the new element goes exactly where r15 points
+    movq %r11, %r15
+    leaq 1(%r8), %rdx
+    movq %rdx, (%rax)
     ret
 
 vec_conj:                        # rax = vector, rcx = element  ->  rax = a longer copy
     movq %rcx, %r10              # the element, before rcx becomes the copy count
     movq (%rax), %r8
-    leaq 16(,%r8,8), %rdx
+    leaq 24(,%r8,8), %rdx        # 8 rc + 8 count + 8(n+1)
     movq %r15, %r11
     addq %rdx, %r11
     cmpq 8(%r14), %r11
     jbe 1f
     call oom
-1:  movq %r15, %r9
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %r9
     leaq 1(%r8), %rdx
-    movq %rdx, (%r15)            # new count
-    leaq 8(%r15), %rdi
+    movq %rdx, (%r9)             # new count
+    leaq 8(%r9), %rdi
     leaq 8(%rax), %rsi
     movq %r8, %rcx
     rep movsq
@@ -248,14 +282,15 @@ vec_conj:                        # rax = vector, rcx = element  ->  rax = a long
 slot_set:                        # rax = vector/record, rcx = index, rdx = value -> rax = a copy
     movq (%rax), %r8             # with that one slot replaced; this is `assoc`
     movq %r15, %r11
-    leaq 8(,%r8,8), %r10
+    leaq 16(,%r8,8), %r10
     addq %r10, %r11
     cmpq 8(%r14), %r11
     jbe 1f
     call oom
-1:  movq %r15, %r9
-    movq %r8, (%r15)
-    leaq 8(%r15), %rdi
+1:  movq $1, (%r15)              # rc = 1
+    leaq 8(%r15), %r9
+    movq %r8, (%r9)
+    leaq 8(%r9), %rdi
     leaq 8(%rax), %rsi
     movq %rcx, %r10
     movq %rdx, %rbx
