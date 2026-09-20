@@ -7,290 +7,87 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — open items (2026-09-19)
+## elf/ — the live queue (2026-09-20, HEAD a79517d)
 
-The book queue below is closed. This section is the live one: every item is something a
-FINDINGS entry **named rather than did**, so the evidence is already written down and this is
-only a map to it. Nothing here is a vague intention — each line says what it is, where the
-measurement lives, and why it was not done at the time.
+**This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
+below names where to read and is deliberately too short to stand in for the reading. If it ever
+grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Correctness first — these are defects, not improvements.**
+**Freshness probe:** this was written against **HEAD `a79517d`**. If `git log --oneline -1` says
+something else, trust the log and `FINDINGS.md` over every line here, and re-read the newest
+entries before moving.
 
-1. ~~**`quot` and `rem` do not trap**~~ **DONE 2026-09-19, F-126/C-150.** `idiv` *faults* rather than
-   flagging, so the divisor is tested BEFORE the instruction by a guarded routine, and `MIN / -1`
-   is `neg`+`jo` — `a / -1` is `-a`, overflowing in exactly the same place. It turned up two more of its own: `:c::to-int` and `:asm::le` both reached a
-   negative by negating its magnitude, which is wrong at exactly one input, since i64's range is
-   asymmetric.
-2. ~~**`:c::cat-fold`'s `own?` rule treats any non-symbol operand as a temporary**~~
-   **DONE 2026-09-19, F-127/C-151.** It bit: `elf/src/strown.wat` prints a record field that grew
-   after it was read. The rule asks whether the operand was ALLOCATED now, not whether it is
-   spelled like a variable. It cost **3.06x peak memory** (145,092 → 444,200 KiB) and 14% wall,
-   all of it `:c::emit`, and **the three ways to buy that back are all blocked by the same
-   thing** — see item 3a below.
-3. **`999999` as "name not found"** and the **`"vec:"`/`"rec:"` string-tagged type encoding**
-   (C-139). A magic number where an `Option` belongs, and a record wearing a string. Both are
-   internal and consistent; both are the shape C-139 was about.
+### Where we stand against `gcc -O2`
 
-**Performance — and C-158 measured the gap ONE MORE TIME, at the other end of the machine.**
+| | ours | gcc | ratio | shape |
+|---|---|---|---|---|
+| size, a program that prints 4 | 611 B | 968 B | **0.63x** | we win |
+| buffered output, 100k integers | 5.5 ms | 11.6 ms | **0.47x** | we win |
+| `loopsum` — latency-bound loop | 218M cyc | 304M | **0.72x** | we win |
+| startup, tail calls | — | — | 1.00x | tie |
+| `triple` — throughput-bound loop | 151.5M cyc | 110.8M | **1.36x** | behind |
+| `fib32` — call-heavy | 15.1M cyc | 10.0M | **1.50x** | behind |
 
-**The rule depends on the SHAPE of the code, which is why breadth was worth more than another
-fib peephole** (C-164). On a latency-bound loop we tie `gcc -O2` while issuing 3.3x the
-instructions, because both wait on the same chain and the machine has width to spare. On a
-throughput-bound loop — three independent chains — gcc's IPC climbs to 4.34 and ours stays
-pinned at **6.4, the issue width**: we are saturated and it is not, and we lose 1.94x. **There
-the instruction count is the whole ceiling, and it is 43 an iteration against 16.**
+### The three rules the measurements have settled
 
-~~**The biggest single item now: `triple` spills three `let` bindings to the frame every
-iteration.**~~ **DONE 2026-09-19, C-165 — and it bought exactly nothing.** A function that makes
-no RETURNING call now allocates r8-r11 as well (a self tail call is a `jmp`, so it does not count
-as returning), the pool counts down from r11 while a binding counts up from r8, and the loop has
-no memory traffic left. It retires **the same 1,290,000,318 instructions** and the same cycles:
-at IPC 6.14 on a 6-wide core a spill costs one store and one reload, and a register binding costs
-one `mov` in and one `mov` out — **two issue slots either way**. Kept because the value now sits
-in a register the compare reads directly, which is what the next item needs.
+1. **The binding constraint depends on the SHAPE of the code** (C-153, C-164). Latency-bound
+   loops hide our extra instructions; throughput-bound ones do not; call-heavy code is bound by
+   neither.
+2. **On front-end-bound code the unit of cost is a TAKEN BRANCH, not an instruction** (C-167).
+   Nine `fib` experiments removed work and were paid nothing; the two that removed control flow
+   were paid in full — shrink-wrapping -11.2%, the `jcc`+`jmp` collapse **-22.1% for -4.6%
+   instructions**.
+3. **An optimisation that is free in C may cost us, because our arithmetic is checked** (F-131).
+   Strength reduction swaps an `imul` for a `sub` and gcc owes nothing; we still owe the `jo`.
 
-~~**the check is provably dead under a dominating comparison**~~ **DONE 2026-09-19, C-166.**
-Inside the THEN arm of `(> x k)` with `k >= 0`, `x` is non-negative, and `x - j` with `j >= 0`
-then cannot underflow. `triple` **-7.0% instructions and -14.4% cycles** (1.90x -> **1.63x** vs
-gcc), `loopsum` -5.3%/**-10.1%** and it now **beats `gcc -O2` by 11%** at 0.89x, `fib` -8.4%
-instructions and **zero** cycles — the same edit demonstrating both halves of the C-164 rule in
-one run. `elf/bad/nnegshadow.wat` caught the first cut eliding a check a rebinding should have
-kept.
+### Open — correctness
 
-~~**if-conversion**~~ **DONE 2026-09-19, C-169 — half taken, half measured and thrown away.**
-`cmov` costs `loopsum` **+34.9% cycles** for -11% instructions, because it turns a control
-dependence into a data dependence on a loop carrying one accumulator (`gcc -O2` if-converts that
-loop and is 11% slower than our branch for it). The destination half was kept: each arm goes
-straight into the register the value belongs in, both branches `rel8`, **-15% instructions on
-`triple` and -11% on `loopsum`**.
+* **`999999` as "name not found"** and the **`"vec:"`/`"rec:"` string-tagged type encoding**
+  (C-139). A magic number where an `Option` belongs, and a record wearing a string. C-170 declined
+  to repeat the pattern — its "unknown" is the lattice top, not a sentinel — so the shape of the
+  fix is now demonstrated in the same file.
 
-**And it produced the number that sets the whole agenda.** `triple` was at **6.00 uops per cycle
-and 100% retiring** — pinned exactly at the rename width. C-169 removed **16.7% of the uops and
-0.0% of the cycles**: the loop now issues 5.00/cycle and **16.9% of its slots are front-end
-bound**, which was zero before. The branches did not move — **450,000,132 of them, fifteen an
-iteration** — and the front end cannot deliver six uops per cycle across that many. **Both of our
-loops are now limited by instruction DELIVERY, which is governed by taken branches, exactly as
-C-167 found on `fib`.** It is also why `cmov` won its 1.6% on `triple`: not its instruction
-count, which is identical to what shipped, but six fewer branches.
+### Open — performance, with what each is worth
 
-**So the biggest single item is now BRANCHES, and the largest block of them is the `jo`s — seven
-an iteration in `triple`.** Three of those come from `(* i 3)`, `(* i 5)` and `(* i 7)`, and
-those three are the ones the next item deletes outright.
+* **`triple`'s three surviving `+` checks.** F-130 prices all overflow checks at 32% of that loop;
+  C-170 took the four an interval analysis can reach. The remaining three are **unreachable by
+  intervals** — the accumulators climb 89M an iteration and never converge (probe in C-170).
+  Closing them needs a different instrument (summing the progression). **Nothing in the corpus
+  asks for that yet, so it is named, not queued.**
+* **`fib` at 1.50x.** Rule 2 says the lever is taken branches, not work. No specific candidate is
+  named; profile before guessing.
+* **F-129, the inline cliff.** `:c::inl-limit` counts SOURCE NODES, so naming an intermediate
+  (30 nodes -> 35, limit 34) costs **2.26x cycles**. Raising the limit is not the fix — the corpus
+  at 60 grows five programs by +62% to +118%. **Charge for generated code, not syntax.**
+  `elf/bench/fibreg.wat` keeps it measured.
 
-~~**strength reduction**~~ **REFUTED 2026-09-19, F-131 — and by a program, not an argument.**
-`elf/bench/triple2.wat` is `triple` with the three induction variables written out as parameters,
-which is the best output the transform could produce. It is **worse**: 43 instructions an
-iteration against 34, 39 uops against 30, **7.45 cycles against 6.00 (+24%)**. It costs two
-things gcc does not pay — the check (`imul`+`jo` becomes `sub`+`jo`; gcc's `sub` owes nothing)
-and the registers (four parameters become seven, three of which live in the frame; frame
-references go from ten an iteration to sixteen). **A transform that trades a multiply for an
-addition is only free in a language where the addition is unchecked.**
+### Rules that bite, learned the hard way
 
-**WHAT REPLACES IT, AND IT IS THE LARGEST ITEM ON THE BOARD — F-130.** Deleting every overflow
-check and measuring:
+* **R-005** — `timeout -s KILL`; SIGTERM does not stop a busy wat program.
+* **R-006** — never time the compiler where it lives; it cannot rewrite its own running image, and
+  the crash reads as a fast run. Use `tools/cc-time.sh`, which refuses to time a failure.
+* **C-163** — interleave, minimum fourteen repetitions. A single run is not a measurement; one
+  cost this queue a 10-point mis-prediction on 2026-09-20.
+* Run `tools/bootstrap.sh` **without** `--fast` before committing, and never edit the tree while
+  it runs — stage 0 and stage 1 would compile different sources.
 
-| | instructions | cycles | vs `gcc -O2` |
-|---|---|---|---|
-| `triple` with checks | 1,020,000,357 | 180.09M | 1.63x |
-| `triple` without | -20.6% | **122.47M (-32.0%)** | **1.11x** |
-| `loopsum` without | -18.8% | 239.64M (-11.6%) | 0.79x |
-| `fib32` without | -8.0% | 15.67M (**+3.9%**) | 1.56x |
+### Settled, with the evidence in FINDINGS.md
 
-**On a throughput-bound loop the checks are a third of the time and they are the ENTIRE gap to
-gcc** — everything else about our code adds up to eleven percent. On a call-heavy one they are
-free and slightly better than free. C-153 priced an interval analysis at 4% using `fib` and
-struck it; measured on the right shape it is worth **32%**, and C-166 has already shown the first
-instalment works — a dominating comparison retires three of `triple`'s ten checks for free.
+`F-126`/`C-150` quot and rem trap · `F-127`/`C-151` ownership of a grown String · `C-152` the
+compiler's String-as-Vector · `C-154`..`C-161` the operand peepholes · `C-162`/`C-163` a register
+calling convention and a spill slot, both measured and reverted · `C-164` the throughput benchmark
+· `C-165` eight registers, cycle-neutral · `C-166` the dominating comparison · `C-167` the branch
+that was two branches · `F-129`/`C-168` the inline cliff and the double-stored binding · `C-169`
+`cmov` measured and rejected · `F-130`/`F-131` the price of trapping arithmetic and the refutation
+of strength reduction · `C-170`/`R-006` bounds, and the crash that timed fast.
 
-~~So the item is **a range analysis that proves overflow checks dead**~~ **DONE 2026-09-20,
-C-170.** All three instalments shipped as one: the non-negative flag became an interval whose
-"unknown" is the lattice top rather than a sentinel, a comparison meets a bound onto both arms,
-and a counted loop's parameter takes `[0, entry]`.
+---
 
-| | instr/iter | cycles | vs `gcc -O2` |
-|---|---|---|---|
-| `triple` | 34.0 -> **30.0** | 180.1M -> **151.5M (-15.9%)** | 1.63x -> **1.36x** |
-| `loopsum` | 16.0 -> **14.0** | 271.1M -> **218M (-19.6%)** | 0.89x -> **0.72x** |
-| `fib32` | unmoved | unmoved | 1.50x |
-
-**And the ceiling is now known, not guessed.** A disconfirming probe run before any code was
-written proves the analysis reaches four of `triple`'s seven checks and two of `loopsum`'s three,
-and **can never reach the other three**: the accumulators climb 89 million an iteration and no
-interval ever closes on them, with or without widening. The 25% those `+` checks hold is not
-deferred work — it is unreachable by this instrument. Closing it would need a different one
-(summing the progression), and nothing in the corpus asks for that yet.
-
-**So the remaining gap on `triple` is 1.36x**, and F-130's table says roughly a third of what is
-left is the three surviving `add` checks. `fib` is untouched by all of this and sits at 1.50x,
-where C-167's rule applies: what moves it is control flow, not work.
-
-**WHAT MOVES `fib` IS CONTROL FLOW, NOT WORK — nine experiments, one rule** (C-167). Everything
-that removed work bought nothing: overflow checks **-13% instructions / -3% cycles**, a register
-calling convention -6.6%/**+1.2%**, a frame-slot spill -5.1%/**+3.9%**, `jo` trampolines -9.5%
-bytes/**+2.1%**, `rel8` -5% bytes/**~0**, C-166's provably-dead checks **-8.4%/+0.2%**. Everything
-that removed control flow was paid in full: shrink-wrapping **-11.2%**, and C-167's collapse of
-`jcc`+`jmp` into one branch **-22.1% cycles for -4.6% instructions** — `fib32` 1.94x -> **1.50x**
-vs `gcc -O2`. The counters say why: the uop cache delivers everything, there are no icache stalls
-and no branch misses, so the front end is bound by **taken branches**, and a taken branch costs a
-fetch redirect whether it was predicted or not. **On front-end-bound code the unit of cost is a
-taken branch, not an instruction.**
-
-**THE CLIFF — F-129, confirmed, and the one open CORRECT item in elf/.** Naming an intermediate
-— `(let [a (fib (- n 1))] (+ a (fib (- n 2))))` instead of `(+ (fib (- n 1)) (fib (- n 2)))` —
-costs **2.26x cycles**, because `:c::inl-limit` counts SOURCE NODES and the `let` spelling is 35
-against a limit of 34. **One node.** Verified by moving the threshold: at 35 the named form drops
-from 34.2M cycles to 24.4M, and at 60 to 24.2M.
-
-Raising the limit is not the fix — the whole corpus at 60 grows five programs by **+62% to
-+118%**, so the limit is doing real work. **The fix is to charge for GENERATED CODE, not for
-source syntax**: `(let [a X] (+ a Y))` emits no more than `(+ X Y)`, and the inliner turns every
-call it inlines into a `let` anyway (`:c::inl-temps`), so a callee already written with one is
-charged for scaffolding the inliner was about to add. Count the nodes that emit something, or
-measure the callee's compiled length in pass one and use it in pass two.
-
-It is a CLIFF, not a slope: a readability decision becomes a 2.3x performance decision with
-nothing in the language or the diagnostics to say so. `elf/bench/fibreg.wat` keeps it measured.
-
-**`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
-experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
-the commutative fold **-1.9%** — took instructions OFF the dependency chain. The five that failed
-either moved work onto it or removed work that was never on it, and four of the five looked like
-obvious wins on paper. **Profile first, measure cycles not instructions, and interleave at least
-fourteen repetitions.** The table is in C-163.
-
-**And `fib` is not limited by how much work it does.** Four experiments, all measured:
-overflow-check removal (-13% instructions, **-3% cycles**), the `jo` trampoline (-9.5% bytes,
-**+2.1% cycles**), `rel8` branches (-5% bytes, **~0**), and a register calling convention for a
-single argument (-6.6% instructions, **+1.2% cycles**, C-162). What HAS moved it is taking work
-off the critical path — shrink-wrapping **-11.2%** and the commutative fold **-1.9%** — and both
-came from reading a `perf record` profile rather than from a theory about the compiler. **Profile
-first; the instruction count is not the target.**
-
-**A register allocator is NOT the next thing.** `fib(32)` is 43% front-end bound and **0%
-back-end bound**; a register allocator relieves back-end pressure and there is none. Four levers
-measured, none enough: register allocation **0%**, overflow-check elimination **-3%**, inlining
-depth 8 **-16% for 14x the code**, branch `rel8` density **~8% of the bytes**. The remaining 2.2x
-is that we ask the front end for 1.63x the uops in basic blocks half as long, and what fixes that
-is emitting fewer instructions everywhere — a grind, not a feature. C-158 has the counters.
-
-**Performance — and C-153 measured where the gap actually is, so this list is now evidence.**
-
-**What is NOT the gap, measured and struck:** the overflow checks are 45% of our branches and
-13% of our instructions and **4.3% of our cycles** — an interval analysis to prove them away was
-about to be built and would have bought 4%. Deeper inlining is **14x the code for 16%** and depth
-5 is worse than depth 4. Both are written up in C-153 with counters.
-
-**What IS the gap:** on a loop with no calls in it we issue **26 instructions an iteration
-against gcc's 6** — and only 1.34x the cycles, because that loop is latency-bound and a 6-wide
-machine hides the rest. It will stop hiding it on a throughput-bound loop. The fat is named
-instruction by instruction in C-153 and each item is a peephole:
-
-**All four were taken in C-154 — three were worth it and one was worth exactly zero, which is
-why it is written down.** `loopsum` went 26 instructions an iteration to 22: **-15.4%
-instructions and -12.3% cycles**. `fib32` moved -1.6%/-0.5% and the compiler -1.1%/+0.1%,
-because C-136 gives registers only to functions with a self call in tail position and **every
-one of these peepholes fires on an operand that is already in a register** — so the register
-allocator decides what they are worth, which argues for widening C-136 rather than for more
-peepholes.
-
-0a. ~~**`cmp` against a register still routes the left operand through rax.**~~ **DONE.** `mov %rbx,%rax` then
-   `cmp $0x0,%rax` where `test %rbx,%rbx` is one instruction and one byte shorter. C-133 took the
-   RIGHT operand of a binop from a register or the frame and never took the left.
-0b. ~~**An adjacent `push X` / `pop Y` is a `mov`.**~~ **DONE.** `:c::tail-store` emits exactly that pair for
-   the last argument of every self tail call — a store and a load per iteration.
-0c. ~~**The scratch pool routes through rax**~~ **DONE**, and not the obvious way: copying from
-   the source register only made the caller's load DEAD, so `:c::fold` now takes the accumulator's
-   register and the two paths that need rax load it themselves. to reach a register it could be given directly:
-   `mov %r12,%rax` then `mov %rax,%r9`.
-0d. ~~**C-149's rax tracking clears at a join**~~ **STRUCK: it fires nowhere.** Extending it to
-   every symbol load left every binary byte-identical, because `:c::emit` clears the field and
-   any two reads of the same name have an emission between them. Kept only because `:c::fold`
-   needs `:c::reg-of-name` to ask the question. C-149's tracking was already at its useful limit.
-   (original text:) **C-149's rax tracking clears at a join** and never learns what both paths agree on, so
-   `mov %rbx,%rax` is emitted on both sides of a branch that did not change rbx.
-
-
-3a. ~~**A share count that can come down.**~~ **RE-SCOPED 2026-09-19 by C-152.** The chunk
-   accumulator recovered 94% of F-127's price (444,556 → 162,908 KiB) with no ownership analysis
-   whatever, so **the compiler no longer depends on appending in place through a container field
-   anywhere**. Decrements are still the honest answer to the question C-126 left open, and the
-   text below is still the specification — but the motivation is now a USER-PROGRAM
-   optimisation, not the thing the compiler is built out of. It has dropped below the compute
-   items.
-
-3b. **`:c::patch` is the largest single item in the compiler's memory now.** With the patch
-   leaving the buffer alone the same compiler peaks at **146,612 KiB against 164,444 — 10.9%** —
-   and 146,612 is exactly where the old UNSOUND rule sat, so a free patch would make the correct
-   compiler as cheap as the incorrect one. It costs that because a patch needs the accumulated
-   string WHOLE, and it needs it whole because **F-104**: no positional update, so a four-byte
-   displacement cannot be written where it goes. Three routes, none needing a language change:
-   flatten only the SUFFIX from the patch point (the distance is usually short); emit the
-   placeholder as its own chunk and substitute by the `assocn.wat` fold; or compute forward
-   displacements in pass one, since they are pass-invariant, and emit them directly in pass two
-   with no patch at all.
-
-3c. ~~**Short branch encodings.**~~ **SETTLED 2026-09-19, C-160.** The half worth having is
-   taken: a branch over a NAME or a CONSTANT has a length bound without measuring, so no extra
-   pass is needed — binaries ~5% smaller, the compiler **-1.0% cycles**, `fib` unmoved. The half
-   that is not: bringing the overflow handler within reach of a two-byte `jo` by planting
-   trampolines made `fib32` **9.5% smaller and 2.1% slower**, because five never-executed bytes
-   at the head of a hot fetch region cost more than the four each `jo` gives back. Density is not
-   a quantity to maximise. Original text:
-
-   **Short branch encodings.** `elf/out/fib32.elf` decodes to 184 `jcc rel32` and 46 `jmp
-   rel32`; **all 46 of the non-`jo` conditionals and 24 of the jumps are within rel8 range**,
-   which is 256 bytes of a ~1,200-byte code section — about a fifth. The other 138 are the
-   overflow `jo`, which needs a handler within 127 bytes to shorten and so wants a per-function
-   trampoline. The obstacle is the two-pass invariant: choosing an encoding by distance makes
-   the length depend on the distance, so it needs branch RELAXATION iterated to a fixpoint
-   rather than a peephole. Measured, not guessed: the counter is in the entry.
-
-(the original 3a text, which is still the specification:)
-
-**A share count that can come down.** C-126 chose increment-only and said what it buys;
-   C-128 and C-143 both named decrements as the next step, both for MEMORY. **F-127 makes it a
-   correctness constraint**: without a count that falls, a compiled wat cannot both answer
-   correctly and append in place through a container field, and the honest rule costs 3.06x peak
-   memory to prove it, spread across THREE record-field accumulators (`:c::Out/code` 142,856 KiB,
-   `:c::Out/tail` 80,480, `:c::PassR/code` and friends the rest) rather than the one the entry
-   first claimed. Three repairs were tried on paper and all three hit the same wall — the
-   container's own count is never 1, because `:c::push-args` increments every pointer-typed
-   symbol argument. C-143 tried to make that a move and was reverted over four aliasing holes,
-   which are written up in its entry and are the real specification for this work.
-4. ~~**Frame-pointer elimination.**~~ **DONE 2026-09-19, C-155**, in three steps so the first
-   one could be tested: track the depth and change no bytes, then address from rsp with rbp still
-   maintained, then drop rbp and give it to the allocator. It is worth **-2.7% instructions and
-   -1.8% cycles on the compiler and nothing at all on the benchmarks**, because the two halves
-   cancel on anything call-heavy — dropping rbp removes two instructions per call and a fourth
-   callee-saved register adds a push and a pop back. What it really bought is **a register that
-   did not exist**, which is what a register calling convention will need. `clone` keeps its
-   frame pointer: the child gets a fresh rsp and inherits rbp, and that is the only reason a
-   spawned thread can read the frame it came from. Original text:
-
-   **Frame-pointer elimination.** The measured cost is binding SPILLS: at inline depth 4 four
-   levels are live at once and C-146 has three registers, because `rbp` is the frame pointer and
-   `r14`/`r15` hold the buffer and the heap. Dropping `rbp` frees a fourth AND removes
-   `push rbp` / `mov rbp,rsp` / `leave` from every call. The obstacle is real: expression
-   evaluation pushes to the stack, so `rsp`-relative offsets move and the emitter would have to
-   track push depth. Evidence: the disassembly in C-147's follow-up, `mov %rax,-0x20(%rbp)`
-   followed by three reloads.
-5. ~~**Rematerialise instead of spilling.**~~ **STRUCK 2026-09-19, and by its own neighbour.**
-   It was named as "one `add` instead of a store and three loads". Two of those three loads were
-   redundant reloads of a value already sitting in `rax`, and C-149 removed them: a spill now
-   costs **one store and one load**, while rematerialising costs **one load and one subtract per
-   read**. A tie at best and a loss when the value is read twice. Recorded rather than deleted,
-   because the arithmetic that killed it is the useful part.
-6. **Tail recursion modulo `+`, restricted.** `-O2` beats us partly by reassociating the
-   additions, which is free in C (overflow is undefined) and unsound in wat (it traps) — see
-   F-125. **But measure before building**: depth 2→4 removed four fifths of all calls for 26%,
-   so ALL remaining call overhead is ~11% of the time. This cannot close 1.7x and is listed last
-   for that reason.
-
-**And a method note that outranks all of them.** This machine's run-to-run spread is ±15%, which
-is larger than most effects now being chased. A sequential A-then-B measurement produced
-`nregs=1` beating `nregs=2`, which is impossible. **Interleave A and B on two retained binaries
-and take the minimum of many** — that is what gave the trustworthy 10% for C-146 and the wash
-that kept C-136 standing.
+**YOU ARE NEW.** You did not live the work described above; you are reading a cache someone else
+wrote in a familiar voice. Before you propose or change anything: run `recolligere` from the
+datamancy grimoire against the disk, check the freshness probe at the top of this section, and
+read the newest `FINDINGS.md` entries yourself. The feeling that you are continuing where you left
+off is the failure mode, not the all-clear.
 
 ## Where the book queue stands (2026-09-18) — **every numbered item is closed**
 
