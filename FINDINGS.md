@@ -11641,6 +11641,120 @@ The second stone on the wat-rs `the-little-wat` branch, following C-171's patter
 - **Class:** EXTEND (wat) + IMPROVE (elf).
 - **Repro:** `./elf/out/scanfast.elf` against `./elf/out/scan.elf` and `elf/bench/scan.c`.
 
+### C-173: the instruction DSL — 179 hex literals gone, every step byte-identical
+
+Asked for as a **maintainability** change, not a performance one, and it buys no cycles at all.
+What it buys is that nobody has to read hex to change how an instruction is emitted.
+
+**The shape.** An x86-64 instruction is REX + opcode + ModRM + SIB + displacement + immediate, and
+**everything except the opcode and its `/digit` is computable from the operands.** C-169 had
+already built the computable half (`:c::rcode`, `:c::rext?`, `:c::rex`, `:c::modrm`); what was
+left was twelve tables that each wrote the results out by hand.
+
+| | before | after |
+|---|---|---|
+| hex literals in the emitter | 389 | **191** (-51%) |
+| hex in the hand-assembled runtime | 112 | 112 (untouched) |
+| tables of encodings | 12 | **0** |
+| compiler binary | 188,813 B | **181,104 B** |
+| `compile.wat` | 4,734 lines | 4,752 |
+
+```clojure
+;; before -- thirty-two encodings, one of them per register per operator
+((:wat::core::= op "*")
+  (:wat::core::cond ((:wat::core::= r 0) "480fafc3") ((:wat::core::= r 1) "490fafc4")
+                    ((:wat::core::= r 2) "490fafc5") ((:wat::core::= r 3) "480fafc5") ...))
+;; after
+((:wat::core::= op "*") (:c::imul-rr r (:c::rax)))
+```
+
+- **The test is exact, which is what made this safe.** A pure encoder change must emit
+  byte-identical output, and `tools/bootstrap.sh` already compares 68 binaries against the
+  interpreter's own build. Every one of the six steps was verified that way — not "the tests
+  still pass", but **not one byte moved**.
+- **Naming the FIELDS, not the operands, was the load-bearing decision.** `add`, `sub`, `cmp`,
+  `and`, `or` and `xor` put their source in the ModRM `reg` field; **`imul` puts its
+  DESTINATION there.** A helper that says "src/dst" has to lie to one of them. `:c::rr` names
+  `reg` and `rm` — what the hardware has — and the mnemonics take arguments in the order
+  `objdump` prints, so a call site reads as the line you check it against and `imul`'s swap is
+  hidden in the one function that knows about it.
+- **Three tables were `:c::mov-rr` and simply never called it.** `reg-mov-to`, `reg-mov-from`
+  and `reg-to-scr` were **72 hand-written encodings of an instruction the file already knew how
+  to emit.** That is F-128's failure mode exactly — the duplicate function that lived beside its
+  twin for months — and it is what a wall of hex does to review.
+- **A named opcode makes a typo a BUILD failure.** `"39"` mistyped as `"93"` assembles, links and
+  ships; it is caught only if some test happens to execute that path. `(:c::cmp-rr …)` mistyped
+  is an unresolved reference before anything runs. That is the same ladder as making a wrong
+  state unrepresentable, applied to machine code — and it is the argument for the DSL that does
+  not depend on taste.
+- **But a NUMBER is better derived than named, and better still computed from what it means.**
+  Three kinds of literal turned out to want three different treatments:
+  * an **opcode** becomes a mnemonic — it appears once, in a function named for the instruction;
+  * an **ASCII value** is derived, not named. A constant `ascii-zero = 48` can still be wrong;
+    `(:asm::code-of "0")` cannot, because it is computed from the character it means. The `39`
+    in the hex routines was never a magic number at all — it is `(:c::hex-gap)`, **the distance
+    between `'9'` and `'a'`**, computed from both.
+  * a **condition code** is arithmetic. The four jump tables — `jcc`, `jcc8`, `jcc-not`,
+    `jcc-not8`, twenty-four literals — are ONE number: x86 carries the condition in the low
+    nibble, so `rel8` is `0x70+cc` and `rel32` is `0x0f 0x80+cc`. **And negating a condition
+    flips bit zero**, which is why the ISA pairs `je`(4)/`jne`(5), `jl`(12)/`jge`(13),
+    `jb`(2)/`jae`(3). Four tables were one table read four ways, and `jb`/`jbe` in the runtime
+    routines now come from the same place instead of being loose bytes.
+- **That last one is the difference between naming a number and saying what it IS.**
+  `:c::negate-cc` encodes a fact about the instruction set that was previously spread across two
+  tables as a coincidence — and it was invisible until the results stopped being written down.
+- **Mistake worth recording.** The first pass guarded the mnemonic *definitions* from the global
+  replacement with a `@@KEEP@@` marker — and the marker contained the very literal being
+  replaced, so it clobbered itself and produced
+  `(:wat::core::defn :c::push-rax [] @@KEEP@@(:c::push-rax))`. The build caught it immediately
+  (`cannot compile empty form`), but it is the same class as F-128: a textual transform that can
+  silently eat its own guard.
+
+**And the runtime is now READABLE, which it never was.** The thirty-three `:c::rt-*` routines are
+hand-assembled hex — `str_cat` is 96 bytes of `"4989…"` and its comment was the only claim about
+it. **`tools/rt-disasm.sh` extracts each routine and disassembles it beside that claim**, so the
+two can be compared in seconds:
+
+```
+=== :c::rt-hexchar  (15 bytes) ===
+  claim: `hexchar(rax = 0..15) -> al`, 15 bytes.
+     0:  cmp $0xa,%rax
+     4:  jb  0xa
+     6:  add $0x27,%rax     <- the gap from '9' to 'a'
+     a:  add $0x30,%rax     <- '0'
+     e:  ret
+```
+
+- **Before this, the only assurance any routine did what its comment said was that the tests
+  passed** — which says it does not crash, not that it is the routine described.
+- **And two of them are now INSTRUCTIONS rather than hex, which settles the method.** The
+  objection to attempting it was labels — **29 of the 35 routines branch internally**, so they
+  are the majority case, not an edge. But a forward branch whose body is an expression needs no
+  label table: **the displacement IS the length of the piece being skipped, and that piece is
+  right there**, which is how C-169's `:c::sel` already emits a diamond. `:c::rt-hexchar` and
+  `:c::rt-hexval` read as their disassembly now:
+
+  ```clojure
+  (:wat::core::defn :c::rt-hexchar [] -> :wat::core::String
+    (:wat::core::let [gap (:c::add-ri (:c::rax) 39)]        ;; 0x27, '9'+1 up to 'a'
+      (:wat::string::concat
+        (:c::cmp-ri (:c::rax) 10)
+        (:c::jb-over gap)                                   ;; a digit: skip the gap
+        gap
+        (:c::add-ri (:c::rax) 48)                           ;; 0x30, '0'
+        (:c::ret))))
+  ```
+
+  **Both byte-identical to the blobs they replace** — which is the point of doing it this way:
+  the old hex is an exact oracle, so a converted routine is proven equivalent by 68 binaries not
+  moving. What still needs more than this: backward branches (a loop's displacement is negative
+  and spans its own body) and cross-routine calls like `node-copy`'s
+  `call 0xffffffffffffffc1`, which reaches backward into another routine under C-141's prefix
+  property. Those want real offsets, not just a length.
+- **Class:** CLEAN — no behaviour change, by construction and by measurement.
+- **Repro:** `tools/rt-disasm.sh` for any routine; `tools/bootstrap.sh` for the byte-identical
+  claim.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

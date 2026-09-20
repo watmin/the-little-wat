@@ -60,6 +60,12 @@ else
          "$(ls elf/out/*.elf | wc -l)" "$t0" "$(stat -c%s elf/out/compiler.elf)"
 fi
 
+# **the source must not move while this runs.** Stage 0 compiles what is on disk and stage 1
+# compiles it again; edit elf/compile.wat in between and the two stages build DIFFERENT compilers,
+# which surfaces as a baffling "DIFFER: compiler.elf" with the fixpoint still green. That has now
+# happened twice in one session to someone who knew the rule, so it is a check rather than a rule.
+SRC_SUM=$(sha256sum elf/compile.wat | cut -c1-16)
+
 cp elf/out/compiler.elf elf/out/stage1.elf
 chmod +x elf/out/stage1.elf
 
@@ -86,6 +92,13 @@ for f in "$SNAP"/*.elf; do
   cmp -s "$f" "elf/out/$b" || { echo "   DIFFER: $b"; d=$((d+1)); }
 done
 if [ $d -eq 0 ]; then echo "   $n binaries, all byte-identical"; else echo "   $d of $n differ"; fail=1; fi
+
+if [ "$(sha256sum elf/compile.wat | cut -c1-16)" != "$SRC_SUM" ]; then
+  echo
+  echo "FAIL: elf/compile.wat changed WHILE this ran -- stage 0 and stage 1 compiled different"
+  echo "      sources, so any DIFFER below is that, not a regression. Re-run without editing."
+  exit 1
+fi
 
 echo
 echo "== the fixpoint =="
