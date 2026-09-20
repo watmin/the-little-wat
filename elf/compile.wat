@@ -665,6 +665,10 @@
 (:wat::core::defn :c::comm-op? [op <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or (:wat::core::= op "+") (:wat::core::= op "*")))
 
+(:wat::core::defn :c::shift-op? [op <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= op "shl")
+    (:wat::core::or (:wat::core::= op "sar") (:wat::core::= op "shr"))))
+
 (:wat::core::defn :c::op-hex [op <- :wat::core::String] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= op "+") "4801c8")       ;; add rax, rcx
@@ -673,6 +677,16 @@
     ;; idiv wants the dividend sign-extended into rdx:rax, which is what cqo is for
     ((:wat::core::= op "quot") "489948f7f9")            ;; cqo ; idiv rcx  -> quotient in rax
     ((:wat::core::= op "rem") "489948f7f94889d0")       ;; cqo ; idiv rcx ; mov rax, rdx
+    ((:wat::core::= op "bit-and") "4821c8")             ;; and rax, rcx
+    ((:wat::core::= op "bit-or") "4809c8")              ;; or  rax, rcx
+    ((:wat::core::= op "bit-xor") "4831c8")             ;; xor rax, rcx
+    ;; **a variable shift count has to be in CL**, and the fold's non-commutative path has
+    ;; already put the right operand in rcx. x86 masks the count to six bits for a 64-bit
+    ;; operand, which is exactly what the JVM does and therefore what clj does -- so these
+    ;; three match `(bit-shift-left 1 64)` = 1 with no extra work.
+    ((:wat::core::= op "shl") "48d3e0")                 ;; shl rax, cl
+    ((:wat::core::= op "sar") "48d3f8")                 ;; sar rax, cl  (arithmetic, sign-filling)
+    ((:wat::core::= op "shr") "48d3e8")                 ;; shr rax, cl  (logical, zero-filling)
 
     ;; a comparison is cmp + setcc + movzx, so a bool is an ordinary 0 or 1 in rax
     (:else (:wat::string::concat "4839c8" (:c::setcc op) "480fb6c0"))))
@@ -847,7 +861,21 @@
     ((:c::is? src "wat.core/>=" ":wat::core::>=") ">=")
     ((:c::is? src "wat.core/=" ":wat::core::=") "=")
     ((:c::is? src "wat.core/not=" ":wat::core::not=") "not=")
+    ;; **clj's bitwise six** (F-134). They live in the i64 namespace because they are i64-only
+    ;; ops; `wat.core/` arithmetic is a stdlib defclause dispatching on argument type, and these
+    ;; have nothing to dispatch on. None of them can overflow -- a bit leaving the top is what a
+    ;; shift IS -- so `:c::ovf?` never names them and no `jo` is emitted.
+    ((:c::is? src "wat.i64/bit-and" ":wat::i64::bit-and") "bit-and")
+    ((:c::is? src "wat.i64/bit-or" ":wat::i64::bit-or") "bit-or")
+    ((:c::is? src "wat.i64/bit-xor" ":wat::i64::bit-xor") "bit-xor")
+    ((:c::is? src "wat.i64/bit-shift-left" ":wat::i64::bit-shift-left") "shl")
+    ((:c::is? src "wat.i64/bit-shift-right" ":wat::i64::bit-shift-right") "sar")
+    ((:c::is? src "wat.i64/unsigned-bit-shift-right" ":wat::i64::unsigned-bit-shift-right") "shr")
     (:else "")))
+
+;; `bit-not` is the one unary member, so it is not a `:c::binop` -- it sits with `not`
+(:wat::core::defn :c::bit-not? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.i64/bit-not" ":wat::i64::bit-not"))
 
 ;; ---- the compiler's INTRINSICS: verbs that become a syscall rather than a call
 ;;
@@ -1737,6 +1765,11 @@
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "not arity" a pg)
               (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                 (:wat::string::concat "4885c0" "0f94c0" "480fb6c0"))))   ;; test ; sete al ; movzx
+          ;; the bitwise complement: one instruction, and nothing to check
+          ((:c::bit-not? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "bit-not arity" a pg)
+              (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                "48f7d0")))                                             ;; not rax
           ((:c::do? head) (:c::seq ks 1 o env pg rt tb slot tc))
           ;; a no-argument syscall: the number goes in rax, the result comes back in rax
           ((:wat::core::>= (:c::syscall-nr head) 0)
@@ -2083,7 +2116,7 @@
     (:wat::core::or (:wat::core::not= (:c::binop h) "")
       (:wat::core::or (:c::if? h) (:wat::core::or (:c::cond? h)
         (:wat::core::or (:c::and? h) (:wat::core::or (:c::or? h)
-          (:wat::core::or (:c::not? h) (:wat::core::or (:c::do? h)
+          (:wat::core::or (:wat::core::or (:c::not? h) (:c::bit-not? h)) (:wat::core::or (:c::do? h)
             (:wat::core::or (:c::let? h) (:wat::core::or (:c::nth? h)
               (:wat::core::or (:c::len? h) (:wat::core::or (:c::strlen? h)
                                                           (:c::peek? h))))))))))))))
@@ -2179,6 +2212,20 @@
       ((:c::cmp? op)
         (:wat::core::if short? (:wat::string::concat "4883f8" (:asm::le n 1))
                                (:wat::string::concat "483d" (:asm::le n 4))))
+      ;; the imm32 forms take rax as their implicit destination, so there is no ModRM byte
+      ((:wat::core::= op "bit-and") (:wat::string::concat "4825" (:asm::le n 4)))
+      ((:wat::core::= op "bit-or") (:wat::string::concat "480d" (:asm::le n 4)))
+      ((:wat::core::= op "bit-xor") (:wat::string::concat "4835" (:asm::le n 4)))
+      ;; **a shift by a literal takes an 8-BIT count, not a 32-bit one.** Outside 0..63 this
+      ;; declines and the general path emits the `cl` form, which masks -- so the answer is the
+      ;; same either way and only the encoding differs.
+      ((:wat::core::and (:c::shift-op? op)
+                        (:wat::core::and (:wat::core::>= n 0) (:wat::core::<= n 63)))
+        (:wat::string::concat
+          (:wat::core::cond ((:wat::core::= op "shl") "48c1e0")
+                            ((:wat::core::= op "sar") "48c1f8")
+                            (:else "48c1e8"))
+          (:asm::le n 1)))
       (:else ""))))
 
 (:wat::core::defn :c::imm-op [op <- :wat::core::String n <- :wat::core::i64] -> :wat::core::String
@@ -4592,6 +4639,7 @@
     (:c::compile "elf/src/nnegsub.wat"  "elf/out/nnegsub.elf")
     (:c::compile "elf/src/select.wat"   "elf/out/select.elf")
     (:c::compile "elf/src/counted.wat"  "elf/out/counted.elf")
+    (:c::compile "elf/src/bits.wat"     "elf/out/bits.elf")
     (:c::compile "elf/bad/countedovf.wat" "elf/out/countedovf.elf")
     (:c::compile "elf/bad/nnegshadow.wat" "elf/out/nnegshadow.elf")
     (:c::compile "elf/bad/overflow.wat" "elf/out/overflow.elf")
@@ -4625,6 +4673,7 @@
     (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/triple2.wat" "elf/out/triple2.elf")
     (:c::compile "elf/bench/parse.wat"  "elf/out/parse.elf")
+    (:c::compile "elf/bench/parsebits.wat" "elf/out/parsebits.elf")
     (:c::compile "elf/bench/walk.wat"   "elf/out/walk.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")

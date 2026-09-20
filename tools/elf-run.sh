@@ -58,7 +58,7 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
 }
 
 for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
-            memory linear moved freed strverbs strown extremes nnegsub select counted reader diag fileio asmbits; do
+            memory linear moved freed strverbs strown extremes nnegsub select counted bits reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran

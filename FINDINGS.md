@@ -11516,9 +11516,68 @@ another — the shape an XDP filter is made of. `elf/bench/parse.c` does the ide
   deliberately; this is the second half, and it is missing.
 - **Class:** EXTEND — a wat feature request, not a compiler defect. The compiler is ready for the
   memory side of packet work and cannot be ready for the field side until the ops exist.
+- **RESOLVED 2026-09-20 by C-171.** The seven ops went into wat-rs on the `the-little-wat` branch
+  and into this compiler as one instruction each; the same program is **11.63x -> 2.35x**, which
+  lands on the division-free control's 2.36x. The attribution in this entry is confirmed by its
+  own repair: removing the missing operators removed the whole of the gap.
 - **Repro:** `./elf/out/parse.elf` against `elf/bench/parse.c` built with `gcc -O2`;
   `./elf/out/walk.elf` is the division-free control. `grep -rhoE ':wat::i64::[a-z...]+' wat-rs/src`
   for the surface.
+
+### C-171: the bitwise ops F-134 asked for — packet parsing 11.63x to 2.35x
+
+F-134 measured wat's missing bitwise operators at the shape an XDP filter is made of and called
+them the gate on packet work: `wat.os/peek` was already one instruction and a division-free walk
+was 2.36x of C, but `(w >> 24) & 0xff` had to be written `(rem (quot w 16777216) 256)`, and
+`quot`/`rem` are guarded routine calls into `idiv`. This is that gate opened, on both sides of
+the boundary.
+
+**In wat-rs, on a branch.** `the-little-wat` is a branch off `main` whose purpose is to accumulate
+what this repository proves it cannot address in userland. It is **strictly additive** — every
+existing finding here must stay valid against it — and `run.sh` already prints the wat-rs rev it
+measured against, so provenance is recorded per run.
+  * `:wat::i64::bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`, `bit-shift-right`,
+    `unsigned-bit-shift-right` — Clojure's seven, with Clojure's semantics.
+  * **The first TOTAL i64 binary ops.** `+ - * / mod rem quot` can all raise; a bit operation
+    cannot, because a bit leaving the top is not overflow, it is what a shift IS. The closures
+    always return `Ok` and `I64ArithErr` is never constructed. That is Clojure's own line, and
+    arc 300's C3 had copied only the first half of it: `(+ Long/MAX_VALUE 1)` throws while
+    `(bit-shift-left 1 63)` returns a bit pattern.
+  * **A bug caught in the writing.** `bit-not` is unary, and the first cut handed the
+    two-operand helper the same argument twice — which EVALUATES IT TWICE, so
+    `(bit-not (some-call))` would call twice and repeat any side effect. It needed a real
+    one-operand helper, `numeric::arith::eval_i64_unary`.
+  * Verified against **clj 1.12.6** on fourteen values before any of it was used, including
+    every shift-count masking edge and `i64::MIN` through both shift directions.
+
+**In the compiler, one instruction each**: `4821c8` and, `4809c8` or, `4831c8` xor, `48f7d0` not,
+`48d3e0/f8/e8` shl/sar/shr by `cl`, plus the immediate forms `4825/480d/4835` and `48c1e0/f8/e8`.
+  * **The masking is a gift.** x86 masks a 64-bit shift count to six bits and so does the JVM, so
+    a bare `shl` matches `(bit-shift-left 1 64)` = 1 with nothing added. Outside 0..63 the
+    immediate form declines and the `cl` form carries it, which masks — same answer, different
+    encoding.
+  * Nothing was added to `:c::ovf?`, so no `jo` is emitted for any of them. They are the first
+    arithmetic in this compiler that carries no check.
+
+**Measured, min of ten, interleaved:**
+
+| | cycles | instructions | vs `gcc -O2` |
+|---|---|---|---|
+| `parse` — division, F-134's version | 129,656,237 | 295,000,437 | **11.63x** |
+| `parsebits` — the same program with bit ops | **26,176,257** | 151,000,379 | **2.35x** |
+| `walk` — the division-free control, no extraction at all | 18,868,653 | 110,000,890 | 2.36x |
+
+- **4.95x on the same program, and the diagnosis confirms itself.** `parsebits` at 2.35x lands on
+  top of the control's 2.36x: **field extraction is now free**, and what is left is the ordinary
+  loop overhead this compiler has everywhere, not anything to do with parsing. F-134 attributed
+  the whole 11.63x to the missing operators, and removing them removes the whole of it.
+- **`elf/src/bits.wat` is the correctness net, and it is the good kind**: eighteen values, run
+  both ways, so the x86 instructions are checked against the Rust intrinsics on every run — the
+  immediate path, the `cl` path, both shift directions, and `i64::MIN`. The interpreter and the
+  binary agree.
+- **Class:** EXTEND (wat) + IMPROVE (elf).
+- **Repro:** `./elf/out/parsebits.elf` against `elf/bench/parse.c` at `gcc -O2`;
+  `./elf/out/parse.elf` is the division version kept as F-134's evidence.
 
 ## Predicted, unverified
 

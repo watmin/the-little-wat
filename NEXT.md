@@ -13,7 +13,13 @@ Ordered by how directly each tests what wat claims to be.
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** this was written against **HEAD `6d82b4b`** plus F-132. If `git log --oneline -1` says
+**Freshness probe:** this was written against **HEAD `6d82b4b`** plus F-132/F-133/F-134/C-171.
+
+**THE TOOLCHAIN MOVED.** `elf/` now measures against wat-rs branch **`the-little-wat`** (commit
+`7dee55858`), not `main` — it carries clj's seven bitwise ops, which C-171 needed and which do not
+exist on main. `run.sh` prints the rev it ran against; if it says something other than a
+`the-little-wat` commit, the bit-op programs will not load. The branch is **strictly additive**
+by rule, so every finding written before it stays valid. If `git log --oneline -1` says
 something else, trust the log and `FINDINGS.md` over every line here, and re-read the newest
 entries before moving.
 
