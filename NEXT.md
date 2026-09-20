@@ -33,6 +33,14 @@ measurement lives, and why it was not done at the time.
 
 **Performance — and C-158 measured the gap ONE MORE TIME, at the other end of the machine.**
 
+**And `fib` is not limited by how much work it does.** Four experiments, all measured:
+overflow-check removal (-13% instructions, **-3% cycles**), the `jo` trampoline (-9.5% bytes,
+**+2.1% cycles**), `rel8` branches (-5% bytes, **~0**), and a register calling convention for a
+single argument (-6.6% instructions, **+1.2% cycles**, C-162). What HAS moved it is taking work
+off the critical path — shrink-wrapping **-11.2%** and the commutative fold **-1.9%** — and both
+came from reading a `perf record` profile rather than from a theory about the compiler. **Profile
+first; the instruction count is not the target.**
+
 **A register allocator is NOT the next thing.** `fib(32)` is 43% front-end bound and **0%
 back-end bound**; a register allocator relieves back-end pressure and there is none. Four levers
 measured, none enough: register allocation **0%**, overflow-check elimination **-3%**, inlining

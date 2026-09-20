@@ -10708,6 +10708,54 @@ complete at check time. Any openness either moves it to link time or gives it up
   `perf record -e cpu_core/cycles/ -c 2000`.
 
 
+### C-162: a register calling convention — 6.6% fewer instructions, 1.2% more cycles, reverted
+
+- **Where:** built and thrown away. `elf/compile.wat` (`:c::call-user`, `:c::param-env`,
+  `:c::compile-fn`, `:c::wrappable?`). The fourth thing this session that made `fib` do less work
+  and take longer.
+- **The profile pointed straight at it.** After C-159 the hottest instruction in `fib32` was
+  `mov 0x8(%rsp),%rax` at **7.7%** — the callee loading the argument the caller had just stored —
+  and the second was the `cmp` waiting on it at 7.2%. Together **14.9% of the program**, to move
+  one integer eight bytes and back.
+- **And the fix was cheaper than a general register convention.** Every expression in this
+  compiler is computed into rax, so for a call with ONE argument the value is *already* in the
+  right place: the caller's `push` and its matching `add rsp,8` existed only to put it somewhere
+  the callee would look. Passing it in rax costs nothing at either end. Two or more arguments
+  keep the stack, because evaluating the second would clobber the first.
+- **Three things had to move with it**, and each is worth knowing:
+  - **The single parameter stops living in the caller's frame.** With nothing pushed, `[rbp+16]`
+    belongs to whoever called us, and the prologue storing there corrupts their stack. It becomes
+    a local — a register, or a slot one past the `let` bindings in this function's own frame.
+  - **The shrink-wrapped head has no frame to read from**, so `:c::wrappable?` had to be
+    tightened: with one argument the head may mention the parameter only where rax already
+    answers. Otherwise it emits a load from a stack slot the caller never wrote.
+  - **Putting the argument in its home does not take it out of rax.** Without saying so, every
+    call that got past the base case began `mov %rax,%rbx ; mov %rbx,%rax`.
+- **It worked, and it was slower.** `fib32`'s entry became three instructions — `cmp $0x2,%rax ;
+  jge ; ret` — with the load gone entirely.
+
+  | fib32, min of 18 | instructions | cycles |
+  | --- | --- | --- |
+  | argument on the stack | 68,569,909 | **19,310,735** |
+  | argument in rax | **64,038,530** (-6.6%) | 19,543,255 (+1.2%) |
+
+  The compiler moved the same way (+0.6% cycles). Reverted.
+- **The likely reason, and it is the interesting part.** A store and a load are not a dependency
+  the way a register is: the store buffer decouples the caller's last computation from the
+  callee's first use, and forwarding resolves it out of the critical path. Handing the value over
+  in a register replaces a decoupled memory handoff with a real cross-call dependency. **The
+  memory round trip was not overhead — it was slack.**
+- **Four experiments now say the same thing about `fib`**: overflow-check removal (-13%
+  instructions, -3% cycles), the `jo` trampoline (-9.5% bytes, +2.1% cycles), `rel8` branches
+  (-5% bytes, ~0), and this (-6.6% instructions, +1.2% cycles). **It is not limited by how much
+  work it does.** What has moved it is removing work from the critical path — shrink-wrapping
+  (-11.2%) and the commutative fold (-1.9%) — and both of those came from reading a profile
+  rather than from a theory about the compiler.
+- **Class:** a recorded refusal.
+- **Repro:** the branch is kept in the session scratch; the measurement is
+  `taskset -c 2 perf stat -e cpu_core/cycles/ ./elf/out/fib32.elf`, minimum of eighteen.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
