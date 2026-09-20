@@ -11418,6 +11418,61 @@ they fit one line:
   `gcc -O2 -fwrapv` and `-ftrapv` for the two halves of the mechanism;
   `perf stat -e cpu_core/br_inst_retired.near_taken/,cpu_core/cycles/`.
 
+### F-133: `fib` has a floor, `gcc -O2` is already on it, and two transforms priced against it
+
+F-132 established that `fib`'s cycles are its taken branches at **~0.40 per cycle whoever
+compiled it**, and that of our 6,096,883 taken branches, 2.60M are `call`+`ret` and the rest are
+one per leaf. That model turns "how do we get faster" into arithmetic, and the arithmetic says
+**stop**.
+
+- **The leaf tests are irreducible.** fib(32) has **fib(33) = 3,524,578** leaves, and deciding a
+  leaf is a leaf costs one compare and one taken branch. Inverting the branch does not help:
+  fib's tree has 3,524,578 leaves and 3,524,577 internal nodes, so whichever case is made the
+  fall-through, the other one is taken just as often.
+- **So the floor is 8,687,816 cycles** — 3,524,578 taken branches at the measured rate — **with
+  ZERO calls**. Against `gcc -O2`'s 9,845,012 that is **0.88x**: the whole headroom on this
+  program, for any compiler, is twelve percent.
+- **And `gcc -O2` is already sitting on it.** Its 4,135,091 taken branches are 3,524,578 leaf
+  tests plus 610,513 call-related, and its 364,490 calls at two branches each are 728,980. It has
+  captured essentially all of the available headroom, which is why nothing we have tried on `fib`
+  moves it far: **there was never much there.**
+
+**Two transforms priced against that floor, both rejected on measurement.**
+
+1. **Deeper inlining** (F-132's table). Depth 6 is the best of four: **-5.2% cycles for 3.5x the
+   code** (2,810 -> 9,866 bytes) and **+22% compiler time**. Depth 7 is *slower* than depth 6
+   despite fewer taken branches, because 19,274 bytes stops fitting the uop cache and the rate
+   falls from 0.398 to 0.360.
+2. **Call-site base-case peeling** — test the callee's guard at the call site so a leaf never
+   becomes a call. Measured by hand as `elf/bench/fibpeel.wat`, at an equal inlining budget:
+
+   | | cycles | instructions | calls | taken | size |
+   |---|---|---|---|---|---|
+   | `fib32` | 15,005,280 | 59,931,369 | 1,298,098 | 6,096,883 | 2,810 B |
+   | peeled | **14,275,499 (-4.9%)** | 67,861,112 (+13.2%) | **637,101 (-51%)** | 5,435,886 | 4,262 B (+52%) |
+
+   **It does exactly what it was designed to do** — the call count halves precisely, every leaf
+   call gone — **and it is still only -4.9%, because the peel test is itself a taken branch.**
+   Each avoided call trades two taken branches for one: 661K calls removed, 661K taken branches
+   saved. +52% code for that is the same losing trade as deeper inlining, so it does not ship.
+- **The probe had to be rescued from F-129's cliff first**, which is worth recording as a second
+  sighting: written naively, the peeled source has more nodes, crosses `:c::inl-limit`, and stops
+  inlining **entirely** — 721 bytes, 3,524,581 calls, 30.2M cycles, twice as slow. The transform
+  looked catastrophic until both builds were put on the same inlining budget. **A transform
+  measured across a cliff measures the cliff.**
+- **What it would take to reach the floor:** zero calls, i.e. full recursion-to-iteration — which
+  is `gcc -O2`'s transform, which requires reassociating the sum, which **trapping forbids**
+  (F-132). The floor is unreachable for us, and worth 12% if it were reachable.
+- **So `fib` is closed as a performance item.** Not because it is hard, but because it is
+  *finished*: we are 1.52x `gcc -O2` on a program whose total headroom is 12%, and we are ahead
+  of every C compiler held to our semantics. Further grinding here buys single-digit percentages
+  for large code growth.
+- **Class:** CLEAN — two candidates removed on evidence, and a floor computed so nobody proposes
+  a third.
+- **Repro:** the model is `taken / 0.406`; `perf stat -e
+  cpu_core/br_inst_retired.near_taken/,cpu_core/cycles/ ./elf/out/fib32.elf`, and fib(33) =
+  3,524,578 is the leaf count of fib(32)'s call tree.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

@@ -57,6 +57,29 @@ where `a+(b+c)` does not.
   to repeat the pattern — its "unknown" is the lattice top, not a sentinel — so the shape of the
   fix is now demonstrated in the same file.
 
+### The strategy, after F-132 and F-133
+
+**Against `gcc -O2` we already win three of six**: size 0.63x, buffered output 0.47x, `loopsum`
+0.72x. We lose two, and both losses have a named cause that is **semantic, not a defect**: the
+surviving overflow checks (`triple`) and the calls that reassociation would remove (`fib`).
+
+So superiority is not forced by re-fighting `gcc -O2` on transforms our contract forbids. It is
+forced on **the levers that are ours and not gcc's**:
+
+  * **whole-program, no ABI, no separate compilation** — our calling convention, register
+    allocation and layout are decided with the entire program in hand;
+  * **we emit the ELF ourselves** — no assembler and no linker, so code placement and alignment
+    are ours to choose, and F-132 measured that placement is worth up to 25% on an *identical*
+    instruction stream;
+  * **no libc** — 70 bytes of runtime against glibc, which is where size and I/O are already won;
+  * **stronger semantics give us facts** — C-170 elides checks using bounds a C compiler has no
+    reason to compute.
+
+**And the untested ground is where the goal actually lives.** All six benchmarks are arithmetic
+micro-loops. Nothing has measured wat against C on strings, records, memory traffic or syscalls —
+which is what an XDP driver is made of, and where a 70-byte runtime and no libc should tell most.
+**Breadth on realistic shapes is the next move, not another peephole on fib.**
+
 ### Open — performance, with what each is worth
 
 * **`triple`'s three surviving `+` checks.** F-130 prices all overflow checks at 32% of that loop;
@@ -71,7 +94,12 @@ where `a+(b+c)` does not.
   2.60M are `call`+`ret`. So the only compressible quantity is the call count, and the transform
   that would cut it — reassociating the sum — **is illegal under trapping arithmetic**. Deeper
   inlining is measured and priced: depth 6 is -5.2% cycles for **3.5x the code** and **+22%
-  compiler time**, which fails the UX question. Depth 4 stays.
+  compiler time**, which fails the UX question. Depth 4 stays. **F-133 then computed the floor:
+  the 3,524,578 leaf tests are irreducible, so even with ZERO calls the best possible is
+  8,687,816 cycles = **0.88x gcc** — the entire headroom on this program is twelve percent, and
+  `gcc -O2` is already sitting on it. Call-site base-case peeling was priced too: it halves the
+  calls exactly and is still only **-4.9% for +52% code**, because the peel test is itself a
+  taken branch. `fib` is CLOSED as a performance item — finished, not hard.
 * **F-129, the inline cliff.** `:c::inl-limit` counts SOURCE NODES, so naming an intermediate
   (30 nodes -> 35, limit 34) costs **2.26x cycles**. Raising the limit is not the fix — the corpus
   at 60 grows five programs by +62% to +118%. **Charge for generated code, not syntax.**
