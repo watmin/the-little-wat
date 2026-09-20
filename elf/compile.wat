@@ -999,6 +999,120 @@
 (:wat::core::defrecord :c::Bind
   [name <- :wat::core::String  disp <- :wat::core::i64  ty <- :wat::core::String
    reg <- :wat::core::i64])
+;; ---------------------------------------------------------------- what a value can be
+;;
+;; **A bound is a closed interval, and "unknown" is not a sentinel -- it is the whole range.**
+;; C-166 carried one fact, "this name is non-negative", which is exactly what proves `x - k`
+;; safe and exactly what cannot prove `x * 3` safe: for a multiply you need to know how BIG the
+;; value is. So the fact becomes an interval, and F-130 is the reason -- the overflow checks are
+;; 32% of a throughput-bound loop, and the only sound way to remove one is to prove it dead.
+;;
+;; The representation is chosen so the mistake has no form. There is no `Option`, no "not found"
+;; marker, no 999999 (C-139's complaint, declined here rather than repeated): a name with nothing
+;; known about it has the bound `[i64-min, i64-max]`, which is the TOP of the lattice and proves
+;; nothing. Every transfer function below is total and returns top when it cannot do better, so
+;; "forgot to handle unknown" is not a thing that can be written down -- unknown is just a bound
+;; that happens to admit everything.
+(:wat::core::defrecord :c::Bnd [name <- :wat::core::String
+                                lo <- :wat::core::i64
+                                hi <- :wat::core::i64])
+(:wat::core::typealias :c::Bnds (:wat::core::Vector :- [:c::Bnd]))
+
+(:wat::core::defn :c::i64-min [] -> :wat::core::i64 -9223372036854775808)
+(:wat::core::defn :c::i64-max [] -> :wat::core::i64 9223372036854775807)
+(:wat::core::defn :c::bnd-any [] -> :c::Bnd
+  (:c::Bnd :name "" :lo (:c::i64-min) :hi (:c::i64-max)))
+(:wat::core::defn :c::bnd-at [lo <- :wat::core::i64 hi <- :wat::core::i64] -> :c::Bnd
+  (:c::Bnd :name "" :lo lo :hi hi))
+(:wat::core::defn :c::bnd-top? [b <- :c::Bnd] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= (:c::Bnd/lo b) (:c::i64-min))
+                   (:wat::core::= (:c::Bnd/hi b) (:c::i64-max))))
+
+;; **the compiler's own arithmetic traps too**, so none of these may compute the thing they are
+;; asking about. `a + b` fits iff neither end runs off, and each limit is itself computed by a
+;; subtraction that cannot overflow: `max - b` only when `b` is positive, `min - b` only when it
+;; is negative.
+(:wat::core::defn :c::add-ok? [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::not
+    (:wat::core::or
+      (:wat::core::and (:wat::core::> b 0) (:wat::core::> a (:wat::core::- (:c::i64-max) b)))
+      (:wat::core::and (:wat::core::< b 0) (:wat::core::< a (:wat::core::- (:c::i64-min) b))))))
+(:wat::core::defn :c::sub-ok? [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::not
+    (:wat::core::or
+      (:wat::core::and (:wat::core::< b 0) (:wat::core::> a (:wat::core::+ (:c::i64-max) b)))
+      (:wat::core::and (:wat::core::> b 0) (:wat::core::< a (:wat::core::+ (:c::i64-min) b))))))
+
+;; `a * b` fits, asked in magnitudes so the test is one division. **The most negative i64 has no
+;; magnitude** (C-150's lesson, and the reason `:asm::le` was wrong for months), so it is refused
+;; outright unless the other side is 0 or 1. Measuring against `i64-max` rather than `|i64-min|`
+;; rejects the one product that lands exactly on the floor; being conservative here costs a check
+;; that could have gone, which is the safe direction to be wrong in.
+(:wat::core::defn :c::iabs [a <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< a 0) (:wat::core::- 0 a) a))
+(:wat::core::defn :c::mul-ok? [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::or (:wat::core::= a 0) (:wat::core::= b 0)) true)
+    ((:wat::core::or (:wat::core::= a 1) (:wat::core::= b 1)) true)
+    ((:wat::core::or (:wat::core::= a (:c::i64-min)) (:wat::core::= b (:c::i64-min))) false)
+    (:else (:wat::core::<= (:c::iabs a)
+                           (:wat::core::quot (:c::i64-max) (:c::iabs b))))))
+
+(:wat::core::defn :c::bnd-add [x <- :c::Bnd y <- :c::Bnd] -> :c::Bnd
+  (:wat::core::if (:wat::core::and (:c::add-ok? (:c::Bnd/lo x) (:c::Bnd/lo y))
+                                   (:c::add-ok? (:c::Bnd/hi x) (:c::Bnd/hi y)))
+    (:c::bnd-at (:wat::core::+ (:c::Bnd/lo x) (:c::Bnd/lo y))
+                (:wat::core::+ (:c::Bnd/hi x) (:c::Bnd/hi y)))
+    (:c::bnd-any)))
+(:wat::core::defn :c::bnd-sub [x <- :c::Bnd y <- :c::Bnd] -> :c::Bnd
+  (:wat::core::if (:wat::core::and (:c::sub-ok? (:c::Bnd/lo x) (:c::Bnd/hi y))
+                                   (:c::sub-ok? (:c::Bnd/hi x) (:c::Bnd/lo y)))
+    (:c::bnd-at (:wat::core::- (:c::Bnd/lo x) (:c::Bnd/hi y))
+                (:wat::core::- (:c::Bnd/hi x) (:c::Bnd/lo y)))
+    (:c::bnd-any)))
+;; a product's extremes are among the four corners, whatever the signs
+(:wat::core::defn :c::bnd-mul [x <- :c::Bnd y <- :c::Bnd] -> :c::Bnd
+  (:wat::core::if
+    (:wat::core::not (:wat::core::and (:c::mul-ok? (:c::Bnd/lo x) (:c::Bnd/lo y))
+                       (:wat::core::and (:c::mul-ok? (:c::Bnd/lo x) (:c::Bnd/hi y))
+                         (:wat::core::and (:c::mul-ok? (:c::Bnd/hi x) (:c::Bnd/lo y))
+                                          (:c::mul-ok? (:c::Bnd/hi x) (:c::Bnd/hi y))))))
+    (:c::bnd-any)
+    (:wat::core::let [a (:wat::core::* (:c::Bnd/lo x) (:c::Bnd/lo y))
+                      b (:wat::core::* (:c::Bnd/lo x) (:c::Bnd/hi y))
+                      c (:wat::core::* (:c::Bnd/hi x) (:c::Bnd/lo y))
+                      d (:wat::core::* (:c::Bnd/hi x) (:c::Bnd/hi y))]
+      (:c::bnd-at (:c::imin (:c::imin a b) (:c::imin c d))
+                  (:c::imax (:c::imax a b) (:c::imax c d))))))
+
+;; **the question every overflow check asks.** `op` on these two bounds cannot leave i64, so the
+;; `jo` that guards it can never be taken on any path that reaches it.
+(:wat::core::defn :c::op-safe? [op <- :wat::core::String x <- :c::Bnd y <- :c::Bnd] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= op "+") (:wat::core::not (:c::bnd-top? (:c::bnd-add x y))))
+    ((:wat::core::= op "-") (:wat::core::not (:c::bnd-top? (:c::bnd-sub x y))))
+    ((:wat::core::= op "*") (:wat::core::not (:c::bnd-top? (:c::bnd-mul x y))))
+    (:else false)))
+
+;; the bound recorded for a name, or top -- absence IS top, which is why there is no sentinel
+(:wat::core::defn :c::bnd-of [bs <- :c::Bnds name <- :wat::core::String
+                              i <- :wat::core::i64] -> :c::Bnd
+  (:wat::core::cond
+    ((:wat::core::< i 0) (:c::bnd-any))
+    ((:wat::core::= (:c::Bnd/name (:wat::core::nth bs i)) name) (:wat::core::nth bs i))
+    (:else (:c::bnd-of bs name (:wat::core::- i 1)))))
+(:wat::core::defn :c::bnd-for [bs <- :c::Bnds name <- :wat::core::String] -> :c::Bnd
+  (:c::bnd-of bs name (:wat::core::- (:wat::core::length bs) 1)))
+
+;; **a later entry shadows an earlier one**, because the lookup scans from the end -- so putting
+;; is `conj` and dropping is putting top. A `let` that rebinds a name drops what the enclosing
+;; branch proved about the old value; nothing has to be removed from the vector for that to hold.
+(:wat::core::defn :c::bnd-put [bs <- :c::Bnds name <- :wat::core::String
+                               lo <- :wat::core::i64 hi <- :wat::core::i64] -> :c::Bnds
+  (:wat::core::conj bs (:c::Bnd :name name :lo lo :hi hi)))
+(:wat::core::defn :c::bnd-drop [bs <- :c::Bnds name <- :wat::core::String] -> :c::Bnds
+  (:c::bnd-put bs name (:c::i64-min) (:c::i64-max)))
+
 (:wat::core::typealias :c::Env (:wat::core::Vector :- [:c::Bind]))
 
 ;; innermost first, so a `let` shadows a parameter of the same name
@@ -1206,8 +1320,9 @@
    ;; how many of r8-r11 the scratch pool may still have: four normally, fewer when this
    ;; function has spent some of them on `let` bindings
    nscr <- :wat::core::i64
-   ;; **a name this branch has already proved non-negative, or empty.** See `:c::nneg-of`.
-   nneg <- :wat::core::String
+   ;; **what this branch has proved about the values in scope.** See `:c::Bnd`; a name that is
+   ;; not in here is not unknown-as-a-special-case, it simply has the bound that admits anything.
+   bnds <- :c::Bnds
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -1243,7 +1358,7 @@
             :recs (:wat::core::Vector :- [:c::Rec])
             :aliases (:wat::core::Vector :- [:c::Alias])
             :nscr (:c::nscratch)
-            :nneg ""
+            :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
             :nlr 0 :regbase 0
@@ -1852,11 +1967,12 @@
                                         (:wat::core::= (:c::Out/rax o)
                                                        (:c::text pg (:wat::core::nth ks 1)))
                                         (:wat::core::not (:c::comm-op? op))) -1 r0))]
-                (:wat::core::if (:wat::core::>= ar 0)
-                  (:c::fold op ks 2 o env pg rt tb slot ar)
-                  (:c::fold op ks 2
-                    (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-                    env pg rt tb slot -1))))))
+                (:wat::core::let [ab (:c::bnd-expr (:wat::core::nth ks 1) pg (:c::Prog/bnds pg))]
+                  (:wat::core::if (:wat::core::>= ar 0)
+                    (:c::fold op ks 2 o env pg rt tb slot ar ab)
+                    (:c::fold op ks 2
+                      (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                      env pg rt tb slot -1 ab)))))))
           ;; one scan of the function table, not two: the guard used to ask `:c::fn-addr`
           ;; whether the name existed and then `:c::call-user` asked again for the address.
           ;; Asking `:c::fn-of` once answers both and leaves room for the arity check.
@@ -2128,15 +2244,15 @@
 ;; poor trade for something this rare. `:c::op-hex` still carries the bare `cqo; idiv` forms and
 ;; nothing reaches them -- the only other caller passes "=".
 (:wat::core::defn :c::arith-emit [op <- :wat::core::String o <- :c::Out
-                                  rt <- :wat::core::i64] -> :c::Out
+                                  rt <- :wat::core::i64 dead? <- :wat::core::bool] -> :c::Out
   (:wat::core::cond
     ((:wat::core::= op "quot") (:c::call o (:c::at-quot rt)))
     ((:wat::core::= op "rem") (:c::call o (:c::at-rem rt)))
-    (:else (:c::ovf-check op (:c::emit o (:c::op-hex op)) rt))))
+    (:else (:c::ovf-check op (:c::emit o (:c::op-hex op)) rt dead?))))
 
 (:wat::core::defn :c::ovf-check [op <- :wat::core::String o <- :c::Out
-                                 rt <- :wat::core::i64] -> :c::Out
-  (:wat::core::if (:wat::core::not (:c::ovf? op)) o
+                                 rt <- :wat::core::i64 dead? <- :wat::core::bool] -> :c::Out
+  (:wat::core::if (:wat::core::or dead? (:wat::core::not (:c::ovf? op))) o
     (:c::emit o (:wat::string::concat "0f80"
       (:asm::le (:wat::core::- (:c::at-ovf rt)
                   (:wat::core::+ (:c::here o) 6)) 4)))))
@@ -2152,11 +2268,23 @@
 (:wat::core::defn :c::fold [op <- :wat::core::String ks <- :c::Kids i <- :wat::core::i64
                             o <- :c::Out env <- :c::Env pg <- :c::Prog
                             rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64
-                            ar <- :wat::core::i64] -> :c::Out
+                            ar <- :wat::core::i64 ab <- :c::Bnd] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
     ;; a one-operand fold never ran a step, so the value is still where it started
     (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
-    (:wat::core::let [fast (:c::direct op (:wat::core::nth ks i) env pg
+    (:wat::core::let [;; **`ab` is what the value accumulated so far can be**, and `ob` what this
+                      ;; operand can be. The check this step would emit is dead exactly when the
+                      ;; two bounds cannot leave i64 -- asked once here and honoured by all four
+                      ;; paths below, because it is a fact about the operands and not about which
+                      ;; register they happened to land in.
+                      ob (:c::bnd-expr (:wat::core::nth ks i) pg (:c::Prog/bnds pg))
+                      dead? (:c::op-safe? op ab ob)
+                      ab2 (:wat::core::cond
+                            ((:wat::core::= op "+") (:c::bnd-add ab ob))
+                            ((:wat::core::= op "-") (:c::bnd-sub ab ob))
+                            ((:wat::core::= op "*") (:c::bnd-mul ab ob))
+                            (:else (:c::bnd-any)))
+                      fast (:c::direct op (:wat::core::nth ks i) env pg
                              (:c::fp-adj o) (:c::Out/fpr o))
                       r (:c::scratch-need (:wat::core::nth ks i) env pg)
                       scr? (:wat::core::and (:wat::core::= fast "")
@@ -2175,10 +2303,9 @@
                      (:c::imul3 ar (:c::to-int (:c::text pg (:wat::core::nth ks i)) pg)) "")
              o0 (:wat::core::if (:wat::core::not= three "") o
                   (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o))
-             dead? (:c::ovf-dead? op (:wat::core::nth ks i) o env pg ar)
              o1 (:c::emit o0 (:wat::core::if (:wat::core::not= three "") three fast))]
             (:c::fold op ks (:wat::core::+ i 1)
-              (:wat::core::if dead? o1 (:c::ovf-check op o1 rt)) env pg rt tb slot -1)))
+              (:c::ovf-check op o1 rt dead?) env pg rt tb slot -1 ab2)))
         ;; **an accumulator in a CALLEE-SAVED register does not have to wait anywhere.** rbx,
         ;; r12, r13 and rbp survive a call because every callee this compiler emits pushes and
         ;; pops the ones it uses -- so the operand can be evaluated straight into rax and the
@@ -2190,8 +2317,8 @@
           (:wat::core::let
             [s2 (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))
              s3 (:c::emit s2 (:c::reg-op op ar))]
-            (:c::fold op ks (:wat::core::+ i 1) (:c::ovf-check op s3 rt)
-              env pg rt tb slot -1)))
+            (:c::fold op ks (:wat::core::+ i 1) (:c::ovf-check op s3 rt dead?)
+              env pg rt tb slot -1 ab2)))
         ;; the accumulator waits in a register instead of on the stack
         (scr?
           (:wat::core::let
@@ -2208,8 +2335,8 @@
                   (:else (:c::emit o (:c::scr-save r))))
              s2 (:c::expr (:wat::core::nth ks i) s1 env pg rt tb slot (:c::no-tail))]
             (:c::fold op ks (:wat::core::+ i 1)
-              (:c::ovf-check op (:c::emit s2 (:c::scr-op op r)) rt)
-              env pg rt tb slot -1)))
+              (:c::ovf-check op (:c::emit s2 (:c::scr-op op r)) rt dead?)
+              env pg rt tb slot -1 ab2)))
         (:else
           (:wat::core::let
           [o0 (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
@@ -2225,8 +2352,8 @@
            o4 (:wat::core::if comm?
                 (:c::popn o2 "59" 8)                          ;; pop rcx
                 (:c::popn (:c::emit o2 "4889c1") "58" 8))     ;; mov rcx, rax ; pop rax
-           o5 (:c::arith-emit op o4 rt)]
-          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1)))))))
+           o5 (:c::arith-emit op o4 rt dead?)]
+          (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1 ab2)))))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
@@ -2405,7 +2532,8 @@
            (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
      at (:wat::core::- (:c::codelen o3k) w)
      o4 (:c::expr (:wat::core::nth ks 2) o3k env
-          (:wat::core::assoc pg :nneg (:c::nneg-of cks op true pg)) rt tb slot tc)
+          (:wat::core::assoc pg :bnds (:c::bnds-arm cks op true pg (:c::Prog/bnds pg)))
+          rt tb slot tc)
      o5 (:wat::core::if (:wat::core::or then0? else0?) o4 (:c::emit o4 "e900000000"))
      jmp-at (:wat::core::- (:c::codelen o5) 4)
      ;; the branch points AT the else arm -- unless it is the jump to the join, in which case it
@@ -2419,7 +2547,8 @@
      o6k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o6 :rax (:c::Out/rax o1)) o6)
      o7 (:c::expr (:wat::core::nth ks 3) o6k env
-          (:wat::core::assoc pg :nneg (:c::nneg-of cks op false pg)) rt tb slot tc)
+          (:wat::core::assoc pg :bnds (:c::bnds-arm cks op false pg (:c::Prog/bnds pg)))
+          rt tb slot tc)
      o8 (:wat::core::if then0?
           (:c::patch o7 at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ at w)) w))
           o7)]
@@ -2780,15 +2909,17 @@
                     :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env pg)))
         pg rt tb (:wat::core::+ slot 1)))))
 
-;; is one of these bindings called `name`? **A binding of the same name is a different value**,
-;; so whatever an enclosing branch proved about the old one stops being true in the body. The
-;; INITIALISERS are compiled in the outer scope, where it is still true, which is why this is
-;; asked once of the whole vector rather than as each binding lands.
-(:wat::core::defn :c::binds-name? [bs <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
-                                   pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) false
-    (:wat::core::or (:wat::core::= (:c::text pg (:wat::core::nth bs i)) name)
-                    (:c::binds-name? bs (:wat::core::+ i 2) name pg))))
+;; **a binding of the same name is a different value**, so whatever an enclosing branch proved
+;; about the old one stops being true in the body -- and what the INITIALISER can be takes its
+;; place. The initialisers are read in the OUTER bounds, which is what makes `let` not `letrec`
+;; here as everywhere else; each binding then shadows, so they are laid down left to right.
+(:wat::core::defn :c::bnds-let [bs <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
+                                out <- :c::Bnds] -> :c::Bnds
+  (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) out
+    (:wat::core::let [b (:c::bnd-expr (:wat::core::nth bs (:wat::core::+ i 1)) pg out)]
+      (:c::bnds-let bs (:wat::core::+ i 2) pg
+        (:c::bnd-put out (:c::text pg (:wat::core::nth bs i))
+                     (:c::Bnd/lo b) (:c::Bnd/hi b))))))
 
 (:wat::core::defn :c::let-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                 rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
@@ -2798,8 +2929,7 @@
         (:wat::core::let [r (:c::bind-each bs 0 o env pg rt tb slot)]
           ;; the bindings go out of scope with the body, so the env is not carried back out
           (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r)
-            (:wat::core::if (:c::binds-name? bs 0 (:c::Prog/nneg pg) pg)
-              (:wat::core::assoc pg :nneg "") pg)
+            (:wat::core::assoc pg :bnds (:c::bnds-let bs 0 pg (:c::Prog/bnds pg)))
             rt tb (:c::BindR/slot r) tc))))))
 
 ;; ---------------------------------------------------------------- sequences, and the heap
@@ -3070,7 +3200,7 @@
 ;; The result goes straight into its destination register, which is the other half of the win:
 ;; the diamond's `mov %rax,%r12` disappears with it.
 (:wat::core::defn :c::selv? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
-                             nn <- :wat::core::String] -> :wat::core::bool
+                             bs <- :c::Bnds] -> :wat::core::bool
   (:wat::core::if (:c::ptr-ty? (:c::type-of a env pg)) false
     (:wat::core::cond
       ((:wat::core::= (:c::kind a pg) "int") (:c::imm32? (:c::to-int (:c::text pg a) pg)))
@@ -3081,11 +3211,13 @@
           (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
             (:wat::core::and (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth ks 0))) "-")
               (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth ks 1) env pg) 0)
-                (:wat::core::and (:wat::core::not= nn "")
-                  (:wat::core::and (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) nn)
-                    (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "int")
-                      (:wat::core::let [k (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)]
-                        (:wat::core::and (:wat::core::>= k 0) (:c::imm32? k))))))))))))))
+                (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "int")
+                  (:wat::core::and (:c::imm32? (:wat::core::- 0
+                                     (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)))
+                    ;; **the arm must not trap**, because a `lea` carries no check -- and the
+                    ;; arm's own bounds are what decide that, the same question the fold asks.
+                    (:c::op-safe? "-" (:c::bnd-expr (:wat::core::nth ks 1) pg bs)
+                                      (:c::bnd-expr (:wat::core::nth ks 2) pg bs))))))))))))
 
 (:wat::core::defn :c::selv [a <- :wat::core::i64 dst <- :wat::core::i64 env <- :c::Env
                             pg <- :c::Prog] -> :wat::core::String
@@ -3111,9 +3243,10 @@
                 (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth cks 1) env pg) 0)
                   (:wat::core::and (:c::imm-cmp? (:wat::core::nth cks 2) pg)
                     (:wat::core::and
-                      (:c::selv? (:wat::core::nth ks 2) env pg (:c::nneg-of cks op true pg))
+                      (:c::selv? (:wat::core::nth ks 2) env pg
+                        (:c::bnds-arm cks op true pg (:c::Prog/bnds pg)))
                       (:c::selv? (:wat::core::nth ks 3) env pg
-                                 (:c::nneg-of cks op false pg)))))))))))))
+                        (:c::bnds-arm cks op false pg (:c::Prog/bnds pg))))))))))))))
 
 ;; **and the branch STAYS.** `cmov` was built first and measured: `triple` -15% instructions for
 ;; -1.6% cycles, and `loopsum` -11% instructions for **+34% cycles**. A `cmov` turns a control
@@ -3356,38 +3489,228 @@
 ;; It rides on `:c::Prog` rather than in a new parameter for the same reason `nlr` does -- `pg`
 ;; is already threaded through every expression, and a value put there is scoped exactly to the
 ;; subtree it was put there for. A `let` that rebinds the name takes the fact away again.
-(:wat::core::defn :c::nneg-of [cks <- :c::Kids op <- :wat::core::String then? <- :wat::core::bool
-                               pg <- :c::Prog] -> :wat::core::String
-  (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) ""
+;; **what an expression can be, read off the syntax.** C-166 asked where the value physically
+;; was -- which register, or whether rax still held the name -- and could only answer for the one
+;; operand shape it knew. The bound is a property of the EXPRESSION, so it needs none of that:
+;; a literal is itself, a name is what the branch proved, and arithmetic composes.
+(:wat::core::defn :c::bnd-expr [a <- :wat::core::i64 pg <- :c::Prog bs <- :c::Bnds] -> :c::Bnd
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a pg) "int")
+      (:wat::core::let [n (:c::to-int (:c::text pg a) pg)] (:c::bnd-at n n)))
+    ((:wat::core::= (:c::kind a pg) "symbol") (:c::bnd-for bs (:c::text pg a)))
+    ((:wat::core::not= (:c::kind a pg) "list") (:c::bnd-any))
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::bnd-any)
+          (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))
+                            x (:c::bnd-expr (:wat::core::nth ks 1) pg bs)
+                            y (:c::bnd-expr (:wat::core::nth ks 2) pg bs)]
+            (:wat::core::cond
+              ((:wat::core::= op "+") (:c::bnd-add x y))
+              ((:wat::core::= op "-") (:c::bnd-sub x y))
+              ((:wat::core::= op "*") (:c::bnd-mul x y))
+              (:else (:c::bnd-any)))))))))
+
+;; the two bounds a comparison against a literal proves, one for each arm. `=` tells the THEN arm
+;; everything and the ELSE arm nothing; `not=` is the same trade the other way round -- neither
+;; "x is not 7" nor "x is not in [a,b]" is an interval, so those arms get top and say so.
+(:wat::core::defn :c::cmp-lo [op <- :wat::core::String k <- :wat::core::i64
+                              then? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::and (:wat::core::= op ">") then?)
+      (:wat::core::if (:c::add-ok? k 1) (:wat::core::+ k 1) (:c::i64-max)))
+    ((:wat::core::and (:wat::core::= op ">=") then?) k)
+    ((:wat::core::and (:wat::core::= op "<") (:wat::core::not then?)) k)
+    ((:wat::core::and (:wat::core::= op "<=") (:wat::core::not then?))
+      (:wat::core::if (:c::add-ok? k 1) (:wat::core::+ k 1) (:c::i64-max)))
+    ((:wat::core::and (:wat::core::= op "=") then?) k)
+    ((:wat::core::and (:wat::core::= op "not=") (:wat::core::not then?)) k)
+    (:else (:c::i64-min))))
+(:wat::core::defn :c::cmp-hi [op <- :wat::core::String k <- :wat::core::i64
+                              then? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::and (:wat::core::= op ">") (:wat::core::not then?)) k)
+    ((:wat::core::and (:wat::core::= op ">=") (:wat::core::not then?))
+      (:wat::core::if (:c::sub-ok? k 1) (:wat::core::- k 1) (:c::i64-min)))
+    ((:wat::core::and (:wat::core::= op "<") then?)
+      (:wat::core::if (:c::sub-ok? k 1) (:wat::core::- k 1) (:c::i64-min)))
+    ((:wat::core::and (:wat::core::= op "<=") then?) k)
+    ((:wat::core::and (:wat::core::= op "=") then?) k)
+    ((:wat::core::and (:wat::core::= op "not=") (:wat::core::not then?)) k)
+    (:else (:c::i64-max))))
+
+;; the arm's bounds: what was known, met with what the comparison just proved. An empty meet
+;; would mean the arm is unreachable; rather than reason about that, it is given top.
+(:wat::core::defn :c::bnds-arm [cks <- :c::Kids op <- :wat::core::String then? <- :wat::core::bool
+                                pg <- :c::Prog bs <- :c::Bnds] -> :c::Bnds
+  (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) bs
     (:wat::core::let [x (:wat::core::nth cks 1) k (:wat::core::nth cks 2)]
       (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kind x pg) "symbol")
-                                      (:wat::core::not= (:c::kind k pg) "int")) ""
-        (:wat::core::if (:wat::core::< (:c::to-int (:c::text pg k) pg) 0) ""
-          (:wat::core::if
-            (:wat::core::if then?
-              (:wat::core::or (:wat::core::= op ">") (:wat::core::= op ">="))
-              (:wat::core::or (:wat::core::= op "<") (:wat::core::= op "<=")))
-            (:c::text pg x) ""))))))
+                                      (:wat::core::not= (:c::kind k pg) "int")) bs
+        (:wat::core::let [n (:c::to-int (:c::text pg k) pg)
+                          was (:c::bnd-for bs (:c::text pg x))
+                          lo (:c::imax (:c::Bnd/lo was) (:c::cmp-lo op n then?))
+                          hi (:c::imin (:c::Bnd/hi was) (:c::cmp-hi op n then?))]
+          (:wat::core::if (:wat::core::> lo hi) bs
+            (:c::bnd-put bs (:c::text pg x) lo hi)))))))
 
-;; **does the accumulator currently hold the name the branch proved non-negative?** Before the
-;; first fold step it is still in its own register (`ar`); after it, `:c::Out/rax` names what rax
-;; holds, and every `:c::emit` clears that -- which is what stops the fact surviving one step
-;; into `(- x j k)`, where `x - j` is nothing the branch said anything about.
-(:wat::core::defn :c::acc-nneg? [o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                 ar <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::let [nn (:c::Prog/nneg pg)]
-    (:wat::core::and (:wat::core::not= nn "")
-      (:wat::core::if (:wat::core::>= ar 0)
-        (:wat::core::= ar (:c::reg-of-name nn env))
-        (:wat::core::= (:c::Out/rax o) nn)))))
+;; ---------------------------------------------------------------- the counted loop
+;;
+;; **A loop counter has a range, and it is the only thing in these programs that does.** F-130
+;; measured the overflow checks at 32% of a throughput-bound loop; the probe that priced this
+;; work found that an interval analysis proves four of `triple`'s seven and none of the other
+;; three, because the accumulators grow by 89 million an iteration and no interval ever closes
+;; on them. The four it does prove are the three `(* i C)` and the `(- i 1)`, and all four rest
+;; on one fact: `i` is between zero and where it started.
+;;
+;; **The invariant is asserted and checked, not discovered.** A widening fixpoint would throw the
+;; lower bound to negative infinity on its first step and narrowing would not bring it back --
+;; and it would be RIGHT to, because `(user/go -1 ...)` really does run away. What makes the
+;; bound true is the entry literal, so the rule reads the entry, claims `[0, E]`, and checks the
+;; claim survives one step:
+;;
+;;   * every call to `f` from outside `f` passes an int literal `E >= 0` for this parameter;
+;;   * every self call passes `(- p K)` for it, with `K` a positive literal dividing every `E`;
+;;   * the body is `(if (= p 0) base rec)`, so a step only happens when `p` is not zero.
+;;
+;; Then `p` in `[0,E]` and `p != 0` gives `p-1` in `[0,E]`, which is the induction, and the
+;; divisibility is what stops a counter stepping over zero and running to the floor. Any
+;; condition that does not hold returns top and the checks stay: every way of failing to
+;; recognise the shape fails toward keeping the check.
+(:wat::core::defn :c::lit-arg [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::= (:c::kind a pg) "int"))
 
-;; `x - k` with both known non-negative: the check is provably dead, so it is not emitted
-(:wat::core::defn :c::ovf-dead? [op <- :wat::core::String a <- :wat::core::i64 o <- :c::Out
-                                 env <- :c::Env pg <- :c::Prog ar <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::and (:wat::core::= op "-")
-    (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
-      (:wat::core::and (:wat::core::>= (:c::to-int (:c::text pg a) pg) 0)
-                       (:c::acc-nneg? o env pg ar)))))
+;; does every call to `name` inside node `a` pass a literal in `[0,..]` divisible by `K` at
+;; position `j`? Returns the largest such literal, or -1 the moment one does not qualify.
+(:wat::core::defn :c::entry-max [a <- :wat::core::i64 name <- :wat::core::String
+                                 j <- :wat::core::i64 k <- :wat::core::i64
+                                 best <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< best 0) -1
+    (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+      (:c::entry-kids (:c::kidsof pg a) 0 name j k best pg)
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) best
+          (:wat::core::if (:wat::core::not= (:c::text pg (:wat::core::nth ks 0)) name)
+            (:c::entry-kids ks 0 name j k best pg)
+            ;; a call to it: the argument at `j` decides, and the other arguments still count
+            (:wat::core::if (:wat::core::<= (:wat::core::length ks) (:wat::core::+ j 1)) -1
+              (:wat::core::let [arg (:wat::core::nth ks (:wat::core::+ j 1))]
+                (:wat::core::if (:wat::core::not (:c::lit-arg arg pg)) -1
+                  (:wat::core::let [v (:c::to-int (:c::text pg arg) pg)]
+                    (:wat::core::if (:wat::core::or (:wat::core::< v 0)
+                                                    (:wat::core::not= (:wat::core::rem v k) 0)) -1
+                      (:c::entry-kids ks 1 name j k (:c::imax best v) pg))))))))))))
+(:wat::core::defn :c::entry-kids [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                  j <- :wat::core::i64 k <- :wat::core::i64
+                                  best <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::or (:wat::core::< best 0)
+                                  (:wat::core::>= i (:wat::core::length ks))) best
+    (:c::entry-kids ks (:wat::core::+ i 1) name j k
+      (:c::entry-max (:wat::core::nth ks i) name j k best pg) pg)))
+
+;; across every OTHER function in the program
+(:wat::core::defn :c::entry-all [fns <- :c::FnV i <- :wat::core::i64 self <- :wat::core::i64
+                                 name <- :wat::core::String j <- :wat::core::i64
+                                 k <- :wat::core::i64 best <- :wat::core::i64
+                                 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::or (:wat::core::< best 0)
+                                  (:wat::core::>= i (:wat::core::length fns))) best
+    (:c::entry-all fns (:wat::core::+ i 1) self name j k
+      (:wat::core::if (:wat::core::= i self) best
+        (:c::entry-max (:c::Fn/node (:wat::core::nth fns i)) name j k best pg)) pg)))
+
+;; the step every self call takes at position `j`: `K` when they all pass `(- p K)` with the
+;; same positive literal `K`, and 0 when any of them does anything else
+(:wat::core::defn :c::step-of [a <- :wat::core::i64 name <- :wat::core::String
+                               p <- :wat::core::String j <- :wat::core::i64
+                               k <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::= k 0) 0
+    (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+      (:c::step-kids (:c::kidsof pg a) 0 name p j k pg)
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) k
+          (:wat::core::if (:wat::core::not= (:c::text pg (:wat::core::nth ks 0)) name)
+            (:c::step-kids ks 0 name p j k pg)
+            (:wat::core::if (:wat::core::<= (:wat::core::length ks) (:wat::core::+ j 1)) 0
+              (:wat::core::let [arg (:wat::core::nth ks (:wat::core::+ j 1))]
+                (:wat::core::if (:wat::core::not= (:c::kind arg pg) "list") 0
+                  (:wat::core::let [aks (:c::kidsof pg arg)]
+                    (:wat::core::if (:wat::core::not= (:wat::core::length aks) 3) 0
+                      (:wat::core::if
+                        (:wat::core::not
+                          (:wat::core::and
+                            (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth aks 0))) "-")
+                            (:wat::core::and
+                              (:wat::core::= (:c::text pg (:wat::core::nth aks 1)) p)
+                              (:wat::core::= (:c::kind (:wat::core::nth aks 2) pg) "int")))) 0
+                        (:wat::core::let [d (:c::to-int (:c::text pg (:wat::core::nth aks 2)) pg)]
+                          (:wat::core::if (:wat::core::or (:wat::core::<= d 0)
+                                            (:wat::core::and (:wat::core::not= k -1)
+                                                             (:wat::core::not= d k))) 0
+                            (:c::step-kids ks 1 name p j d pg)))))))))))))))
+(:wat::core::defn :c::step-kids [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                 p <- :wat::core::String j <- :wat::core::i64
+                                 k <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::or (:wat::core::= k 0)
+                                  (:wat::core::>= i (:wat::core::length ks))) k
+    (:c::step-kids ks (:wat::core::+ i 1) name p j
+      (:c::step-of (:wat::core::nth ks i) name p j k pg) pg)))
+
+;; the body is `(if (= p 0) base rec)` -- so no step is taken while `p` is zero
+(:wat::core::defn :c::zero-guard? [ks <- :c::Kids start <- :wat::core::i64
+                                   p <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= start (:wat::core::- (:wat::core::length ks) 1))
+    (:wat::core::let [a (:wat::core::nth ks start)]
+      (:wat::core::and (:wat::core::= (:c::kind a pg) "list")
+        (:wat::core::let [bs (:c::kidsof pg a)]
+          (:wat::core::and (:wat::core::= (:wat::core::length bs) 4)
+            (:wat::core::and (:c::if? (:c::text pg (:wat::core::nth bs 0)))
+              (:wat::core::let [c (:wat::core::nth bs 1)]
+                (:wat::core::and (:wat::core::= (:c::kind c pg) "list")
+                  (:wat::core::let [cks (:c::kidsof pg c)]
+                    (:wat::core::and (:wat::core::= (:wat::core::length cks) 3)
+                      (:wat::core::and
+                        (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth cks 0))) "=")
+                        (:wat::core::and
+                          (:wat::core::= (:c::text pg (:wat::core::nth cks 1)) p)
+                          (:wat::core::and
+                            (:wat::core::= (:c::kind (:wat::core::nth cks 2) pg) "int")
+                            (:wat::core::= (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg)
+                                           0)))))))))))))))
+
+;; the bound for one parameter, or top
+(:wat::core::defn :c::counted [ks <- :c::Kids start <- :wat::core::i64
+                               pv <- :c::Kids j <- :wat::core::i64 name <- :wat::core::String
+                               self <- :wat::core::i64 pg <- :c::Prog] -> :c::Bnd
+  (:wat::core::let [p (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j)))]
+    (:wat::core::if (:wat::core::not (:c::zero-guard? ks start p pg)) (:c::bnd-any)
+      ;; -1 is "no self call seen yet", which is NOT the same as "seen a step of one" -- a
+      ;; function whose calls step by 1 and by 5 must be refused, and it only is if the first
+      ;; site can be told from the starting value
+      (:wat::core::let [k0 (:c::step-of (:wat::core::nth ks start) name p j -1 pg)
+                        k (:wat::core::if (:wat::core::= k0 -1) 1 k0)]
+        (:wat::core::if (:wat::core::<= k 0) (:c::bnd-any)
+          (:wat::core::let [e (:c::entry-all (:c::Prog/fns pg) 0 self name j k 0 pg)]
+            (:wat::core::if (:wat::core::< e 0) (:c::bnd-any)
+              ;; **the induction is about the PROGRESSION, not the interval.** The reachable
+              ;; values are `{0, k, 2k, ... e}` -- `p` enters as a non-negative multiple of `k`
+              ;; and only steps while it is non-zero, so it is always at least `k` when it
+              ;; steps and lands on `0` rather than stepping past it. `[0,e]` is the interval
+              ;; that covers that set. Divisibility is what puts `0` IN the set: from 10 by 3
+              ;; the counter goes 10, 7, 4, 1, -2 and runs to the floor, which is why
+              ;; `:c::entry-all` refuses an entry literal `k` does not divide.
+              (:c::Bnd :name p :lo 0 :hi e))))))))
+
+(:wat::core::defn :c::counted-all [ks <- :c::Kids start <- :wat::core::i64
+                                   pv <- :c::Kids j <- :wat::core::i64 n <- :wat::core::i64
+                                   name <- :wat::core::String self <- :wat::core::i64
+                                   acc <- :c::Bnds pg <- :c::Prog] -> :c::Bnds
+  (:wat::core::if (:wat::core::>= j n) acc
+    (:wat::core::let [b (:c::counted ks start pv j name self pg)]
+      (:c::counted-all ks start pv (:wat::core::+ j 1) n name self
+        (:wat::core::if (:c::bnd-top? b) acc
+          (:c::bnd-put acc (:c::Bnd/name b) (:c::Bnd/lo b) (:c::Bnd/hi b)))
+        pg))))
 
 (:wat::core::defn :c::imin [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::< a b) a b))
@@ -3552,7 +3875,7 @@
      ;; `regbase` at this point -- harmless while the pool was a constant four, and not harmless
      ;; now that a binding can reach into it.
      pgw (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-            (:wat::core::assoc pg :nneg "") :nlr 0) :regbase 0)
+            (:wat::core::assoc pg :bnds (:wat::core::Vector :- [:c::Bnd])) :nlr 0) :regbase 0)
             :nscr (:c::nscratch))
      ;; **not a function with a self tail call.** C-121 makes such a call a `jmp` to the end of
      ;; the prologue -- and the test now lives BEFORE the prologue, so the jump would skip it and
@@ -3592,8 +3915,13 @@
      ;; overwrote `i` while four children were still reading it, and the answer fell from 1000
      ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
      ;; break invariants the rest of the compiler is entitled to assume about wat.
+     ;; **what this function's own parameters can be**, before a single expression is compiled.
+     ;; Only a counted loop has an answer; everything else gets top and keeps its checks.
+     bnds0 (:c::counted-all ks start pv 0 n (:c::text pg (:wat::core::nth ks 1))
+             (:c::fn-of pg (:c::text pg (:wat::core::nth ks 1)) 0)
+             (:wat::core::Vector :- [:c::Bnd]) pg)
      pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-          (:wat::core::assoc (:wat::core::assoc pg :nneg "") :nscr nscr) :nlr nlr) :regbase nr)
+          (:wat::core::assoc (:wat::core::assoc pg :bnds bnds0) :nscr nscr) :nlr nlr) :regbase nr)
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
      tc (:wat::core::if (:c::has-clone? node pg)
@@ -4263,6 +4591,8 @@
     (:c::compile "elf/src/extremes.wat" "elf/out/extremes.elf")
     (:c::compile "elf/src/nnegsub.wat"  "elf/out/nnegsub.elf")
     (:c::compile "elf/src/select.wat"   "elf/out/select.elf")
+    (:c::compile "elf/src/counted.wat"  "elf/out/counted.elf")
+    (:c::compile "elf/bad/countedovf.wat" "elf/out/countedovf.elf")
     (:c::compile "elf/bad/nnegshadow.wat" "elf/out/nnegshadow.elf")
     (:c::compile "elf/bad/overflow.wat" "elf/out/overflow.elf")
     (:c::compile "elf/bad/divzero.wat"  "elf/out/divzero.elf")

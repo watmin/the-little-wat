@@ -11231,6 +11231,120 @@ the transform could hand us.
 - **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/
   ./elf/out/triple2.elf` against `./elf/out/triple.elf`; both print 6570000225000000.
 
+### R-006: a self-hosting compiler cannot be timed where it lives — the crash looks like a fast run
+
+- **What happened** (2026-09-20): `./elf/out/compiler.elf` writes `elf/out/compiler.elf`, and the
+  kernel holds **ETXTBSY** on the text of a running image. So the run dies —
+  `assert failed: (:wat::test::assert-eq written filesz)`, exit **70** — near the END of its
+  work, after almost everything has been compiled. Timed as `./elf/out/compiler.elf >/dev/null
+  2>&1` inside a best-of-N loop, that reads as a slightly fast success.
+- **What it cost:** a measured "53% regression" that did not exist. Two builds were compared at
+  **361 ms against 553 ms** and the slowdown was believed and investigated. Both numbers were
+  failures. Measured properly — from copies, on the same 60 programs, interleaved — the same two
+  builds are **1,008,081,655 against 1,044,331,256 instructions (+3.6%) and 365 ms against
+  364 ms**: no wall change at all.
+- **Why it hid:** the failure is at the end, the exit status was swallowed by the redirect, and
+  the number was *plausible*. Nothing about it looked like a crash. It is the same shape as the
+  ETXTBSY incident that C-159 chased — a miscompiled binary spinning after its harness was
+  killed — and the same lesson: **a compiler that writes its own image cannot be run in place.**
+- **The fix is a shape, not a rule.** `tools/cc-time.sh` copies before it runs, checks the exit
+  status of every run and refuses to time a binary that fails (`cc-time: bad.sh exited 70 --
+  timing it would measure the failure, not the work`), and interleaves when given two builds. A
+  timing that cannot silently measure a crash is the rung above remembering not to.
+- **And it interleaves because C-163 says so**: 1.5% at eight repetitions, 0.15% at fourteen.
+- **Class:** REFUSAL (the OS's, and correctly). `timeout -s KILL` came from R-005 the same way.
+- **Repro:** `./elf/out/compiler.elf; echo $?` → 70. `cp elf/out/compiler.elf /tmp/c.elf &&
+  /tmp/c.elf; echo $?` → 0.
+
+### C-170: bounds — the overflow check that is provably dead, and the three that never will be
+
+F-130 measured wat's trapping arithmetic at **32% of a throughput-bound loop** and named it the
+entire remaining gap to `gcc -O2`. F-131 removed strength reduction from the queue by showing it
+*costs* 24% here, because gcc swaps an `imul` for a `sub` and owes nothing while we would still
+owe the check. So the only instrument left is the one that proves a check dead — and C-166 had
+already shown the first instalment works, with one fact: "this name is non-negative".
+
+**The fact becomes an interval**, because that is what a multiply needs. `x >= 0` proves
+`x - k` safe and can never prove `x * 3` safe; for that you have to know how big `x` is.
+
+- **The representation is chosen so the mistake has no form.** There is no `Option`, no
+  "not found" marker, no 999999 (C-139's complaint, declined rather than repeated): a name with
+  nothing known about it has the bound `[i64-min, i64-max]`, the **top** of the lattice, which
+  proves nothing. Every transfer function is total and returns top when it cannot do better, so
+  "forgot to handle unknown" is not a state that can be written down.
+- **The compiler's own arithmetic traps too**, so none of the predicates may compute the thing
+  they are asking about: `:c::add-ok?` tests against `i64-max - b` only when `b` is positive and
+  `i64-min - b` only when it is negative, and `:c::mul-ok?` asks one division in magnitudes.
+  The most negative i64 has no magnitude (C-150's lesson, and why `:asm::le` was wrong for
+  months), so it is refused outright unless the other side is 0 or 1.
+- **A disconfirming probe priced the work before a line of it was written**, and disconfirmed
+  half the plan. Modelling `triple` and `loopsum` exactly:
+
+  ```
+  triple:   PROVED (* i 3) (* i 5) (* i 7) (- i 1)      4 of 7
+            NOT    (+ a (* i 3)) and its two siblings
+  loopsum:  PROVED (* i 3) (- i 1)                      2 of 3
+  ```
+
+  **The accumulator never converges** — it climbs 89 million an iteration and the interval is
+  still growing after six rounds — so the 25% those three `+` checks hold is unreachable by any
+  interval analysis, with or without widening. That is not deferred work; it is a fact about the
+  program, stated so the next reader does not go looking.
+- **The bound that pays is the counted loop, and it is asserted and checked, not discovered.** A
+  widening fixpoint throws the lower bound to negative infinity on its first step and narrowing
+  does not bring it back — and it is RIGHT to, because `(user/go -1 ...)` really does run away.
+  What makes the bound true is the entry literal. So `:c::counted` reads the entry, claims
+  `[0, E]`, and requires three things: every call from outside passes a literal `E >= 0`; every
+  self call passes `(- p K)` with one positive literal `K` dividing every `E`; and the body is
+  `(if (= p 0) base rec)`, so a step happens only when `p` is not zero.
+- **The induction is about the PROGRESSION, not the interval** — and getting that wrong in the
+  comment is what turned up a real hole. `[0,9]` minus 3 is `[-2,6]`, so the interval argument
+  fails; the set argument does not. Reachable values are `{0, K, 2K … E}`: `p` enters as a
+  non-negative multiple of `K` and only steps while non-zero, so it is at least `K` when it
+  steps and lands **on** zero rather than past it. Divisibility is what puts zero in the set —
+  from 10 by 3 the counter goes 10, 7, 4, 1, -2 and runs to the floor.
+- **The hole, pulled out by the root.** `:c::step-of` started its "step so far" at 1, and only
+  tested for disagreement when that value exceeded 1 — so a function with one self call stepping
+  by 1 and another stepping by 5 accepted **both** and kept 5. "Not yet seen" is now `-1`,
+  structurally distinct from "seen a step of one", so the first call site cannot be confused with
+  the default. Patching the comparison would have cut the stem.
+- **Measured, interleaved, against expectations fixed before the strike:**
+
+  | | instructions/iter | uops/iter | cycles | vs `gcc -O2` |
+  |---|---|---|---|---|
+  | `triple` before | 34.0 | 30.0 | 180.1M | 1.63x |
+  | `triple` after | **30.0** | **26.0** | **151.5M (-15.9%)** | **1.36x** |
+  | `loopsum` before | 16.0 | | 271.1M | 0.89x |
+  | `loopsum` after | **14.0** | | **218M (-19.6%)** | **0.72x** |
+  | `fib32`, `bench`, `fibreg` | unmoved | | unmoved | 1.50x |
+
+  `loopsum` now beats `gcc -O2` by **38%** while issuing 14 instructions an iteration against
+  its 6. The disassembly is exactly what the probe predicted: the three `imul`s and the `sub`
+  lose their `jo`, all three `add`s keep theirs.
+- **The compiler pays 3.6% of its instructions and no wall time** — 1,008,081,655 against
+  1,044,331,256 on the same sixty programs, 365 ms against 364 ms, from copies and interleaved.
+  Getting that number right needed R-006 first.
+- **The honest delta:** the expectation was 168.3M cycles for `triple` and the result was 151.5M.
+  The prediction came from an earlier "elide `*` and `-`" proxy that was **a single unreplicated
+  run**, which is what C-163 exists to forbid. The expectation was set badly; the result is three
+  runs and consistent.
+- **Two probes ask the new rule hard**, because only benchmark binaries changed when it went in:
+  `elf/src/counted.wat` carries the shape and the four ways of not being it — a guard that is not
+  `(= p 0)`, a computed entry, two call sites with different literals, and a product that fits
+  i64 by exactly **7** (100 x 92233720368547758) — and `elf/bad/countedovf.wat` is a counted loop
+  whose multiply genuinely overflows on its first iteration, where the bound must refuse to
+  license it. It still traps, exit 70.
+- **`tools/elf-run.sh` counts its refusals and traps now.** It had been reporting "three traps"
+  on a run with four — the same stale-literal class fixed one layer up earlier in the day and not
+  pulled out by the root then.
+- **`tools/bootstrap.sh` green from the interpreter — 61 binaries byte-identical, fixpoint at
+  183,140 bytes; `elf-run` 28/28 with four refusals and four traps; `run.sh elf` 32/32; `vs-c`
+  and `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/
+  ./elf/out/triple.elf`; `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000
+  elf/out/triple.elf` — three `imul`s with no `jo` and three `add`s with one; `tools/cc-time.sh`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

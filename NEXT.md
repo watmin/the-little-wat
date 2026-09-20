@@ -102,16 +102,27 @@ free and slightly better than free. C-153 priced an interval analysis at 4% usin
 struck it; measured on the right shape it is worth **32%**, and C-166 has already shown the first
 instalment works — a dominating comparison retires three of `triple`'s ten checks for free.
 
-So the item is **a range analysis that proves overflow checks dead**, and the shape that pays is
-the loop induction variable: `i` starts at a literal, decreases by a literal, and the loop exits
-at zero, so `i` and every `(* i C)` have known bounds throughout. Three cheap instalments before
-anything general is needed:
+~~So the item is **a range analysis that proves overflow checks dead**~~ **DONE 2026-09-20,
+C-170.** All three instalments shipped as one: the non-negative flag became an interval whose
+"unknown" is the lattice top rather than a sentinel, a comparison meets a bound onto both arms,
+and a counted loop's parameter takes `[0, entry]`.
 
-  * generalise C-166's bound — `(- x k)` under a dominating `(> x C)` is safe whenever
-    `C >= INT64_MIN + k - 1`, not only when `C >= 0`;
-  * carry a lower AND upper bound rather than the single non-negative flag;
-  * propagate the entry constant of a self-tail-recursive function into its own parameters,
-    which is what turns `(* i 3)` into a bounded value.
+| | instr/iter | cycles | vs `gcc -O2` |
+|---|---|---|---|
+| `triple` | 34.0 -> **30.0** | 180.1M -> **151.5M (-15.9%)** | 1.63x -> **1.36x** |
+| `loopsum` | 16.0 -> **14.0** | 271.1M -> **218M (-19.6%)** | 0.89x -> **0.72x** |
+| `fib32` | unmoved | unmoved | 1.50x |
+
+**And the ceiling is now known, not guessed.** A disconfirming probe run before any code was
+written proves the analysis reaches four of `triple`'s seven checks and two of `loopsum`'s three,
+and **can never reach the other three**: the accumulators climb 89 million an iteration and no
+interval ever closes on them, with or without widening. The 25% those `+` checks hold is not
+deferred work — it is unreachable by this instrument. Closing it would need a different one
+(summing the progression), and nothing in the corpus asks for that yet.
+
+**So the remaining gap on `triple` is 1.36x**, and F-130's table says roughly a third of what is
+left is the three surviving `add` checks. `fib` is untouched by all of this and sits at 1.50x,
+where C-167's rule applies: what moves it is control flow, not work.
 
 **WHAT MOVES `fib` IS CONTROL FLOW, NOT WORK — nine experiments, one rule** (C-167). Everything
 that removed work bought nothing: overflow checks **-13% instructions / -3% cycles**, a register

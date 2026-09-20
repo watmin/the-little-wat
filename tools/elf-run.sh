@@ -43,7 +43,7 @@ echo "== the check that matters: compiled binary vs wat interpreter =="
 # **counted, not asserted.** This summary used to be a sentence with the numbers written into
 # it, and it went stale the moment a probe was added -- it claimed twenty-five agreeing programs
 # on a run where twenty-seven did.
-agreed=0; natively=0
+agreed=0; natively=0; refused=0; trapped=0
 ORACLE="elf/out/.oracle"; mkdir -p "$ORACLE"
 WATID=$(stat -c%s,%Y "$WAT" 2>/dev/null | tr ',' '-')
 oracle () {   # source path -> its output on stdout, its exit status as the return
@@ -58,7 +58,7 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
 }
 
 for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
-            memory linear moved freed strverbs strown extremes nnegsub select reader diag fileio asmbits; do
+            memory linear moved freed strverbs strown extremes nnegsub select counted reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran
@@ -125,6 +125,7 @@ echo "== and the compiler refuses what it cannot translate =="
 # compiler; both programs are valid wat that the interpreter runs.
 refuses () {   # driver, needle, what it proves
   local drv="$1" needle="$2" why="$3" msg
+  refused=$((refused+1))
   msg=$("$WAT" "$drv" 2>&1)
   if printf '%s' "$msg" | grep -qF "$needle"; then
     echo "$why"
@@ -141,11 +142,13 @@ got=$(./elf/out/overflow.elf 2>&1); rc=$?
 int=$("$WAT" elf/bad/overflow.wat 2>&1); irc=$?
 if printf '%s' "$got" | grep -qF 'i64 overflow' && [ $rc -ne 0 ] \
    && printf '%s' "$int" | grep -qF 'IntegerOverflow'; then
+  trapped=$((trapped+1))
   echo "  (+ 9223372036854775807 1) stops both ways -- compiled exit $rc, interpreted refuses"
   dgot=$(./elf/out/divzero.elf 2>&1); drc=$?
   dint=$("$WAT" elf/bad/divzero.wat 2>&1)
   if printf '%s' "$dgot" | grep -qF 'division by zero' && [ $drc -ne 0 ] \
      && printf '%s' "$dint" | grep -qF 'DivisionByZero'; then
+    trapped=$((trapped+1))
     echo "  (quot 1 0) stops both ways too -- compiled exit $drc, not SIGFPE"
     # C-166 drops the check on `(- x k)` where the branch proved `x >= 0`. A `let` that rebinds
     # the name binds a different value, and the proof must not travel with the name.
@@ -153,7 +156,21 @@ if printf '%s' "$got" | grep -qF 'i64 overflow' && [ $rc -ne 0 ] \
     sint=$("$WAT" elf/bad/nnegshadow.wat 2>&1)
     if printf '%s' "$sgot" | grep -qF 'i64 overflow' && [ $src2 -ne 0 ] \
        && printf '%s' "$sint" | grep -qF 'IntegerOverflow'; then
+      trapped=$((trapped+1))
       echo "  and a rebound name loses the proof -- nnegshadow stops both ways, exit $src2"
+      # C-170 bounds a counted loop's parameter and drops the checks that bound proves dead.
+      # A multiply the bound does NOT cover must still stop.
+      cgot=$(./elf/out/countedovf.elf 2>&1); crc=$?
+      cint=$("$WAT" elf/bad/countedovf.wat 2>&1)
+      if printf '%s' "$cgot" | grep -qF 'i64 overflow' && [ $crc -ne 0 ] \
+         && printf '%s' "$cint" | grep -qF 'IntegerOverflow'; then
+        trapped=$((trapped+1))
+        echo "  and a counted bound licenses no real overflow -- countedovf stops, exit $crc"
+      else
+        echo "  FAIL: C-170 elided a check the loop bound does not cover (compiled rc=$crc)"
+        printf '%s\n' "$cgot" | head -2 | sed 's/^/      /'
+        fail=1
+      fi
     else
       echo "  FAIL: C-166 elided a check that a rebinding should have kept (compiled rc=$src2)"
       printf '%s\n' "$sgot" | head -2 | sed 's/^/      /'
@@ -182,8 +199,8 @@ refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
 echo
 if [ $fail -eq 0 ]; then
   echo "elf-run: ok -- $(ls elf/out/*.elf | wc -l) native binaries. $agreed agree with the interpreter;"
-  echo "         $natively more use syscalls it has no implementation of (F-119); four refusals and"
-  echo "         three traps, both ways."
+  echo "         $natively more use syscalls it has no implementation of (F-119); $refused refusals and"
+  echo "         $trapped traps, both ways."
 else
   echo "elf-run: FAILED"
 fi
