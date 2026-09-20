@@ -1032,6 +1032,19 @@
     (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
 
 ;; which register this operand already lives in, or -1
+;; **`imul` is the one arithmetic instruction with a three-operand form**: `imul $3,%rbx,%rax`
+;; multiplies a register by a literal into a DIFFERENT register, so the `mov` that every other
+;; binop needs to get its left operand into rax is not needed here. `add` and `sub` have no such
+;; form -- `lea` does the arithmetic but sets no flags, and every one of these carries a `jo`.
+(:wat::core::defn :c::imul3 [r <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)
+                    pre (:wat::core::cond
+                          ((:wat::core::= r 0) (:wat::core::if short? "486bc3" "4869c3"))
+                          ((:wat::core::= r 1) (:wat::core::if short? "496bc4" "4969c4"))
+                          ((:wat::core::= r 2) (:wat::core::if short? "496bc5" "4969c5"))
+                          (:else (:wat::core::if short? "486bc5" "4869c5")))]
+    (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
+
 (:wat::core::defn :c::reg-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "symbol") -1
     (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))))
@@ -1731,6 +1744,15 @@
                 (:c::emit o3 "4883f001")                ;; xor rax, 1
                 o3)))
           ((:wat::core::not (:wat::core::= op ""))
+            ;; **a String or a Vector is an ADDRESS, and adding to one is not arithmetic.** The
+            ;; type pass knows -- it is the same pass that decides `=` on two Strings is `str_eq`
+            ;; (C-130) -- and it used to let `(+ i64 String)` through to `add <pointer>(%rsp)`.
+            ;; `=` and `not=` are excluded because the clause above already routed the String
+            ;; case to `str_eq`, so anything reaching here is a machine word by elimination.
+            (:wat::core::if (:wat::core::and (:wat::core::not (:c::cmp? op))
+                              (:wat::core::not= (:c::ptr-among ks 1 env pg) ""))
+              (:c::fail (:wat::string::concat "arithmetic on a "
+                          (:c::ptr-among ks 1 env pg)) a pg)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "operator arity" a pg)
               (:wat::core::let
                 [ar (:wat::core::if
@@ -1742,9 +1764,17 @@
                   (:c::fold op ks 2 o env pg rt tb slot ar)
                   (:c::fold op ks 2
                     (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-                    env pg rt tb slot -1)))))
-          ((:wat::core::>= (:c::fn-addr pg head 0) 0) (:c::call-user ks head o env pg rt tb slot tc))
-          (:else (:c::fail "call" a pg)))))))
+                    env pg rt tb slot -1))))))
+          ;; one scan of the function table, not two: the guard used to ask `:c::fn-addr`
+          ;; whether the name existed and then `:c::call-user` asked again for the address.
+          ;; Asking `:c::fn-of` once answers both and leaves room for the arity check.
+          (:else
+            (:wat::core::let [fi (:c::fn-of pg head 0)]
+              (:wat::core::if (:wat::core::< fi 0) (:c::fail "call" a pg)
+                (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
+                                  (:wat::core::- (:wat::core::length ks) 1))
+                  (:c::fail "wrong number of arguments" a pg)
+                  (:c::call-user ks head o env pg rt tb slot tc))))))))))
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
 ;; popped back -- the stack discipline a compiler without a register allocator has to use
@@ -2026,10 +2056,19 @@
                                                 (:wat::core::< r (:c::nscratch)))))]
       (:wat::core::cond
         ((:wat::core::not= fast "")
-          (:wat::core::let [o0 (:wat::core::if (:wat::core::>= ar 0)
-                                 (:c::emit o (:c::reg-mov-to ar)) o)]
+          (:wat::core::let
+            [;; a register times a literal is one instruction, and the accumulator never has to
+             ;; visit rax to get there
+             three (:wat::core::if
+                     (:wat::core::and (:wat::core::>= ar 0)
+                       (:wat::core::and (:wat::core::= op "*")
+                                        (:c::imm-cmp? (:wat::core::nth ks i) pg)))
+                     (:c::imul3 ar (:c::to-int (:c::text pg (:wat::core::nth ks i)) pg)) "")
+             o0 (:wat::core::if (:wat::core::not= three "") o
+                  (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o))
+             o1 (:c::emit o0 (:wat::core::if (:wat::core::not= three "") three fast))]
             (:c::fold op ks (:wat::core::+ i 1)
-              (:c::ovf-check op (:c::emit o0 fast) rt) env pg rt tb slot -1)))
+              (:c::ovf-check op o1 rt) env pg rt tb slot -1)))
         ;; the accumulator waits in a register instead of on the stack
         (scr?
           (:wat::core::let
@@ -2096,6 +2135,15 @@
     (:else "0f84")))                       ;; je, for not=
 
 ;; the compare alone, with no setcc tail, when the right operand is an immediate or a name
+;; the type of the first operand of this form that lives on the heap, or "" if none does --
+;; which is both the test and the diagnostic, so the message names the operand that is wrong
+;; rather than the one that happened to be first
+(:wat::core::defn :c::ptr-among [ks <- :c::Kids i <- :wat::core::i64 env <- :c::Env
+                                 pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) ""
+    (:wat::core::let [t (:c::type-of (:wat::core::nth ks i) env pg)]
+      (:wat::core::if (:c::ptr-ty? t) t (:c::ptr-among ks (:wat::core::+ i 1) env pg)))))
+
 (:wat::core::defn :c::cmp-only [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
                                 adj <- :wat::core::i64
                                 fp? <- :wat::core::bool] -> :wat::core::String
@@ -3171,6 +3219,16 @@
                      (:wat::core::assoc st :arena
                        (:wat::core::conj (:rd::St/arena st)
                          (:rd::Node :kind kind :text text :kids kids)))))))
+
+;; **how many parameters a user function declares, or -1 if there is no such function.**
+;; `:c::inl-ok?` has always compared this against the call's argument count before inlining;
+;; `:c::call-user` never asked, so a call with the wrong number of arguments compiled. The caller
+;; pushes what it has and pops what it pushed, so the stack stays balanced and nothing crashes --
+;; the callee simply reads its parameters from the WRONG SLOTS, at `[rsp + ... 8*(n-1-i)]` with
+;; its own `n`. It cost an hour of bisection to find one of these by its symptom (F-128).
+(:wat::core::defn :c::arity-at [pg <- :c::Prog fi <- :wat::core::i64] -> :wat::core::i64
+  (:c::nparams (:c::kidsof pg
+    (:wat::core::nth (:c::kidsof pg (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))) 2))))
 
 (:wat::core::defn :c::fn-of [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::let [v (:c::Prog/fns pg)]

@@ -28,3 +28,9 @@ gen elf/refuse.wat          elf/bad/unsupported.wat \
 gen elf/refuse-nonascii.wat elf/bad/nonascii.wat \
     'A string value is measured in BYTES and wat measures strings in CHARACTERS, so anything
 ;; outside ASCII is refused rather than silently mis-measured (F-120).'
+gen elf/refuse-arity.wat    elf/bad/arity.wat \
+    'A call with the wrong number of arguments used to COMPILE: the stack stayed balanced and
+;; the callee read its parameters from the wrong slots (F-128).'
+gen elf/refuse-ptradd.wat   elf/bad/ptradd.wat \
+    'A String is an address, and adding to one is not arithmetic. The type pass always knew
+;; enough to say so and did not (F-128).'

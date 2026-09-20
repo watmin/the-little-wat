@@ -152,6 +152,10 @@ refuses elf/refuse.wat          'cannot compile call: (wat.core/str 10)' \
         "refused elf/bad/unsupported.wat, naming the form:    (wat.core/str 10)"
 refuses elf/refuse-nonascii.wat 'not encodable' \
         "refused elf/bad/nonascii.wat, naming the character:  e-acute (F-120: bytes vs chars)"
+refuses elf/refuse-arity.wat    'wrong number of arguments' \
+        "refused elf/bad/arity.wat, naming the call:         (user/two 1 2 3)  (F-128)"
+refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
+        "refused elf/bad/ptradd.wat, naming the type:        arithmetic on a str  (F-128)"
 
 echo
 if [ $fail -eq 0 ]; then

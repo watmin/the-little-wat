@@ -10344,13 +10344,13 @@ complete at check time. Any openness either moves it to link time or gives it up
   None of these is about the language being compiled. All three are about the COMPILER, which
   is a wat program, and all three were found because a large edit made mistakes that a smaller
   one would not have.
-- **1. A user call is not checked for arity.** An edit left `(:c::emit X "58" 8)` -- two
+- **1. A user call is not checked for arity.** **FIXED in C-156.** An edit left `(:c::emit X "58" 8)` -- two
   parameters, three arguments -- and the compiler compiled it. `:c::push-args` pushes three, the
   callee reads two at `[rbp + 16 + 8*(n-1-i)]` with ITS OWN `n`, and the caller pops three, so
   the stack stays balanced and the callee reads its parameters **from the wrong slots**. The
   symptom was two binaries silently differing by two bytes. `:c::inl-ok?` checks arity before
   inlining, so the check exists -- `:c::call-user` simply never asks it. **Class: FIX.**
-- **2. `(+ i64 String)` compiles.** A new parameter `k` was shadowed by `:c::direct`'s own
+- **2. `(+ i64 String)` compiles.** **FIXED in C-156.** A new parameter `k` was shadowed by `:c::direct`'s own
   `(let [k (:c::kind a pg)] ...)`, so `(:wat::core::+ d k)` added a displacement to a POINTER TO
   A STRING. The type pass knows both types -- it is the same pass that decides `=` on two
   Strings is `str_eq` (C-130) -- and it did not object. It compiled to
@@ -10421,6 +10421,53 @@ complete at check time. Any openness either moves it to link time or gives it up
   `vs-c`, `loop` green.**
 - **Class:** IMPROVE.
 - **Repro:** `tools/vs-c.sh`; `taskset -c 2 perf stat -e cpu_core/instructions/ ./elf/out/compiler.elf`.
+
+
+### C-156: the compiled language stops being a SUPERSET of wat, and `imul` stops needing a `mov`
+
+- **Where:** `elf/compile.wat` (`:c::arity-at`, `:c::ptr-among`, `:c::imul3`, the call clause and
+  the arithmetic clause), `elf/bad/arity.wat` and `elf/bad/ptradd.wat` (new),
+  `tools/gen-refuse.sh` and `tools/elf-run.sh`. Takes two of F-128's three.
+- **Both holes were the same shape, and it is the shape C-124 went out of its way to avoid.**
+  C-124 could have compiled `(assoc v 1 99)` for free and refused to, because *"compiling it
+  would have made the compiled language a superset"* of wat. These two made it one by accident:
+  **wat rejects both programs and the compiler accepted them.**
+  - `(user/two 1 2 3)` — wat says `:user::two: expected 2 arguments, got 3`. The compiler pushed
+    three, the callee read two at its own offsets, the caller popped three; the stack stayed
+    balanced and the callee read **the wrong slots**. `:c::inl-ok?` had always compared arity
+    before inlining, so the check existed — `:c::call-user` never asked it.
+  - `(+ 1 s)` where `s` is a String — wat's `defclause` dispatch fails on it. The compiler
+    emitted `add <pointer>(%rsp), %rax`, and only `elf/src/diag.wat` of twenty-five differential
+    programs noticed. The type pass knew: it is the same pass that decides `=` on two Strings is
+    `str_eq` (C-130).
+- **The refusals are generated from the compiler, not written beside it** (`tools/gen-refuse.sh`,
+  C-116's rule), so they are the same compiler; both new programs are also refused by the
+  interpreter, which is the point.
+- **And the call clause got cheaper while gaining a check.** The guard asked `:c::fn-addr`
+  whether a name was a function and `:c::call-user` then asked again for its address — two
+  linear scans of a 365-entry table per call site. Asking `:c::fn-of` once answers both and pays
+  for the arity check: the naive version cost **+6.2% instructions**, this one **+2.4%**.
+- **`imul` is the one arithmetic instruction with a three-operand form.** `imul $3,%rbx,%rax`
+  multiplies a register by a literal into a different register, so the `mov` every other binop
+  needs to get its left operand into rax is not needed. `add` and `sub` have no such form: `lea`
+  does the arithmetic and sets no flags, and every one of these carries a `jo`.
+- **Measured, interleaved, minimum of six:**
+
+  | | instructions | cycles |
+  | --- | --- | --- |
+  | `loopsum` (the generated code) | 2,200,000,427 → **2,100,000,449** (-4.5%) | 351,658,342 → 351,097,553 (-0.2%) |
+  | `fib32` | flat | flat |
+  | the compiler (paying for the checks) | 783,652,137 → 802,246,401 (+2.4%) | 497,638,461 → 517,997,755 (+4.1%) |
+
+  **`loopsum` is 22 instructions an iteration to 21** and shows almost nothing in cycles, because
+  C-153 established that loop is latency-bound at IPC 6.4 — the machine had the slot to spare.
+  It will show the moment a loop is throughput-bound. The compiler is slower because it is now
+  doing two things it did not do; **that cost is compile time, and it buys the compiled language
+  back inside wat.**
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  148,842 bytes; `elf-run` 25/25 and four refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** FIX (the two refusals) and IMPROVE (the `imul` form).
+- **Repro:** `tools/elf-run.sh`, which now refuses four programs instead of two.
 
 
 ## Predicted, unverified
