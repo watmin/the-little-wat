@@ -1789,11 +1789,22 @@
                           (:c::ptr-among ks 1 env pg)) a pg)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "operator arity" a pg)
               (:wat::core::let
-                [ar (:wat::core::if
-                      ;; already in rax and nothing emitted since: `:c::expr` will emit NOTHING,
-                      ;; which beats handing the register down and loading it again later
-                      (:wat::core::= (:c::Out/rax o) (:c::text pg (:wat::core::nth ks 1))) -1
-                      (:c::reg-of (:wat::core::nth ks 1) env pg))]
+                [r0 (:c::reg-of (:wat::core::nth ks 1) env pg)
+                 ;; **being in rax is not as good as being in a callee-saved register, and a
+                 ;; `let` binding is usually in both.** When the accumulator is only in rax,
+                 ;; handing the register down would mean loading it again, so -1 wins. But
+                 ;; whatever comes next puts its own value in rax, so rax is the one copy that
+                 ;; does NOT survive -- and for a commutative operator the register copy costs
+                 ;; one instruction (`add %r12,%rax`) where rax costs three (`push` ... `pop
+                 ;; %rcx` ... `add`). `(wat.core/let [a (fib (- n 1))] (+ a (fib (- n 2))))`
+                 ;; stored `a` twice, once into r12 and once onto the stack, and then read the
+                 ;; stack copy. For `-` the register still has to reach rax first, so there
+                 ;; rax keeps its advantage.
+                 ar (:wat::core::if (:wat::core::< r0 0) -1
+                      (:wat::core::if (:wat::core::and
+                                        (:wat::core::= (:c::Out/rax o)
+                                                       (:c::text pg (:wat::core::nth ks 1)))
+                                        (:wat::core::not (:c::comm-op? op))) -1 r0))]
                 (:wat::core::if (:wat::core::>= ar 0)
                   (:c::fold op ks 2 o env pg rt tb slot ar)
                   (:c::fold op ks 2
@@ -4120,6 +4131,7 @@
     (:c::compile "elf/src/fileio.wat"  "elf/out/fileio.elf")
     (:c::compile "elf/src/asmbits.wat" "elf/out/asmbits.elf")
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
+    (:c::compile "elf/bench/fibreg.wat" "elf/out/fibreg.elf")
     (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
     (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")

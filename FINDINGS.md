@@ -11011,6 +11011,79 @@ the fetch pipeline whether or not it was predicted. `fib32` issued **17.3M branc
   and `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/fib32.elf` — there is no
   conditional branch followed by a `jmp` left in it.
 
+### F-129: naming an intermediate costs 2.3x, and the threshold it crosses is one node wide
+
+`elf/bench/fib32.wat` and `elf/bench/fibreg.wat` are the same function. One writes
+`(+ (fib (- n 1)) (fib (- n 2)))`; the other writes the first call into a `let` and adds it,
+which is the spelling a person reaches for when the expression gets long. Same compiler, same
+machine, same answer:
+
+| | instructions | cycles | binary |
+|---|---|---|---|
+| `fib32` — nested | 59,931,365 | 15.09M | 2,810 B |
+| `fibreg` — named | 105,737,445 | **34.16M (2.26x)** | 696 B |
+
+- **The whole difference is one node.** `:c::inl-limit` is 34 and `:c::nodes-of` counts source
+  nodes: the nested form is **30**, and the `let` — one head, one binding vector, one name, and
+  the two extra nodes the vector and the reference cost — is **35**. So one of these two
+  spellings of one function inlines four levels deep and the other does not inline at all.
+- **Verified by moving the threshold, not by reasoning about it.** At `:c::inl-limit` 35 the
+  named form drops to 94.4M instructions and 24.4M cycles, and at 60 it is 88.3M and 24.2M —
+  so 35 is where the cliff is, exactly where the arithmetic says.
+- **But the limit is not the bug, and raising it is not the fix.** Rebuilding the whole corpus at
+  60 grows five programs by **+62% to +118%** (`loopsum` 733 -> 1,255 bytes, `poly` 790 -> 1,723,
+  `threads4` 1,320 -> 2,678) for +3,906 bytes, so the limit is doing real work. Moving a threshold
+  only moves the cliff.
+- **The bug is what is being counted.** A node count is a proxy for how much CODE an inlined copy
+  costs, and `(let [a X] (+ a Y))` generates **no more code** than `(+ X Y)` — the binding is a
+  register move at most, and C-168 has now removed even that. The inliner itself turns every call
+  it inlines into a `let` (`:c::inl-temps`), so a callee already written with one is being charged
+  for scaffolding the inliner was about to add anyway. **Charge for generated code, not for
+  source syntax**: count the nodes that will emit something, or measure the callee's compiled
+  length in pass one and use that in pass two.
+- **Why it matters beyond a benchmark.** This is a cliff, not a slope: it turns a readability
+  decision into a 2.3x performance decision with nothing in the language or the error output to
+  say so. A person who names a value to make a long expression legible has no way to know they
+  crossed it. Every other finding in this file is about wat being wrong or slow; this one is about
+  wat being **unpredictable**, which is worse to live with.
+- **Class:** CORRECT (the metric), and the probe stays as `elf/bench/fibreg.wat` so the cliff is
+  measured on every run rather than remembered.
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/
+  ./elf/out/fibreg.elf` against `./elf/out/fib32.elf`; change `:c::inl-limit` to 35 and rebuild.
+
+### C-168: a `let` binding was stored twice — once into its register, once onto the stack
+
+Reading the un-inlined `fibreg` disassembly for F-129 turned up a waste that has nothing to do
+with inlining:
+
+```
+  mov  %rax,%r12       ;; the `let` binding `a`
+  push %rax            ;; ...and the fold accumulator, onto the stack
+  ...  call fib ...
+  pop  %rcx
+  add  %rcx,%rax
+```
+
+- **The value was already in a register that survives the call.** rbx, r12, r13 and rbp are
+  pushed and popped by every callee this compiler emits, so a `let` binding in one of them is
+  safe across a call — and C-161 already knows how to add from a register in one instruction
+  (`add %r12,%rax`) instead of three.
+- **What stopped it was a rule that was right for the wrong reason.** The binop clause chose
+  "the accumulator is in rax, so hand `-1` down and let `:c::expr` emit nothing". True — but
+  **rax is the one copy that does not survive**, because whatever is evaluated next puts its own
+  value there. When the operand is also in a callee-saved register and the operator is
+  commutative, the register wins; for `-` the register still has to reach rax first, so there
+  rax keeps its advantage and the rule stands.
+- **Measured:** `fibreg` 112,786,605 -> **105,737,445** instructions (-6.3%) and 36.53M ->
+  **34.16M** cycles (-6.5%). `fib32`, `bench`, `loopsum` and `triple` are **unchanged to the
+  instruction** — none of them has a named accumulator, which is the point: this is a fix for
+  code that names its intermediates, which is most code that is not a benchmark.
+- **`tools/bootstrap.sh` green from the interpreter — 57 binaries byte-identical; `elf-run` 26/26
+  with four refusals and three traps; `run.sh elf` 30/30; `vs-c` and `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/fibreg.elf` —
+  `mov %rax,%r12` ... `add %r12,%rax`, with no `push`/`pop` between them.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

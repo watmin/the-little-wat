@@ -86,12 +86,21 @@ and no branch misses, so the front end is bound by **taken branches**, and a tak
 fetch redirect whether it was predicted or not. **On front-end-bound code the unit of cost is a
 taken branch, not an instruction.**
 
-**A lead, measured but not explained:** naming the intermediate — `(let [a (fib (- n 1))]
-(+ a (fib (- n 2))))` instead of `(+ (fib (- n 1)) (fib (- n 2)))` — costs **112.8M instructions
-against 62.8M and 37.1M cycles against 19.3M**, because the `let` form stops the function
-inlining. `:c::inl-limit` is a node count of 34 and the `let` adds nodes, which is the suspected
-mechanism and is NOT yet confirmed. If that is it, it is a cliff that punishes naming a value,
-and the fix is to measure the callee's cost rather than its node count.
+**THE CLIFF — F-129, confirmed, and the one open CORRECT item in elf/.** Naming an intermediate
+— `(let [a (fib (- n 1))] (+ a (fib (- n 2))))` instead of `(+ (fib (- n 1)) (fib (- n 2)))` —
+costs **2.26x cycles**, because `:c::inl-limit` counts SOURCE NODES and the `let` spelling is 35
+against a limit of 34. **One node.** Verified by moving the threshold: at 35 the named form drops
+from 34.2M cycles to 24.4M, and at 60 to 24.2M.
+
+Raising the limit is not the fix — the whole corpus at 60 grows five programs by **+62% to
++118%**, so the limit is doing real work. **The fix is to charge for GENERATED CODE, not for
+source syntax**: `(let [a X] (+ a Y))` emits no more than `(+ X Y)`, and the inliner turns every
+call it inlines into a `let` anyway (`:c::inl-temps`), so a callee already written with one is
+charged for scaffolding the inliner was about to add. Count the nodes that emit something, or
+measure the callee's compiled length in pass one and use it in pass two.
+
+It is a CLIFF, not a slope: a readability decision becomes a 2.3x performance decision with
+nothing in the language or the diagnostics to say so. `elf/bench/fibreg.wat` keeps it measured.
 
 **`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
 experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
