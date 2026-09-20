@@ -57,7 +57,11 @@ for name in four arith greet branch fib bench strings shadow churn deep logic ve
             memory linear moved freed strverbs strown extremes reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
-  native=$("./$bin" 2>&1); nrc=$?
+  # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran
+  # for seven minutes at 99% of a core after the harness itself had been killed, holding ETXTBSY
+  # on its own file so every later `write-hex` failed, and slowing every measurement taken
+  # meanwhile. R-005 is about `wat` runs; it applies to the binaries too.
+  native=$(timeout -s KILL 60 "./$bin" 2>&1); nrc=$?
   if [ "$interp" = "$native" ] && [ $irc -eq $nrc ]; then
     printf '%-8s agree (exit %d, %4s bytes native)  %s\n' "$name" "$nrc" "$(stat -c%s "$bin")" \
            "$(printf '%s' "$native" | tr '\n' ' ' | cut -c1-46)"

@@ -2958,6 +2958,70 @@
           (:wat::core::+ (:wat::core::if fp? 16 8)
                          (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) i)))) fp?)))))
 
+;; ---------------------------------------------------------------- shrink-wrapping
+;;
+;; **A base case pays for a frame it never uses.** `(defn fib [n] (if (< n 2) n ...))` returns a
+;; parameter, and to do it the callee was executing `sub rsp,32`, four pushes, a parameter load,
+;; the test, four pops, `add rsp,32` and `ret` -- fourteen instructions to hand back the argument
+;; it was given. The profile of `fib(32)` says that path is taken by **63% of 1,298,098 calls**:
+;; `cmp $2,%rbx` and `sub $0x20,%rsp` are the two hottest instructions in the program, because
+;; both are the target of a call and both are on the way to doing nothing.
+;;
+;; So the test goes FIRST, before there is a frame, reading the argument where the caller left
+;; it; and the prologue happens only on the path that needs it. That is shrink-wrapping, and the
+;; condition for it is narrow on purpose: the arm that returns early must be a parameter or a
+;; literal, so that computing it needs no frame, no register and no call.
+(:wat::core::defn :c::param-of? [a <- :wat::core::i64 pv <- :c::Kids i <- :wat::core::i64
+                                 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) false
+    (:wat::core::or (:wat::core::= (:c::text pg a) (:c::text pg (:wat::core::nth pv i)))
+                    (:c::param-of? a pv (:wat::core::+ i 3) pg))))
+
+;; a value the early return can produce with nothing but the incoming stack
+(:wat::core::defn :c::wrap-val? [a <- :wat::core::i64 pv <- :c::Kids pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= (:c::kind a pg) "int")
+    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol") (:c::param-of? a pv 0 pg))))
+
+;; the whole body is one `if`, its test is a machine-word comparison, and its THEN arm is a value
+;; the early return can produce. `env0` is the parameters addressed from the frame, which is what
+;; they are before the prologue has moved any of them into registers.
+(:wat::core::defn :c::wrappable? [ks <- :c::Kids start <- :wat::core::i64 pv <- :c::Kids
+                                  env0 <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= start (:wat::core::- (:wat::core::length ks) 1))
+    (:wat::core::let [a (:wat::core::nth ks start)]
+      (:wat::core::and (:wat::core::= (:c::kind a pg) "list")
+        (:wat::core::let [bs (:c::kidsof pg a)]
+          (:wat::core::and (:wat::core::= (:wat::core::length bs) 4)
+            (:wat::core::and (:c::if? (:c::text pg (:wat::core::nth bs 0)))
+              (:wat::core::and
+                (:wat::core::not= (:c::cmp-cond (:wat::core::nth bs 1) env0 pg) "")
+                (:c::wrap-val? (:wat::core::nth bs 2) pv pg)))))))))
+
+;; the test and the early return, emitted before there is a frame: compare, branch over, compute
+;; the value into rax, `ret`. rsp is untouched, so the `ret` needs no epilogue at all.
+(:wat::core::defn :c::wrap-head [bs <- :c::Kids o <- :c::Out env0 <- :c::Env pg <- :c::Prog
+                                 rt <- :wat::core::i64 tb <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [op (:c::cmp-cond (:wat::core::nth bs 1) env0 pg)
+     cks (:c::kidsof pg (:wat::core::nth bs 1))
+     o1 (:c::expr (:wat::core::nth cks 1) o env0 pg rt tb 0 (:c::no-tail))
+     fast (:c::cmp-only (:wat::core::nth cks 2) env0 pg (:c::fp-adj o1) (:c::Out/fpr o1))
+     o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
+          (:wat::core::let
+            [p1 (:c::push o1 "50" 8)
+             p2 (:c::expr (:wat::core::nth cks 2) p1 env0 pg rt tb 0 (:c::no-tail))]
+            (:c::popn p2 (:wat::string::concat "4889c1" "58" "4839c8") 8)))
+     o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
+     ;; neither the compare nor the branch writes rax, so it still holds the left operand -- and
+     ;; the value being returned is usually that same parameter, which is then already there.
+     ;; C-149's reasoning, in the one place that reads a parameter twice in three instructions.
+     o3k (:wat::core::if (:wat::core::not= fast "")
+           (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
+     at (:wat::core::- (:c::codelen o3k) 4)
+     o4 (:c::expr (:wat::core::nth bs 2) o3k env0 pg rt tb 0 (:c::no-tail))
+     o5 (:c::emit o4 "c3")]
+    (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 4)) 4))))
+
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :wat::core::i64 tb <- :wat::core::i64
                                   tail-in <- :c::Buf] -> :c::Out
@@ -3005,9 +3069,32 @@
      fkv (:wat::core::if fpr? 0
            (:wat::core::+ frame (:wat::core::* 8 (:wat::core::+ nr nlr))))
      o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv)
+     ;; **before the frame exists, the parameters are still where the caller put them**, so this
+     ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
+     ;; because a cloning function keeps its frame pointer and its parameters with it.
+     env0 (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg false)
+     ;; **not a function with a self tail call.** C-121 makes such a call a `jmp` to the end of
+     ;; the prologue -- and the test now lives BEFORE the prologue, so the jump would skip it and
+     ;; the loop would never end (`elf/src/vectors.wat` hangs). It would buy nothing there in any
+     ;; case: a loop pays its prologue once per call, not once per iteration.
+     wrap? (:wat::core::and (:wat::core::not fpr?)
+             (:wat::core::and
+               (:wat::core::not (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
+                                  (:c::text pg (:wat::core::nth ks 1)) n pg))
+               (:c::wrappable? ks start pv env0 pg)))
+     ;; **fk is zero here and `fkv` afterwards.** Before the prologue rsp still points at the
+     ;; return address, so an argument is eight bytes up; after it, the frame and the saved
+     ;; registers are in between. Getting this wrong reads the argument at the offset it will
+     ;; have LATER, which is a load from the caller's frame.
+     ow (:wat::core::if wrap?
+          (:wat::core::assoc
+            (:c::wrap-head (:c::kidsof pg (:wat::core::nth ks start))
+              (:wat::core::assoc o0 :fk 0) env0 pg rt tb)
+            :fk fkv)
+          o0)
      ;; make room / save the registers this function will use / load the parameters into them.
      ;; The saves come AFTER the frame so that a `let` slot does not land on a saved register.
-     o1 (:c::emit o0 (:wat::string::concat
+     o1 (:c::emit ow (:wat::string::concat
                        (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
                        (:c::sub-rsp frame)
                        (:c::reg-saves 0 (:wat::core::+ nr nlr) "")
@@ -3031,7 +3118,11 @@
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
                   :target (:wat::core::+ base (:c::codelen o1))))
-     o2 (:c::seq ks start o1 env pg rt tb 0 tc)]
+     ;; when the head was peeled off, the body is the `if`'s ELSE arm and nothing else
+     o2 (:wat::core::if wrap?
+          (:c::expr (:wat::core::nth (:c::kidsof pg (:wat::core::nth ks start)) 3)
+            o1 env pg rt tb 0 tc)
+          (:c::seq ks start o1 env pg rt tb 0 tc))]
     (:c::at-depth0 o2 (:wat::string::concat
       (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "")
       ;; `leave` is `mov rbp,rsp ; pop rbp`; without a frame pointer the same job is one `add`

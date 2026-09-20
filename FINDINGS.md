@@ -10570,6 +10570,54 @@ complete at check time. Any openness either moves it to link time or gives it up
   against `elf/bench/out_fib_O2`; two events at a time.
 
 
+### C-159: shrink-wrapping — a base case stops paying for a frame it never uses, and fib drops under 2x
+
+- **Where:** `elf/compile.wat` (`:c::param-of?`, `:c::wrap-val?`, `:c::wrappable?`,
+  `:c::wrap-head`, `:c::compile-fn`), `tools/elf-run.sh` (a timeout that should always have
+  been there). Built on C-158's instruction-level profile, which is the reason it was built
+  instead of a register allocator.
+- **The profile named it.** The two hottest instructions in `fib32` were `cmp $0x2,%rbx` (9.4%)
+  and `sub $0x20,%rsp` (5.0%) — the test and the frame, both targets of a call. `fib` makes
+  **1,298,098 calls** and roughly 63% of them return a parameter immediately, after executing
+  `sub rsp,32`, four pushes, a parameter load, the test, four pops, `add rsp,32` and `ret`:
+  **fourteen instructions to hand back the argument it was given.**
+- **So the test goes first and the prologue happens only on the path that needs it.** The base
+  case is now four instructions — `mov 0x8(%rsp),%rax ; cmp $0x2,%rax ; jge ; ret` — reading the
+  argument where the caller left it, eight bytes up, because rsp has not moved yet.
+- **Two conditions, both narrow on purpose.** The arm that returns early must be a parameter or
+  a literal, so computing it needs no frame, no register and no call. And the function must have
+  **no self tail call**: C-121 makes such a call a `jmp` to the end of the prologue, and the test
+  now lives before the prologue, so the jump would skip it and the loop would never terminate —
+  `elf/src/vectors.wat` hung on exactly that. It costs nothing to exclude them, because a loop
+  pays its prologue once per call rather than once per iteration.
+- **`fk` is zero before the prologue and `fkv` after it.** The first version read the argument at
+  the offset it would have LATER (`0x48(%rsp)` instead of `0x8(%rsp)`) — a load from the caller's
+  frame. Same class as C-155's layout mistake and caught the same way, by looking at four
+  instructions of output.
+- **Measured, interleaved, minimum of eight, pinned:**
+
+  | | instructions | cycles | IPC |
+  | --- | --- | --- | --- |
+  | before (C-157) | 79,389,357 | 21,938,469 | 3.62 |
+  | **shrink-wrapped** | **72,094,487** (-9.2%) | **19,483,749** (-11.2%) | 3.70 |
+  | gcc `-O2` | 51,422,402 | 9,884,989 | 5.20 |
+
+  **The gap on `fib(32)` goes from 2.22x to 1.97x** — under two for the first time. `loopsum` and
+  the compiler are flat, which is right: neither has a wrappable function.
+- **And a harness hole that cost an hour.** `tools/elf-run.sh`'s differential loop ran each
+  binary with **no timeout**. The first, broken version of this change made `churn.wat` loop
+  forever; that binary ran for seven minutes at 99% of a core after the harness had been killed,
+  holding **ETXTBSY on its own file** so every later `write-hex` failed with
+  `assert-eq written filesz` — a failure that looked like a compiler bug, reproduced on the
+  *committed* source, and had nothing to do with either. R-005 is about `wat` runs; it applies to
+  the binaries the harness runs too, and now it does.
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  153,625 bytes, and the compiled compiler is **780x** the interpreter; `elf-run` 25/25 and four
+  refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` section 3; `taskset -c 2 perf stat ./elf/out/fib32.elf`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
