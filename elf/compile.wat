@@ -2808,6 +2808,44 @@
                   (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) "50" 8)
       env pg rt tb slot)))
 
+;; **a self tail call does not need the stack when the assignment is safe in order.** The
+;; arguments are all computed before any parameter is overwritten -- which is why they went to
+;; the machine stack and came straight back -- but that is only NECESSARY when a later argument
+;; reads a parameter an earlier one clobbers. `(user/go (- i 1) (if (> a 1000000) ...))` does
+;; not: nothing after the first argument mentions `i`, so `i` can be written where it lands.
+;; C-153 found the `push`/`pop` pair on the critical path of `loopsum`'s `i`, a store and a load
+;; with forwarding latency, once per iteration.
+(:wat::core::defn :c::none-mention? [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                     pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::and (:wat::core::= (:c::occ (:wat::core::nth ks i) name pg) 0)
+                     (:c::none-mention? ks (:wat::core::+ i 1) name pg))))
+
+;; parameter j's name is `pv[3j]`, its argument `ks[j+1]`, and the arguments after it `ks[j+2..]`
+(:wat::core::defn :c::tail-direct? [pv <- :c::Kids ks <- :c::Kids j <- :wat::core::i64
+                                    n <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= j n) true
+    (:wat::core::and
+      (:c::none-mention? ks (:wat::core::+ j 2)
+        (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))) pg)
+      (:c::tail-direct? pv ks (:wat::core::+ j 1) n pg))))
+
+;; each argument computed into rax and written straight to its parameter, left to right
+(:wat::core::defn :c::tail-direct [ks <- :c::Kids j <- :wat::core::i64 n <- :wat::core::i64
+                                   o <- :c::Out env <- :c::Env pg <- :c::Prog
+                                   rt <- :wat::core::i64 tb <- :wat::core::i64
+                                   slot <- :wat::core::i64 nr <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= j n) o
+    (:wat::core::let
+      [o1 (:c::share (:wat::core::nth ks (:wat::core::+ j 1)) env pg
+            (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
+       o2 (:c::emit o1
+            (:wat::core::if (:wat::core::< j nr) (:c::reg-mov-from j)
+              (:c::store (:c::fp o1 (:wat::core::+ 16
+                           (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
+                         (:c::Out/fpr o1))))]
+      (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr))))
+
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
                                  slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
@@ -2815,8 +2853,14 @@
     (:wat::core::if (:c::tail-call? tc head n)
       ;; a self call in tail position: overwrite the incoming arguments and go round again, on
       ;; the SAME frame, so a tail-recursive loop runs in constant stack
-      (:wat::core::let [o1 (:c::push-but-last ks 1 o env pg rt tb slot)
-                        o2 (:c::tail-store 0 n o1 (:c::TC/nregs tc))]
+      (:wat::core::let
+        [fi (:c::fn-of pg head 0)
+         pv (:c::kidsof pg (:wat::core::nth
+              (:c::kidsof pg (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))) 2))
+         o2 (:wat::core::if (:c::tail-direct? pv ks 0 n pg)
+              (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc))
+              (:c::tail-store 0 n (:c::push-but-last ks 1 o env pg rt tb slot)
+                (:c::TC/nregs tc)))]
         (:c::emit o2 (:wat::string::concat "e9"
           (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o2) 5)) 4))))
       (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)

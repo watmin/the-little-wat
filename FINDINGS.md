@@ -10470,6 +10470,56 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/elf-run.sh`, which now refuses four programs instead of two.
 
 
+### C-157: a self tail call stops going through memory — and the first compute benchmark we do not lose
+
+- **Where:** `elf/compile.wat` (`:c::none-mention?`, `:c::tail-direct?`, `:c::tail-direct`,
+  `:c::call-user`'s tail path).
+- **The arguments of a self tail call were computed into the machine stack and taken straight
+  back out.** They have to be computed before any parameter is overwritten, which is why they
+  went there — but that is only NECESSARY when a later argument reads a parameter an earlier one
+  clobbers. `(user/go (- i 1) (if (> a 1000000) (- a 1000000) a))` does not: nothing after the
+  first argument mentions `i`. So `i` is written where it lands, and the `push`/`pop` pair C-153
+  found on `loopsum`'s critical path — **a store and a load with forwarding latency, once per
+  iteration** — is a `mov`.
+- **The condition is exactly one question, asked with machinery that already existed.**
+  Parameter `j`'s name is `pv[3j]` and its argument `ks[j+1]`; the assignment is safe in order
+  when no argument after `ks[j+1]` mentions that name, which is `:c::occ` — the same counter
+  C-127 uses for last-use. All of the parameters must qualify or none do, because a single
+  clobber invalidates the order.
+- **Measured, interleaved, minimum of six:**
+
+  | | instructions | cycles |
+  | --- | --- | --- |
+  | `loopsum` | 2,100,000,432 → **2,000,000,443** (-4.8%) | 352,238,127 → **303,778,493** (-13.8%) |
+  | the compiler | 809,439,024 → 804,136,058 (-0.7%) | 523,527,446 → 513,597,346 (-1.9%) |
+  | `fib32` | flat | flat — `fib` is not tail-recursive |
+
+  **The cycles moved four times as much as the instructions**, which is the whole point: one
+  instruction of the four per cent, and a store-to-load round trip off the dependency chain for
+  the rest.
+- **And it is the first compute benchmark where we are not behind `gcc -O2`.** Head to head,
+  pinned to a P-core, minimum of eight:
+
+  | | instructions | cycles | IPC |
+  | --- | --- | --- | --- |
+  | ours | 2,000,000,400 | **303,273,696** | 6.59 |
+  | gcc `-O2` | 600,231,244 | **303,792,305** | 1.98 |
+
+- **The honest reading, because the number flatters us.** We issue **3.3x the instructions** and
+  finish in the same cycles. That is not our code being as good as gcc's; it is that this loop is
+  latency-bound on its own accumulator chain — both compilers wait on the same `add` — and a
+  six-wide machine has the slots to hide our extra work. **It will stop hiding it the moment a
+  loop is throughput-bound**, which is precisely what C-153 said when it measured IPC 6.40 and
+  called the fat a debt rather than a free pass. The debt is now 20 instructions an iteration
+  against six, down from 26.
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  150,311 bytes, and the compiled compiler is **714x** the interpreter; `elf-run` 25/25 and four
+  refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` section 5; `taskset -c 2 perf stat ./elf/out/loopsum.elf` against
+  `elf/bench/out_loopsum`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
