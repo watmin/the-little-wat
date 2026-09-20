@@ -11084,6 +11084,87 @@ with inlining:
 - **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/fibreg.elf` —
   `mov %rax,%r12` ... `add %r12,%rax`, with no `push`/`pop` between them.
 
+### C-169: `cmov` measured and rejected — and a sixth of the uops removed for nothing at all
+
+`(wat.core/if (wat.core/> a 1000000) (wat.core/- a 1000000) a)` is a value, not a control
+structure, and `gcc -O2` compiles it as one: `lea`, `cmp`, `cmovg`. We compiled it as a diamond —
+compare, branch, compute into rax, jump, compute into rax, join — and then moved the answer out
+of rax into the register it belonged in. Six instructions on the long path, four on the short,
+two branches either way. `elf/bench/triple.wat` has three an iteration.
+
+**C-166 is what made if-conversion reachable.** `cmov` needs both arms evaluated, and `(- x k)`
+carries a `jo` — a branch, which is the thing being removed. Under the dominating comparison
+that check is provably dead, and what is left is a `lea` that cannot overflow and sets no flags.
+
+- **So it was built, and it is a loss.** Three compilers, one machine, interleaved:
+
+  | | instructions | cycles |
+  |---|---|---|
+  | `triple` diamond through rax | 1,200,000,310 | 180.3M |
+  | `triple` **`cmov`** | 1,020,000,320 (-15.0%) | 177.4M (**-1.6%**) |
+  | `triple` **destination diamond** | 1,020,000,300 (-15.0%) | 180.1M (-0.1%) |
+  | `loopsum` diamond through rax | 1,800,000,345 | 268.6M |
+  | `loopsum` **`cmov`** | 1,600,000,435 (-11.1%) | 362.3M (**+34.9%**) |
+  | `loopsum` **destination diamond** | 1,600,000,360 (-11.1%) | 270.6M (+0.7%) |
+
+- **A `cmov` turns a control dependence into a DATA dependence**, and on a loop carrying one
+  accumulator that is the whole cost. With the branch, the predictor is right every time and the
+  compare and jump are not on the recurrence at all — `add` then `sub`, two cycles. With `cmov`
+  the recurrence becomes `add`, `cmp`/`lea`, `cmov`, and the cycles go up by a third while the
+  instruction count goes down by a ninth. **`gcc -O2` if-converts `loopsum` and loses to our
+  branch by 11%** (304.0M cycles against 268.6M): the one place in the corpus where being less
+  clever is measurably right.
+- **What was worth keeping is the destination.** Each arm is written straight into the register
+  the value belongs in, so the diamond's closing `mov %rax,%r12` is gone and each arm is one
+  instruction — `lea -0xf4240(%r13),%r12` or `mov %r13,%r12`. And because `:c::selv` has a length
+  the moment it is built, every displacement is known without patching: **both branches are
+  `rel8`**, where the diamond used `rel32` for the `jcc` and the `jmp` alike.
+
+**And then the counters said something much more interesting than either variant.**
+
+| | uops issued | cycles | uops/cycle | top-down |
+|---|---|---|---|---|
+| `triple` before | 1,080,060,000 | 180.08M | **6.00** | **100.0% retiring**, 0% front-end, 0% back-end |
+| `triple` after | 900,064,000 (**-16.7%**) | 180.11M (**+0.0%**) | 5.00 | 81.6% retiring, **16.9% front-end**, 1.7% back-end |
+| `loopsum` before | 1,600,106,000 | 271.8M | 5.88 | |
+| `loopsum` after | 1,400,094,000 (**-12.5%**) | 271.1M (**-0.3%**) | 5.16 | |
+
+- **A sixth of the uops went away and the machine gave back nothing.** Before, `triple` was at
+  **6.00 uops per cycle and 100% retiring** — pinned exactly at the rename width, every slot
+  full, nothing else measurable. After, it issues the same 180.1M cycles' worth at 5.00, and the
+  slack is **16.9% front-end bound**, which was 0% before.
+- **Because the branches did not go away.** `triple` still retires **450,000,132 branches — 15 an
+  iteration.** Removing uops from between them lowered the uops-per-taken-branch, and the front
+  end cannot deliver six uops per cycle across that many. The binding constraint moved from
+  rename width to instruction delivery, and the delivery rate is governed by taken branches:
+  **C-167's rule, arriving at a throughput-bound loop from the other direction.**
+- **Which is why `cmov` won its 1.6% on `triple`**: not for its instruction count, which is
+  identical to the destination diamond's, but because it removes six of the fifteen branches.
+  It cannot be had on `loopsum` at any price, so it is not had at all.
+- **Kept because the work is genuinely gone**, and reported as cycle-neutral. The next thing that
+  moves either of these loops has to remove BRANCHES, and the seven `jo`s an iteration are now
+  the largest block of them.
+- **The encodings stopped being tables.** A value moved between any two of ten registers, plus
+  `lea`, is three hundred entries. `:c::rcode` and `:c::rext?` say what a register IS — its
+  three-bit code and whether it needs the REX bit — and `:c::mov-rr`, `:c::mov-ri`, `:c::lea`
+  and `:c::modrm` compute the bytes with `:asm::u8`. Cross-checked against every entry of the
+  four hand-written tables it subsumes, and disassembled.
+- **`elf/src/select.wat`** is the coverage, because only two benchmark binaries changed a byte
+  when this went in: every arm shape, both sides of the comparison, an arm already in its
+  destination (so the else arm compiles to nothing and the branch is the one that skips the
+  THEN arm), both arms the same register (the select must emit nothing at all), and a
+  destination past the first four so both REX bits are exercised. Fifteen values agreeing both
+  ways, `-9223372036854775808` down each path.
+- **`tools/elf-run.sh` counts its summary now.** It was a sentence with the numbers written into
+  it and claimed twenty-five agreeing programs on a run where twenty-seven agreed.
+- **`tools/bootstrap.sh` green from the interpreter — 58 binaries byte-identical, fixpoint at
+  171,962 bytes; `elf-run` 27/27 with four refusals and three traps; `run.sh elf` 31/31; `vs-c`
+  and `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/uops_issued.any/,cpu_core/cycles/
+  ./elf/out/triple.elf`, and the top-down bucket with `cpu_core/topdown-retiring/` against
+  `cpu_core/topdown-fe-bound/`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

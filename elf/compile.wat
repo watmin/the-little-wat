@@ -1012,6 +1012,53 @@
 ;; **0-3 are the callee-saved registers and 4-7 are r8-r11.** The second group is only ever
 ;; handed out to a function that makes no returning call (`:c::callfree?`), because nothing else
 ;; preserves them -- and for exactly that reason they need no saving in the prologue either.
+;; ---------------------------------------------------------------- registers, by number
+;;
+;; **Everything above this point is a hand-written hex table, and there is a reason it stops
+;; here.** A table has one entry per (operand, register) pair and the tables above are already
+;; eight entries wide; what comes next needs a value moved between ANY two of ten registers, plus
+;; `lea`, plus `cmov`, which is three more tables of a hundred entries. So these two functions
+;; say what a register IS -- its three-bit code and whether it needs the REX extension bit -- and
+;; the encodings are computed from that, which is what `:asm::u8` was for.
+;;
+;; The numbering extends the allocator's: 0-3 are the callee-saved four, 4-7 are r8-r11 (C-165),
+;; and 8 and 9 are rax and rcx, which nothing allocates and everything scribbles on.
+(:wat::core::defn :c::rcode [r <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= r 0) 3) ((:wat::core::= r 1) 4) ((:wat::core::= r 2) 5) ((:wat::core::= r 3) 5)
+    ((:wat::core::= r 4) 0) ((:wat::core::= r 5) 1) ((:wat::core::= r 6) 2) ((:wat::core::= r 7) 3)
+    ((:wat::core::= r 8) 0) (:else 1)))
+(:wat::core::defn :c::rext? [r <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= r 1) (:wat::core::or (:wat::core::= r 2)
+    (:wat::core::and (:wat::core::>= r 4) (:wat::core::<= r 7)))))
+(:wat::core::defn :c::rex [w <- :wat::core::bool b <- :wat::core::bool] -> :wat::core::String
+  (:asm::u8 (:wat::core::+ 72 (:wat::core::+ (:wat::core::if w 4 0) (:wat::core::if b 1 0)))))
+(:wat::core::defn :c::modrm [mod <- :wat::core::i64 reg <- :wat::core::i64
+                             rm <- :wat::core::i64] -> :wat::core::String
+  (:asm::u8 (:wat::core::+ (:wat::core::* mod 64) (:wat::core::+ (:wat::core::* reg 8) rm))))
+
+;; `mov SRC, DST` for any two of them
+(:wat::core::defn :c::mov-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex (:c::rext? src) (:c::rext? dst)) "89"
+                        (:c::modrm 3 (:c::rcode src) (:c::rcode dst))))
+
+;; `mov $imm32, DST`
+(:wat::core::defn :c::mov-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex false (:c::rext? dst)) "c7"
+                        (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 4)))
+
+;; `lea disp(BASE), DST` -- the arithmetic that sets no flags. `rsp` and `r12` share a code that
+;; means "a SIB byte follows", so those two need one; `rbp` and `r13` share one that means "no
+;; base" only when there is no displacement, and there is always one here.
+(:wat::core::defn :c::lea [base <- :wat::core::i64 dst <- :wat::core::i64
+                           d <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? d)
+                    c (:c::rcode base)]
+    (:wat::string::concat (:c::rex (:c::rext? dst) (:c::rext? base)) "8d"
+      (:c::modrm (:wat::core::if short? 1 2) (:c::rcode dst) c)
+      (:wat::core::if (:wat::core::= c 4) "24" "")
+      (:asm::le d (:wat::core::if short? 1 4)))))
+
 (:wat::core::defn :c::reg-mov-to [r <- :wat::core::i64] -> :wat::core::String   ;; mov rax, REG
   (:wat::core::cond ((:wat::core::= r 0) "4889d8") ((:wat::core::= r 1) "4c89e0")
                     ((:wat::core::= r 2) "4c89e8") ((:wat::core::= r 3) "4889e8")
@@ -3000,21 +3047,132 @@
         (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))) pg)
       (:c::tail-direct? pv ks (:wat::core::+ j 1) n pg))))
 
+;; ---------------------------------------------------------------- the branchless select
+;;
+;; **`(wat.core/if (wat.core/> a2 1000000) (wat.core/- a2 1000000) a2)` is a value, not a
+;; control structure**, and gcc compiles it as one: `lea`, `cmp`, `cmovg`, no branch at all.
+;; We compiled it as a diamond -- compare, branch, compute, jump, compute, join -- and then
+;; moved the answer out of rax into wherever it belonged, six instructions on the long path and
+;; four on the short one, with two branches either way. `elf/bench/triple.wat` has three of them
+;; an iteration and they are 18 of its 40 instructions.
+;;
+;; Three things have to be true, and C-166 is what made the third one reachable:
+;;
+;;   1. the condition is a REGISTER against an IMMEDIATE, so the compare is one instruction and
+;;      touches neither rax nor rcx;
+;;   2. both arms are values that can be computed with `mov` or `lea`, which set no flags -- so
+;;      the compare can go FIRST and the arms cannot disturb it, and the destination may be the
+;;      register the compare reads;
+;;   3. neither arm can trap. `(- x k)` normally carries a `jo`, which is a branch, which is the
+;;      thing being removed -- but under the dominating comparison C-166 proves that check dead,
+;;      and a `lea` that cannot overflow is exactly what is left.
+;;
+;; The result goes straight into its destination register, which is the other half of the win:
+;; the diamond's `mov %rax,%r12` disappears with it.
+(:wat::core::defn :c::selv? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
+                             nn <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::if (:c::ptr-ty? (:c::type-of a env pg)) false
+    (:wat::core::cond
+      ((:wat::core::= (:c::kind a pg) "int") (:c::imm32? (:c::to-int (:c::text pg a) pg)))
+      ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::>= (:c::reg-of a env pg) 0))
+      ((:wat::core::not= (:c::kind a pg) "list") false)
+      (:else
+        (:wat::core::let [ks (:c::kidsof pg a)]
+          (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
+            (:wat::core::and (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth ks 0))) "-")
+              (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth ks 1) env pg) 0)
+                (:wat::core::and (:wat::core::not= nn "")
+                  (:wat::core::and (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) nn)
+                    (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "int")
+                      (:wat::core::let [k (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)]
+                        (:wat::core::and (:wat::core::>= k 0) (:c::imm32? k))))))))))))))
+
+(:wat::core::defn :c::selv [a <- :wat::core::i64 dst <- :wat::core::i64 env <- :c::Env
+                            pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a pg) "int") (:c::mov-ri dst (:c::to-int (:c::text pg a) pg)))
+    ((:wat::core::= (:c::kind a pg) "symbol")
+      (:wat::core::let [r (:c::reg-of a env pg)]
+        ;; already there: the `mov` would be `mov %r12,%r12`
+        (:wat::core::if (:wat::core::= r dst) "" (:c::mov-rr r dst))))
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:c::lea (:c::reg-of (:wat::core::nth ks 1) env pg) dst
+          (:wat::core::- 0 (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)))))))
+
+(:wat::core::defn :c::sel-ok? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) false
+        (:wat::core::if (:wat::core::not (:c::if? (:c::text pg (:wat::core::nth ks 0)))) false
+          (:wat::core::let [op (:c::cmp-cond (:wat::core::nth ks 1) env pg)]
+            (:wat::core::if (:wat::core::= op "") false
+              (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks 1))]
+                (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth cks 1) env pg) 0)
+                  (:wat::core::and (:c::imm-cmp? (:wat::core::nth cks 2) pg)
+                    (:wat::core::and
+                      (:c::selv? (:wat::core::nth ks 2) env pg (:c::nneg-of cks op true pg))
+                      (:c::selv? (:wat::core::nth ks 3) env pg
+                                 (:c::nneg-of cks op false pg)))))))))))))
+
+;; **and the branch STAYS.** `cmov` was built first and measured: `triple` -15% instructions for
+;; -1.6% cycles, and `loopsum` -11% instructions for **+34% cycles**. A `cmov` turns a control
+;; dependence into a DATA dependence, and on a latency-bound loop that is the whole cost -- the
+;; branch was predicted perfectly and cost nothing, while the `cmov` added itself to the
+;; recurrence. (`gcc -O2` if-converts `loopsum` and is 11% slower than our branch for it.)
+;;
+;; What was worth having is the other half: **both arms written straight into the destination
+;; register**, so the diamond's closing `mov %rax,%r12` is gone and each arm is one instruction.
+;; Since `:c::selv` has a length the moment it is built, every displacement here is known without
+;; patching and both branches are `rel8`.
+(:wat::core::defn :c::sel [a <- :wat::core::i64 dst <- :wat::core::i64 o <- :c::Out
+                           env <- :c::Env pg <- :c::Prog] -> :c::Out
+  (:wat::core::let [ks (:c::kidsof pg a)
+                    op (:c::cmp-cond (:wat::core::nth ks 1) env pg)
+                    cks (:c::kidsof pg (:wat::core::nth ks 1))
+                    cmp (:c::reg-cmp-imm (:c::reg-of (:wat::core::nth cks 1) env pg)
+                          (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg))
+                    tb (:c::selv (:wat::core::nth ks 2) dst env pg)
+                    eb (:c::selv (:wat::core::nth ks 3) dst env pg)]
+    (:wat::core::cond
+      ;; both arms are the register already: there is nothing to choose between
+      ((:wat::core::and (:wat::core::= tb "") (:wat::core::= eb "")) o)
+      ;; the THEN arm is the register already, so the branch is the one that SKIPS the else arm
+      ((:wat::core::= tb "")
+        (:c::emit o (:wat::string::concat cmp (:c::jcc8 op)
+                      (:asm::le (:c::hexlen eb) 1) eb)))
+      ;; the ELSE arm is: branch over the then arm and there is nothing after it
+      ((:wat::core::= eb "")
+        (:c::emit o (:wat::string::concat cmp (:c::jcc-not8 op)
+                      (:asm::le (:c::hexlen tb) 1) tb)))
+      (:else
+        (:c::emit o (:wat::string::concat cmp
+          (:c::jcc-not8 op) (:asm::le (:wat::core::+ (:c::hexlen tb) 2) 1) tb
+          "eb" (:asm::le (:c::hexlen eb) 1) eb))))))
+
 ;; each argument computed into rax and written straight to its parameter, left to right
 (:wat::core::defn :c::tail-direct [ks <- :c::Kids j <- :wat::core::i64 n <- :wat::core::i64
                                    o <- :c::Out env <- :c::Env pg <- :c::Prog
                                    rt <- :wat::core::i64 tb <- :wat::core::i64
                                    slot <- :wat::core::i64 nr <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= j n) o
-    (:wat::core::let
-      [o1 (:c::share (:wat::core::nth ks (:wat::core::+ j 1)) env pg
-            (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
-       o2 (:c::emit o1
-            (:wat::core::if (:wat::core::< j nr) (:c::reg-mov-from j)
-              (:c::store (:c::fp o1 (:wat::core::+ 16
-                           (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
-                         (:c::Out/fpr o1))))]
-      (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr))))
+    (:wat::core::if
+      ;; **an argument that is a select goes straight into its parameter register**, which is
+      ;; where the diamond's last `mov` went anyway
+      (:wat::core::and (:wat::core::< j nr)
+                       (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
+      (:c::tail-direct ks (:wat::core::+ j 1) n
+        (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
+        env pg rt tb slot nr)
+      (:wat::core::let
+        [o1 (:c::share (:wat::core::nth ks (:wat::core::+ j 1)) env pg
+              (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
+         o2 (:c::emit o1
+              (:wat::core::if (:wat::core::< j nr) (:c::reg-mov-from j)
+                (:c::store (:c::fp o1 (:wat::core::+ 16
+                             (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
+                           (:c::Out/fpr o1))))]
+        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr)))))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
@@ -4104,6 +4262,7 @@
     (:c::compile "elf/src/four.wat"   "elf/out/four.elf")
     (:c::compile "elf/src/extremes.wat" "elf/out/extremes.elf")
     (:c::compile "elf/src/nnegsub.wat"  "elf/out/nnegsub.elf")
+    (:c::compile "elf/src/select.wat"   "elf/out/select.elf")
     (:c::compile "elf/bad/nnegshadow.wat" "elf/out/nnegshadow.elf")
     (:c::compile "elf/bad/overflow.wat" "elf/out/overflow.elf")
     (:c::compile "elf/bad/divzero.wat"  "elf/out/divzero.elf")

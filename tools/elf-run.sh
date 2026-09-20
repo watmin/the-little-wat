@@ -40,6 +40,10 @@ echo "== the check that matters: compiled binary vs wat interpreter =="
 # The interpreter's answer depends only on the source and on which wat binary is asking, so it
 # is cached. A change to the COMPILER -- which is most changes -- then costs no interpreter runs
 # at all, and the suite goes from thirty-odd seconds to about one.
+# **counted, not asserted.** This summary used to be a sentence with the numbers written into
+# it, and it went stale the moment a probe was added -- it claimed twenty-five agreeing programs
+# on a run where twenty-seven did.
+agreed=0; natively=0
 ORACLE="elf/out/.oracle"; mkdir -p "$ORACLE"
 WATID=$(stat -c%s,%Y "$WAT" 2>/dev/null | tr ',' '-')
 oracle () {   # source path -> its output on stdout, its exit status as the return
@@ -54,7 +58,7 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
 }
 
 for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
-            memory linear moved freed strverbs strown extremes nnegsub reader diag fileio asmbits; do
+            memory linear moved freed strverbs strown extremes nnegsub select reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran
@@ -62,6 +66,7 @@ for name in four arith greet branch fib bench strings shadow churn deep logic ve
   # on its own file so every later `write-hex` failed, and slowing every measurement taken
   # meanwhile. R-005 is about `wat` runs; it applies to the binaries too.
   native=$(timeout -s KILL 60 "./$bin" 2>&1); nrc=$?
+  agreed=$((agreed+1))
   if [ "$interp" = "$native" ] && [ $irc -eq $nrc ]; then
     printf '%-8s agree (exit %d, %4s bytes native)  %s\n' "$name" "$nrc" "$(stat -c%s "$bin")" \
            "$(printf '%s' "$native" | tr '\n' ' ' | cut -c1-46)"
@@ -88,6 +93,7 @@ check_native () {   # name, expected output (newline separated)
   local name="$1" want="$2" bin="elf/out/$1.elf"
   local got rc
   got=$(timeout -s KILL 20 "./$bin" 2>&1); rc=$?
+  natively=$((natively+1))
   if [ "$got" = "$want" ] && [ $rc -eq 0 ]; then
     printf '%-10s %4s bytes  %s\n' "$name" "$(stat -c%s "$bin")" "$(printf '%s' "$got" | tr '\n' ' ')"
   else
@@ -175,8 +181,9 @@ refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
 
 echo
 if [ $fail -eq 0 ]; then
-  echo "elf-run: ok -- thirty-six native binaries, thirty-four of them compiled from wat source."
-  echo "         Twenty-five agree with the interpreter; three use syscalls it cannot run (F-119)."
+  echo "elf-run: ok -- $(ls elf/out/*.elf | wc -l) native binaries. $agreed agree with the interpreter;"
+  echo "         $natively more use syscalls it has no implementation of (F-119); four refusals and"
+  echo "         three traps, both ways."
 else
   echo "elf-run: FAILED"
 fi
