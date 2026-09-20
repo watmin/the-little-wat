@@ -10618,6 +10618,50 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh` section 3; `taskset -c 2 perf stat ./elf/out/fib32.elf`.
 
 
+### C-160: the short branch, taken — and the overflow trampoline, measured and thrown away
+
+- **Where:** `elf/compile.wat` (`:c::tiny-arm?`, `:c::jcc-not8`, `:c::if-cmp`, `:c::wrap-head`).
+  NEXT.md item 3c, half taken and half refused, both with counters.
+- **A forward branch needs its distance before it can choose an encoding, and a single-pass
+  emitter does not have it.** The usual answer is a measuring pass, which costs 50% of compile
+  time. It is not needed for the case that matters: **when the arm being jumped over is a NAME or
+  a CONSTANT, its length is bounded without measuring** — a symbol is at most an eight-byte load,
+  a literal at most a ten-byte `mov`, and the `jmp` after it is five. Fifteen bytes, inside the
+  127 a `rel8` reaches, known when the branch is emitted. `(if (< n 2) n ...)` is that shape and
+  so is every base case in the corpus.
+- **C-159's own branch is the extreme case**: it jumps over a value and one byte of `ret`, so the
+  shrink-wrapped head is now `mov 0x8(%rsp),%rax ; cmp $0x2,%rax ; 7d 01 ; c3` — **eleven bytes
+  for a base case that was fourteen instructions two findings ago.**
+- **And then the same idea for `jo`, which did not work.** `jo` is six bytes because the handler
+  is at the far end of the program, and it was **26.4% of the bytes** of `fib32`'s hot function.
+  A two-byte `jo` reaches 128 bytes back, so the handler can be brought within reach by planting
+  a five-byte `jmp ovf` in the instruction stream — and there is a free place to put one, because
+  `:c::if-cmp` emits an unconditional `jmp` over its else arm and **nothing falls through a
+  `jmp`**. It is a backward reference, so no extra pass is needed. It worked exactly as designed:
+  `jo` went from 816 bytes to 388, and `fib32` from 3,719 bytes to 3,367.
+
+  | fib32 | size | cycles (min of 14) | uop cache active |
+  | --- | --- | --- | --- |
+  | 6-byte `jcc`, 6-byte `jo` | 3,717 B | **19,493,294** | 15,799,558 |
+  | **`rel8 jcc`** | **3,533 B** | 19,522,609 (+0.15%) | 14,823,807 |
+  | `rel8 jo`, trampolines | 3,367 B | 19,898,965 (**+2.1%**) | 15,211,667 |
+
+  **Nine and a half per cent smaller and two per cent slower.** The five dead bytes sit at the
+  HEAD of the else arm's fetch region — the one place a never-executed blob costs the most — and
+  that is worth more than the four bytes each `jo` gives back. Reverted.
+- **The two together say something worth keeping.** Shortening the branch itself is free and
+  helps the compiler (**-1.0% cycles** on the largest program we have) while leaving `fib`
+  unmoved; planting bytes to shorten a branch is not. **Density is not a quantity to maximise —
+  it is live bytes that matter, and dead ones in a hot fetch path cost several times what they
+  save.** The first measurement of the `rel8` change said +1.5% on `fib` and the second, with
+  fourteen repetitions instead of eight, said +0.15%: at this scale the honest reading needs more
+  samples than a conclusion feels like it deserves.
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  154,307 bytes; `elf-run` 25/25 and four refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** IMPROVE (the short branch) and a recorded refusal (the trampoline).
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/ ./elf/out/fib32.elf`, min of fourteen.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

@@ -96,7 +96,15 @@ peepholes.
    displacements in pass one, since they are pass-invariant, and emit them directly in pass two
    with no patch at all.
 
-3c. **Short branch encodings.** `elf/out/fib32.elf` decodes to 184 `jcc rel32` and 46 `jmp
+3c. ~~**Short branch encodings.**~~ **SETTLED 2026-09-19, C-160.** The half worth having is
+   taken: a branch over a NAME or a CONSTANT has a length bound without measuring, so no extra
+   pass is needed — binaries ~5% smaller, the compiler **-1.0% cycles**, `fib` unmoved. The half
+   that is not: bringing the overflow handler within reach of a two-byte `jo` by planting
+   trampolines made `fib32` **9.5% smaller and 2.1% slower**, because five never-executed bytes
+   at the head of a hot fetch region cost more than the four each `jo` gives back. Density is not
+   a quantity to maximise. Original text:
+
+   **Short branch encodings.** `elf/out/fib32.elf` decodes to 184 `jcc rel32` and 46 `jmp
    rel32`; **all 46 of the non-`jo` conditionals and 24 of the jumps are within rel8 range**,
    which is 256 bytes of a ~1,200-byte code section — about a fifth. The other 138 are the
    overflow `jo`, which needs a handler within 127 bytes to shorten and so wants a per-function

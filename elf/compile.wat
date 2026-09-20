@@ -2179,6 +2179,24 @@
                               (:c::ptr-ty? (:c::type-of (:wat::core::nth cks 2) env pg)))
               "" op)))))))
 
+;; **A branch over a tiny arm fits in two bytes instead of six**, and the arm is tiny exactly
+;; when it is a name or a constant: a symbol costs at most an eight-byte load, a literal at most
+;; a ten-byte `mov`, and the `jmp` after it is five. Fifteen bytes, comfortably inside the 127 a
+;; `rel8` reaches -- so the encoding can be chosen when the branch is EMITTED, with no measuring
+;; pass and no guess. `(if (< n 2) n ...)` is that shape, and so is every base case in the corpus.
+(:wat::core::defn :c::tiny-arm? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [k (:c::kind a pg)]
+    (:wat::core::or (:wat::core::= k "symbol")
+      (:wat::core::or (:wat::core::= k "int")
+        (:wat::core::or (:wat::core::= k "bool") (:wat::core::= k "nil"))))))
+
+;; the short form of a conditional branch: one opcode byte, one displacement byte
+(:wat::core::defn :c::jcc-not8 [op <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "=") "75") ((:wat::core::= op "not=") "74")
+    ((:wat::core::= op "<") "7d") ((:wat::core::= op ">=") "7c")
+    ((:wat::core::= op ">") "7e") (:else "7f")))
+
 (:wat::core::defn :c::if-cmp [ks <- :c::Kids op <- :wat::core::String o <- :c::Out env <- :c::Env
                               pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
                               slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
@@ -2200,7 +2218,13 @@
             [p1 (:c::push o1 "50" 8)
              p2 (:c::expr (:wat::core::nth cks 2) p1 env pg rt tb slot (:c::no-tail))]
             (:c::popn p2 (:wat::string::concat "4889c1" "58" "4839c8") 8)))
-     o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
+     ;; the arm this branch jumps over is a name or a constant, so it and the `jmp` after it
+     ;; come to at most fifteen bytes -- a displacement that fits in one
+     short? (:c::tiny-arm? (:wat::core::nth ks 2) pg)
+     w (:wat::core::if short? 1 4)
+     o3 (:c::emit o2 (:wat::core::if short?
+                       (:wat::string::concat (:c::jcc-not8 op) "00")
+                       (:wat::string::concat (:c::jcc-not op) "00000000")))
      ;; **neither the compare nor the branch writes rax**, so whatever it held before them it
      ;; still holds on BOTH arms -- the fall-through and the jump alike, which is what makes
      ;; this sound rather than merely true on one path. Only when the right operand compiled to
@@ -2208,11 +2232,11 @@
      ;; Without this, every inlined `if` reloaded a value already sitting in the register.
      o3k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
-     at (:wat::core::- (:c::codelen o3k) 4)
+     at (:wat::core::- (:c::codelen o3k) w)
      o4 (:c::expr (:wat::core::nth ks 2) o3k env pg rt tb slot tc)
      o5 (:c::emit o4 "e900000000")
      jmp-at (:wat::core::- (:c::codelen o5) 4)
-     o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 4)) 4))
+     o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at w)) w))
      ;; that patch pointed the branch AT the else arm; it is not a join. The else arm has
      ;; exactly one predecessor -- the branch itself -- so it inherits what rax held there,
      ;; the same as the fall-through did. (`:c::patch` clears conservatively because most of
@@ -3011,16 +3035,18 @@
             [p1 (:c::push o1 "50" 8)
              p2 (:c::expr (:wat::core::nth cks 2) p1 env0 pg rt tb 0 (:c::no-tail))]
             (:c::popn p2 (:wat::string::concat "4889c1" "58" "4839c8") 8)))
-     o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not op) "00000000"))
+     ;; `:c::wrap-val?` already guarantees a name or a constant, and what follows it is one
+     ;; byte of `ret` -- the shortest branch in the compiler
+     o3 (:c::emit o2 (:wat::string::concat (:c::jcc-not8 op) "00"))
      ;; neither the compare nor the branch writes rax, so it still holds the left operand -- and
      ;; the value being returned is usually that same parameter, which is then already there.
      ;; C-149's reasoning, in the one place that reads a parameter twice in three instructions.
      o3k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
-     at (:wat::core::- (:c::codelen o3k) 4)
+     at (:wat::core::- (:c::codelen o3k) 1)
      o4 (:c::expr (:wat::core::nth bs 2) o3k env0 pg rt tb 0 (:c::no-tail))
      o5 (:c::emit o4 "c3")]
-    (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 4)) 4))))
+    (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 1)) 1))))
 
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :wat::core::i64 tb <- :wat::core::i64
