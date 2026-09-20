@@ -33,6 +33,13 @@ measurement lives, and why it was not done at the time.
 
 **Performance — and C-158 measured the gap ONE MORE TIME, at the other end of the machine.**
 
+**`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
+experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
+the commutative fold **-1.9%** — took instructions OFF the dependency chain. The five that failed
+either moved work onto it or removed work that was never on it, and four of the five looked like
+obvious wins on paper. **Profile first, measure cycles not instructions, and interleave at least
+fourteen repetitions.** The table is in C-163.
+
 **And `fib` is not limited by how much work it does.** Four experiments, all measured:
 overflow-check removal (-13% instructions, **-3% cycles**), the `jo` trampoline (-9.5% bytes,
 **+2.1% cycles**), `rel8` branches (-5% bytes, **~0**), and a register calling convention for a

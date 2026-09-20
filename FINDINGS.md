@@ -10756,6 +10756,45 @@ complete at check time. Any openness either moves it to link time or gives it up
   `taskset -c 2 perf stat -e cpu_core/cycles/ ./elf/out/fib32.elf`, minimum of eighteen.
 
 
+### C-163: the spill slot — fewer micro-ops, a longer chain, reverted
+
+- **Where:** built and thrown away. `elf/compile.wat` (`:c::slots-of`, `:c::spills?`,
+  `:c::comm-op?`, `:c::fold`). The fifth instruction reduction this session that cost `fib`
+  cycles, and the one that finally explains the other four.
+- **The arithmetic was right.** `push %rax` / `pop %rcx` / `add %rcx,%rax` is three micro-ops;
+  `mov %rax,SLOT` / `add SLOT,%rax` is two, because the `add` fuses its load. It keeps the store
+  and the load, which C-162 said was the thing to keep. `fib32` lost **5.1% of its instructions**
+  and gained **3.9% of its cycles** (min of 18, interleaved).
+- **`pop %rcx` is not on the critical path and `add SLOT,%rax` is.** The pop loads into a register
+  nothing is waiting for, so it issues early and the `add` that follows is a one-cycle register
+  operation. Folding the load into the `add` puts five cycles of load latency **inside the rax
+  dependency chain** — the chain that runs the whole recursion. Two micro-ops on the critical
+  path beat three off it.
+- **That is the rule the whole session has been circling**, and it is worth stating plainly:
+
+  | change | work removed | cycles |
+  | --- | --- | --- |
+  | overflow checks removed | -13% instructions | **-3%** |
+  | `jo` trampolines | -9.5% bytes | **+2.1%** |
+  | `rel8` branches | -5% bytes | **~0** |
+  | single argument in a register (C-162) | -6.6% instructions | **+1.2%** |
+  | spill to a frame slot | -5.1% instructions | **+3.9%** |
+  | **shrink-wrapping (C-159)** | -9.2% instructions | **-11.2%** |
+  | **commutative fold (C-161)** | -4.9% instructions | **-1.9%** |
+
+  The two that worked took instructions **off the critical path** — a base case that returns
+  without building a frame, and a `mov` between an operand and its `add`. The five that failed
+  either moved work onto the chain or removed work that was never on it. **Counting instructions
+  does not predict cycles on this program, and four of the five failures looked like obvious wins
+  on paper.**
+- **One practical cost worth recording.** Counting spill slots makes frames bigger, and a
+  function that had no frame at all now gets `sub rsp` / `add rsp` — two instructions per call.
+  The compiler's own instruction count went **up 0.9%** from that alone.
+- **Class:** a recorded refusal.
+- **Repro:** the branch is in the session scratch; `taskset -c 2 perf stat -e cpu_core/cycles/
+  ./elf/out/fib32.elf`, minimum of eighteen, interleaved with the binary it is compared against.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
