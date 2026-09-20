@@ -7,13 +7,13 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-20, HEAD a79517d)
+## elf/ — the live queue (2026-09-20, HEAD 6d82b4b+)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** this was written against **HEAD `a79517d`**. If `git log --oneline -1` says
+**Freshness probe:** this was written against **HEAD `6d82b4b`** plus F-132. If `git log --oneline -1` says
 something else, trust the log and `FINDINGS.md` over every line here, and re-read the newest
 entries before moving.
 
@@ -26,7 +26,14 @@ entries before moving.
 | `loopsum` — latency-bound loop | 218M cyc | 304M | **0.72x** | we win |
 | startup, tail calls | — | — | 1.00x | tie |
 | `triple` — throughput-bound loop | 151.5M cyc | 110.8M | **1.36x** | behind |
-| `fib32` — call-heavy | 15.1M cyc | 10.0M | **1.50x** | behind |
+| `fib32` — call-heavy | 15.0M cyc | 9.8M | **1.52x** | behind (but see below) |
+
+**`gcc -O2` is not the only yardstick, and on `fib` it is the wrong one** (F-132). Against C
+compilers held to **wat's trapping semantics** we are **2.46x** faster than `clang` and **3.22x**
+faster than `gcc -ftrapv`; we beat **`clang -O2` by 1.37x** while trapping, which it does not.
+`gcc -O2`'s lead comes from reassociating the additions into a loop — 364,490 calls against the
+naive 7,049,155 — which survives `-fwrapv` and **dies under trapping**, because `(a+b)+c` traps
+where `a+(b+c)` does not.
 
 ### The three rules the measurements have settled
 
@@ -37,8 +44,11 @@ entries before moving.
    Nine `fib` experiments removed work and were paid nothing; the two that removed control flow
    were paid in full — shrink-wrapping -11.2%, the `jcc`+`jmp` collapse **-22.1% for -4.6%
    instructions**.
-3. **An optimisation that is free in C may cost us, because our arithmetic is checked** (F-131).
-   Strength reduction swaps an `imul` for a `sub` and gcc owes nothing; we still owe the `jo`.
+3. **An optimisation that is free in C may be illegal for us, because our arithmetic traps**
+   (F-131, F-132). Strength reduction swaps an `imul` for a `sub` and gcc owes nothing while we
+   still owe the `jo`; reassociating a sum is what gives `gcc -O2` its `fib`, and trapping
+   forbids it outright. **When a C compiler is ahead, check what semantics bought it** before
+   treating the gap as our defect.
 
 ### Open — correctness
 
@@ -54,8 +64,14 @@ entries before moving.
   intervals** — the accumulators climb 89M an iteration and never converge (probe in C-170).
   Closing them needs a different instrument (summing the progression). **Nothing in the corpus
   asks for that yet, so it is named, not queued.**
-* **`fib` at 1.50x.** Rule 2 says the lever is taken branches, not work. No specific candidate is
-  named; profile before guessing.
+* ~~**`fib` at 1.50x**~~ **CLOSED 2026-09-20, F-132 — it was never the holdout.** `fib` runs at
+  **~0.40 taken branches per cycle whoever compiles it** (five builds, ours and gcc's, all on the
+  line), and our 1.47x more taken branches IS the 1.50x cycle gap. Of our 6.10M taken branches,
+  **3.5M are one per leaf and irreducible** (fib(32) has fib(33) = 3,524,578 leaves); the other
+  2.60M are `call`+`ret`. So the only compressible quantity is the call count, and the transform
+  that would cut it — reassociating the sum — **is illegal under trapping arithmetic**. Deeper
+  inlining is measured and priced: depth 6 is -5.2% cycles for **3.5x the code** and **+22%
+  compiler time**, which fails the UX question. Depth 4 stays.
 * **F-129, the inline cliff.** `:c::inl-limit` counts SOURCE NODES, so naming an intermediate
   (30 nodes -> 35, limit 34) costs **2.26x cycles**. Raising the limit is not the fix — the corpus
   at 60 grows five programs by +62% to +118%. **Charge for generated code, not syntax.**

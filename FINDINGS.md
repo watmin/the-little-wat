@@ -11345,6 +11345,79 @@ already shown the first instalment works, with one fact: "this name is non-negat
   ./elf/out/triple.elf`; `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000
   elf/out/triple.elf` — three `imul`s with no `jo` and three `add`s with one; `tools/cc-time.sh`.
 
+### F-132: `fib` was never the holdout — it is the benchmark where trapping costs C the most
+
+`fib32` has sat at **1.50x `gcc -O2`** through nine experiments and has been the queue's named
+holdout. Measuring the right thing turns the entry upside down: against every C compiler held to
+**wat's semantics**, our `fib` is between **2.5x and 3.2x faster**, and it beats `clang -O2`
+outright while trapping, which `clang -O2` does not do.
+
+**Interleaved, minimum of fourteen, same machine, same source, all printing 2178309:**
+
+| build | cycles | instructions | calls | vs ours | overflow |
+|---|---|---|---|---|---|
+| `gcc -O2` | 9,845,012 | 51,422,434 | 364,490 | **0.66x** | undefined |
+| `gcc -O2 -fwrapv` | 10,898,424 | 51,117,446 | 364,490 | 0.73x | wrapping |
+| **ours** | **15,021,175** | **59,931,366** | **1,298,098** | **1.00x** | **traps** |
+| `clang -O2` | 20,531,303 | 69,376,294 | 3,527,167 | **1.37x** | undefined |
+| `clang -O2` + trap-on-overflow | 36,934,141 | 81,296,313 | 7,051,744 | **2.46x** | **traps** |
+| `gcc -O2 -ftrapv` | 48,412,557 | 100,070,663 | 6,357,629 | **3.22x** | **traps** |
+
+- **`gcc -O2`'s advantage is a reassociation, and trapping forbids it.** Its `fib` makes
+  **364,490** calls where the naive recursion makes **7,049,155** — it has turned one arm of the
+  tree into a loop, which is only legal if the additions may be reassociated. The transform
+  **survives `-fwrapv`** (wrapping is associative: still 364,490 calls) and **dies under
+  trapping**. `(a+b)+c` traps where `a+(b+c)` does not — take `a = i64-max`, `b = 1`, `c = -1` —
+  so a compiler that must trap cannot reorder the sum.
+- **With trapping required, clang falls back to the naive recursion exactly.** 7,051,744 calls
+  against the naive 7,049,155 — it cannot restructure `fib` at all. **We make 1,298,098**, because
+  C-142's inlining still works under trapping, and we are **2.46x** faster than it.
+- **`gcc -ftrapv` is not a fair comparison and is reported only for completeness**: it implements
+  every checked add as a **call to `__addvdi3`** (28 call sites in the binary) where ours is an
+  inline `jo`. Its 3.22x is a poor implementation as much as a lost transform. **clang's is the
+  honest one** — inline `ud2` traps, no helper calls anywhere in the binary.
+- **And the guarantee is nearly free for us and expensive for them.** Trapping costs clang
+  **1.80x** on this program (20.53M -> 36.93M cycles). F-130 measured what it costs us on `fib`:
+  **nothing** — 15.09M with the checks against 15.67M without, the checks being slightly
+  *cheaper* than their absence because they are never on the critical path.
+
+**Why `fib`'s cycles are its taken branches — the model, from five points.**
+
+Re-measuring inline depth (C-153 claimed depth 5 was worse than depth 4; that was measured before
+C-166, C-167 and C-170 changed the code shape) produced four builds of one program, and with gcc
+they fit one line:
+
+| | taken branches | cycles | **taken/cycle** |
+|---|---|---|---|
+| ours, depth 4 | 6,096,883 | 15,066,551 | 0.405 |
+| ours, depth 5 | 5,905,275 | 14,757,894 | 0.400 |
+| ours, depth 6 | 5,685,315 | 14,289,485 | 0.398 |
+| ours, depth 7 | 5,605,337 | 15,586,433 | 0.360 |
+| `gcc -O2` | 4,135,091 | 10,036,679 | 0.412 |
+
+- **`fib` runs at ~0.40 taken branches per cycle whoever compiled it** — about two and a half
+  cycles each — and our 1.47x more taken branches is the whole of a 1.50x cycle gap, to within
+  2%. The counters say why: **39.6% front-end bound, 0.4% back-end**, and of the front-end
+  stalls **73% is fetch BANDWIDTH, not latency** (the uop cache delivers 54.3M uops against 44K
+  from the decoders, so nothing is missing in the instruction cache — the DSB simply cannot hand
+  over more, and a taken branch ends its window).
+- **Depth 7 is the exception that confirms it**: fewer taken branches than depth 6 and MORE
+  cycles, because 19,274 bytes stops fitting the uop cache and the rate falls to 0.360.
+- **Our 6.10M taken branches account exactly.** 2.60M are `call`+`ret`, two per call across
+  1,298,098 calls; the remaining ~3.5M are one per base case, and fib(32) has fib(33) =
+  **3,524,578** leaves. That half is irreducible for this algorithm — which is why the only
+  compressible quantity is the call count, and why `gcc -O2` wins by cutting it 3.6x.
+- **Deeper inlining is measured and not worth it.** Depth 6 is the best of the four at **-5.2%
+  cycles**, and costs **3.5x the code** (2,810 -> 9,866 bytes) and **+22% compiler time**. On a
+  compiler whose size is one of the things it wins at, that fails the UX question; depth 4 stays.
+  C-153's "depth 5 is worse than depth 4" is corrected: on the current shape 5 and 6 are both
+  slightly better, and neither is worth its price.
+- **Class:** CLEAN — a queue item removed on evidence, and a comparison corrected.
+- **Repro:** `clang -O2 -static -fsanitize=signed-integer-overflow
+  -fsanitize-trap=signed-integer-overflow -o cl elf/bench/fib.c` against `./elf/out/fib32.elf`;
+  `gcc -O2 -fwrapv` and `-ftrapv` for the two halves of the mechanism;
+  `perf stat -e cpu_core/br_inst_retired.near_taken/,cpu_core/cycles/`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
