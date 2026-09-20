@@ -112,6 +112,19 @@ if command -v perf >/dev/null && [ -r /proc/sys/kernel/perf_event_paranoid ]; th
 fi
 
 echo
+echo "== 8. strings: count one byte in a 194 KB text file =="
+tools/gen-scan.sh
+gcc -O2 -static -o $B/out_scan elf/bench/scan.c || fail=1
+a=$(./elf/out/scanfast.elf); b2=$(./$B/out_scan)
+if [ "$a" = "$b2" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours, code-point-at"  "$(best 5 ./elf/out/scanfast.elf)" "$a"
+  printf '  %-34s %6s ms   (F-135: subs allocates per character)\n' "ours, subs per character" "$(best 5 ./elf/out/scan.elf)"
+  printf '  %-34s %6s ms\n' "C, gcc -O2"            "$(best 5 ./$B/out_scan)"
+else
+  echo "  FAIL: ours '$a', C '$b2'"; fail=1
+fi
+
+echo
 echo "== 7. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?

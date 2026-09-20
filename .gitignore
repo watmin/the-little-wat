@@ -5,3 +5,4 @@ elf/out/.oracle/
 elf/out/seed.elf
 elf/out/stage1.elf
 /target
+elf/out/scan.txt

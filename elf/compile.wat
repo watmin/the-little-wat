@@ -877,6 +877,27 @@
 (:wat::core::defn :c::bit-not? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.i64/bit-not" ":wat::i64::bit-not"))
 
+;; **the one string verb that does not allocate** (F-135). A String is `[len:8][bytes...]` and a
+;; non-ASCII literal is refused (F-120), so a character index IS a byte offset here and the whole
+;; verb is one `movzbq`. Reading a character used to mean `(subs s i (+ i 1))`, which allocates a
+;; one-character String and then needs `str_eq` to look at it: 71 instructions a byte.
+;; `movzbq 8(BASE,INDEX,1), %rax` -- the whole verb when both operands are already in
+;; registers, which in a scanning loop they always are. **x86 addresses base-plus-index
+;; directly**, so the five instructions that shuffle them through rax and rcx are not work, they
+;; are ceremony. Index code 4 means "no index" only when REX.X is clear, so r12 is a legal index
+;; here; base code 5 is legal because mod=01 always carries the displacement.
+(:wat::core::defn :c::movzb-sib [base <- :wat::core::i64 index <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:asm::u8 (:wat::core::+ 72 (:wat::core::+ (:wat::core::if (:c::rext? index) 2 0)
+                                               (:wat::core::if (:c::rext? base) 1 0))))
+    "0fb6"
+    (:c::modrm 1 0 4)
+    (:asm::u8 (:wat::core::+ (:wat::core::* (:c::rcode index) 8) (:c::rcode base)))
+    "08"))
+
+(:wat::core::defn :c::codeat? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.string/code-point-at" ":wat::string::code-point-at"))
+
 ;; ---- the compiler's INTRINSICS: verbs that become a syscall rather than a call
 ;;
 ;; This is the first point where the compiled language stops being a subset of wat. The
@@ -1527,6 +1548,7 @@
             (:wat::core::let [tv (:c::kidsof pg (:wat::core::nth ks 2))]
               (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
                 (:wat::string::concat "vec:" (:c::ty-of-node (:wat::core::nth tv 0) pg))))))
+        ((:c::codeat? head) "i64")
         ((:wat::core::or (:c::subs? head) (:c::tostr? head)) "str")
         ((:wat::core::or (:c::rdhex? head) (:c::rdfile? head)) "str")
         ((:wat::core::or (:c::starts? head) (:c::contains? head)) "bool")
@@ -1877,6 +1899,22 @@
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
                 (:c::call (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)
                   (:wat::core::if (:c::starts? head) (:c::at-starts rt) (:c::at-contains rt))))))
+          ((:c::codeat? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "code-point-at arity" a pg)
+              (:wat::core::if (:wat::core::not= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
+                (:c::fail "code-point-at: operand is not a String" a pg)
+                (:wat::core::let
+                  [sr (:c::reg-of (:wat::core::nth ks 1) env pg)
+                   ir (:c::reg-of (:wat::core::nth ks 2) env pg)]
+                  (:wat::core::if (:wat::core::and (:wat::core::>= sr 0) (:wat::core::>= ir 0))
+                    ;; both already in registers: one instruction, nothing shuffled
+                    (:c::emit o (:c::movzb-sib sr ir))
+                    (:wat::core::let
+                      [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) "50" 8)
+                       o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
+                      ;; rcx = the index, rax = the String; the byte is one header past the base
+                      (:c::emit (:c::popn o2 (:wat::string::concat "4889c1" "58") 8)
+                                "480fb6440808")))))))           ;; movzbq 8(%rax,%rcx,1), %rax
           ((:c::tostr? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "to-string arity" a pg)
               (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
@@ -2119,7 +2157,7 @@
           (:wat::core::or (:wat::core::or (:c::not? h) (:c::bit-not? h)) (:wat::core::or (:c::do? h)
             (:wat::core::or (:c::let? h) (:wat::core::or (:c::nth? h)
               (:wat::core::or (:c::len? h) (:wat::core::or (:c::strlen? h)
-                                                          (:c::peek? h))))))))))))))
+                (:wat::core::or (:c::codeat? h) (:c::peek? h)))))))))))))))
 
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
@@ -4640,6 +4678,7 @@
     (:c::compile "elf/src/select.wat"   "elf/out/select.elf")
     (:c::compile "elf/src/counted.wat"  "elf/out/counted.elf")
     (:c::compile "elf/src/bits.wat"     "elf/out/bits.elf")
+    (:c::compile "elf/src/codeat.wat"   "elf/out/codeat.elf")
     (:c::compile "elf/bad/countedovf.wat" "elf/out/countedovf.elf")
     (:c::compile "elf/bad/nnegshadow.wat" "elf/out/nnegshadow.elf")
     (:c::compile "elf/bad/overflow.wat" "elf/out/overflow.elf")
@@ -4675,6 +4714,8 @@
     (:c::compile "elf/bench/parse.wat"  "elf/out/parse.elf")
     (:c::compile "elf/bench/parsebits.wat" "elf/out/parsebits.elf")
     (:c::compile "elf/bench/walk.wat"   "elf/out/walk.elf")
+    (:c::compile "elf/bench/scan.wat"   "elf/out/scan.elf")
+    (:c::compile "elf/bench/scanfast.wat" "elf/out/scanfast.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
     (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")

@@ -11579,6 +11579,68 @@ measured against, so provenance is recorded per run.
 - **Repro:** `./elf/out/parsebits.elf` against `elf/bench/parse.c` at `gcc -O2`;
   `./elf/out/parse.elf` is the division version kept as F-134's evidence.
 
+### F-135: a wat String cannot be read one character at a time — 34.8x, and the verb that fixes it
+
+The benchmark the queue has been asking for since F-062 observed that a wat String has no elements
+and no index-of. `elf/bench/scan.wat` counts the byte `e` in a 194,458-byte text file;
+`elf/bench/scan.c` is `if (s[i] == 'e')`.
+
+**The only way to look at one character was `(subs s i (+ i 1))`, and `str_subs` ALLOCATES** — it
+bumps r15 and copies — so the loop allocates a one-character String per byte and then calls
+`str_eq` to look at it.
+
+| | cycles | instructions | per byte | vs `gcc -O2` |
+|---|---|---|---|---|
+| `scan` — `subs` per character | 10,799,431 | 13,825,951 | **55.5 cyc / 71.1 instr** | **34.83x** |
+| `scanfast` — `code-point-at` | 1,057,657 | 4,491,889 | **5.4 cyc / 23.1 instr** | **3.41x** |
+| C | 310,078 | 818,815 | 1.6 cyc / 4.2 instr | 1.00x |
+
+- **Seventy-one instructions to read one byte**, against C's four.
+- **The whole surface was checked before concluding it.** wat has twenty-four `:wat::string::`
+  verbs — `split`, `join`, `trim`, `ends-with?`, `to-i64`, `to-lowercase` and more that this
+  compiler does not yet support — and **not one of them indexes**. There is no `char-at`, no
+  `nth` on a String, no byte accessor, under any spelling.
+- **And wat strings are CHARACTER-indexed, which decided the fix.** `(length "café")` is 4 and
+  `(subs "café" 3 4)` is `"é"` — matching clj exactly (`count` 4, `nth` `é`). F-120's non-ASCII
+  refusal is an **elf/ compiler** restriction, not a language one, so the verb had to be defined
+  on characters and the compiler's byte indexing is an optimisation its own restriction licenses.
+- **Class:** EXTEND (wat) — resolved by C-172.
+- **Repro:** `./elf/out/scan.elf` against `elf/bench/scan.c` at `gcc -O2`.
+
+### C-172: `code-point-at` — 34.8x to 3.41x, and one instruction when both operands are in registers
+
+The second stone on the wat-rs `the-little-wat` branch, following C-171's pattern.
+
+- **`:wat::string::code-point-at s i` → i64**, the Unicode scalar at character index `i`.
+  Out of range raises `MalformedForm` with the index and the length, exactly as
+  `:wat::string::subs` does — loud, not silent. Verified against **clj 1.12.6**:
+  `(int (nth "hello" 0 1 4))` and `(int (nth "café" 3))` give 104, 101, 111, 233, and so does
+  this.
+- **Why a code point and not a `:wat::core::char`.** Scored on the four questions, `(nth s i)` →
+  char is the clj-faithful surface and fails **Simple**: it overloads `nth` across collections and
+  strings AND drags char values into a compiler that has none, which is two concerns. A number
+  needs no new type, and — the load-bearing part — **an i64 is the same object on both sides**, so
+  the differential can check the compiled instruction against the interpreter's `chars()` walk.
+  The faithful `nth` surface stays open and is not this.
+- **In the compiler it is one instruction.** A String is `[len:8][bytes...]` and non-ASCII is
+  refused (F-120), so a character index IS a byte offset: `movzbq 8(%rax,%rcx,1),%rax`.
+- **And none when it does not have to be.** In a scanning loop both operands are already in
+  registers, and x86 addresses base-plus-index directly — so `:c::movzb-sib` emits
+  `movzbq 8(%rbx,%r12,1),%rax` and the five instructions that shuffled them through rax and rcx
+  disappear. **28.1 -> 23.1 instructions a byte, 3.97x -> 3.41x**, measured. (Index code 4 means
+  "no index" only when REX.X is clear, so r12 is a legal index; base code 5 is legal because
+  mod=01 always carries its displacement. All four register shapes disassembled before use.)
+- **`elf/src/codeat.wat` is the net**: seven values both ways, covering the immediate path, the
+  computed-index path, a scan loop, and composition with C-171's bitwise ops
+  (`(bit-or (code-point-at "HELLO" 0) 32)` = 104, lowercase by clearing bit five).
+- **What the remaining 3.41x is, named not guessed.** 23.1 instructions a byte against C's 4.2,
+  and the disassembly says where: a `:c::share` refcount increment on the String argument every
+  iteration (4 instructions — `cmpq $0,-8(%rax)`, `incq`), and the tail call pushing and popping
+  its four arguments rather than writing them directly. Neither is about strings; both are the
+  general loop overhead this compiler has everywhere.
+- **Class:** EXTEND (wat) + IMPROVE (elf).
+- **Repro:** `./elf/out/scanfast.elf` against `./elf/out/scan.elf` and `elf/bench/scan.c`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
