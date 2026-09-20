@@ -4624,6 +4624,8 @@
     (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
     (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/triple2.wat" "elf/out/triple2.elf")
+    (:c::compile "elf/bench/parse.wat"  "elf/out/parse.elf")
+    (:c::compile "elf/bench/walk.wat"   "elf/out/walk.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
     (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")

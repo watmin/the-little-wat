@@ -11473,6 +11473,53 @@ one per leaf. That model turns "how do we get faster" into arithmetic, and the a
   cpu_core/br_inst_retired.near_taken/,cpu_core/cycles/ ./elf/out/fib32.elf`, and fib(33) =
   3,524,578 is the leaf count of fib(32)'s call tree.
 
+### F-134: wat has no bitwise operations, and that is the gate on packet processing — not the compiler
+
+The first benchmark here that is not arithmetic in a loop. `elf/bench/parse.wat` walks fixed-size
+records in mmap'd memory, pulls byte fields out of a header word, filters on one and accumulates
+another — the shape an XDP filter is made of. `elf/bench/parse.c` does the identical work.
+
+| | ours | C | ratio | what it adds |
+|---|---|---|---|---|
+| `walk`, division-free | 18,868,653 cyc / 110,000,890 instr | 7,996,815 / 20,231,676 | **2.36x** | `peek` + the loop only |
+| `walk`, `rem` in the fill | 48,496,508 | 7,906,962 | 6.13x | + division while filling |
+| `parse`, full extraction | 129,160,872 / 295,000,992 | 10,887,277 / 54,231,167 | **11.86x** | + four divisions a record |
+
+- **The raw memory path is ready.** `wat.os/peek` compiles to `488b00` — `mov (%rax),%rax`, one
+  instruction, exactly C's `*(long*)p` — and a division-free walk over two million records is
+  **2.36x**, in line with every other loop we have. Nothing about loads, `mmap` or the loop is the
+  problem.
+- **Field extraction is the whole gap, and it is a LANGUAGE gap.** `wat` has **no bitwise
+  operators at all** — no `bit-and`, `bit-or`, `bit-xor`, `bit-not`, or any shift, under any
+  spelling, in any of the fifty-odd `:wat::*::` namespaces in wat-rs. The entire `:wat::i64::`
+  surface is `* + - / < <= = > >= mod not= quot rem to-bigint to-f64 to-rational to-string`.
+  `:wat::core::and/or/not` are boolean. `:wat::math::` is `sqrt sin cos exp ln pi`.
+- **So `(w >> 24) & 0xff` has to be written `(rem (quot w 16777216) 256)`** — and in this compiler
+  `quot` and `rem` are guarded ROUTINE CALLS, because `idiv` faults rather than flagging
+  (F-126/C-150). Differencing the two benchmarks isolates the cost exactly: the extraction is
+  **80.7M cycles for us against C's 3.0M — 40 cycles a record against 1.5, about 27x** — for
+  pulling two byte fields out of a word.
+- **And the substitution is not even faithful**, which is the sharper point. Division cannot
+  stand in for shifting in general:
+  * `-7 >> 1` is `-4` (arithmetic shift floors); `(quot -7 2)` is `-3` (truncates toward zero).
+    `-1 >> 1` is `-1`; `(quot -1 2)` is `0`.
+  * `1 << 63` is `-9223372036854775808` — a bit pattern — while `1 * 2^63` **does not fit i64 and
+    traps** under arc 300's C3 ruling.
+  It happens to be correct for non-negative values with nothing shifted off the top, which is
+  exactly what packet field extraction is, which is why `parse.wat` prints the right answer while
+  being 27x slow. It would be silently wrong the moment a sign or a high bit was involved.
+- **Clojure has all seven, and already draws the line wat needs.** `bit-and`, `bit-or`, `bit-xor`,
+  `bit-not`, `bit-shift-left`, `bit-shift-right`, `unsigned-bit-shift-right` — verified against
+  clj 1.12.6 this session. And `(bit-shift-left 1 63)` returns `-9223372036854775808` **without
+  throwing**, in the same language whose `(+ Long/MAX_VALUE 1)` throws. **Arithmetic is checked;
+  bit operations are bit patterns and are not.** C3 copied the first half of that design
+  deliberately; this is the second half, and it is missing.
+- **Class:** EXTEND — a wat feature request, not a compiler defect. The compiler is ready for the
+  memory side of packet work and cannot be ready for the field side until the ops exist.
+- **Repro:** `./elf/out/parse.elf` against `elf/bench/parse.c` built with `gcc -O2`;
+  `./elf/out/walk.elf` is the division-free control. `grep -rhoE ':wat::i64::[a-z...]+' wat-rs/src`
+  for the surface.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
