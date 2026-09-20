@@ -49,19 +49,26 @@ at IPC 6.14 on a 6-wide core a spill costs one store and one reload, and a regis
 one `mov` in and one `mov` out — **two issue slots either way**. Kept because the value now sits
 in a register the compare reads directly, which is what the next item needs.
 
-**The biggest single item now: if-conversion.** `triple` spends **21** of its 43 instructions an
-iteration on three `(if (> x K) (- x K) x)` — `cmp`, `jcc`, `mov`, `sub`, `jo`, `jmp`, `mov` each
-— where gcc spends **9**: `lea -K(%r),%r9`, `cmp`, `cmovg`. Two things stand between us and that,
-and both are real:
+~~**the check is provably dead under a dominating comparison**~~ **DONE 2026-09-19, C-166.**
+Inside the THEN arm of `(> x k)` with `k >= 0`, `x` is non-negative, and `x - j` with `j >= 0`
+then cannot underflow. `triple` **-7.0% instructions and -14.4% cycles** (1.90x -> **1.63x** vs
+gcc), `loopsum` -5.3%/**-10.1%** and it now **beats `gcc -O2` by 11%** at 0.89x, `fib` -8.4%
+instructions and **zero** cycles — the same edit demonstrating both halves of the C-164 rule in
+one run. `elf/bad/nnegshadow.wat` caught the first cut eliding a check a rebinding should have
+kept.
 
-  * `cmov` needs both arms evaluated, and `(- x K)` **traps**. `lea` computes the same value and
-    sets no flags, but then there is no check at all. The sound route is narrow and classic:
-    **under a dominating comparison the check is provably dead** — inside the THEN arm of
-    `(> x 1000000)` we know `x > 1000000`, so `x - 1000000` cannot underflow. That is range
-    propagation from the branch condition, and it is the same fact that makes the `lea` safe.
-  * The second `mov` is the round trip through rax: each arm computes into rax and the `if` then
-    copies rax into the destination register. Compiling an arm **straight into its destination**
-    removes one instruction per arm taken, independently of `cmov`.
+**The biggest single item now: if-conversion.** `triple` still spends **18** of its 40
+instructions an iteration on three `(if (> x K) (- x K) x)` — `cmp`, `jcc`, `mov`, `sub`, `jmp`,
+`mov` each — where gcc spends **9**: `lea -K(%r),%r9`, `cmp`, `cmovg`. Two pieces:
+
+  * **`cmov`.** Both arms have to be evaluated, so both have to be flag-free and trap-free.
+    C-166 made `(- x K)` trap-free in exactly this shape, and `lea -K(%r),%rcx` computes it
+    without touching flags — so the blocker C-165 named is gone and this is now reachable.
+    Needs `lea` and `cmov` encodings, and arms restricted to names, constants and that one
+    arithmetic form.
+  * **The destination register.** Each arm computes into rax and the `if` then copies rax into
+    the register the value belongs in. Compiling an arm **straight into its destination**
+    removes one instruction per arm, independently of `cmov`.
 
 **And the item after that, which is worth more instructions than either: strength reduction.**
 gcc emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns all three into

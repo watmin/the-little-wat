@@ -54,7 +54,7 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
 }
 
 for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
-            memory linear moved freed strverbs strown extremes reader diag fileio asmbits; do
+            memory linear moved freed strverbs strown extremes nnegsub reader diag fileio asmbits; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran
@@ -141,6 +141,18 @@ if printf '%s' "$got" | grep -qF 'i64 overflow' && [ $rc -ne 0 ] \
   if printf '%s' "$dgot" | grep -qF 'division by zero' && [ $drc -ne 0 ] \
      && printf '%s' "$dint" | grep -qF 'DivisionByZero'; then
     echo "  (quot 1 0) stops both ways too -- compiled exit $drc, not SIGFPE"
+    # C-166 drops the check on `(- x k)` where the branch proved `x >= 0`. A `let` that rebinds
+    # the name binds a different value, and the proof must not travel with the name.
+    sgot=$(./elf/out/nnegshadow.elf 2>&1); src2=$?
+    sint=$("$WAT" elf/bad/nnegshadow.wat 2>&1)
+    if printf '%s' "$sgot" | grep -qF 'i64 overflow' && [ $src2 -ne 0 ] \
+       && printf '%s' "$sint" | grep -qF 'IntegerOverflow'; then
+      echo "  and a rebound name loses the proof -- nnegshadow stops both ways, exit $src2"
+    else
+      echo "  FAIL: C-166 elided a check that a rebinding should have kept (compiled rc=$src2)"
+      printf '%s\n' "$sgot" | head -2 | sed 's/^/      /'
+      fail=1
+    fi
   else
     echo "  FAIL: division by zero did not stop both ways (compiled rc=$drc)"
     printf '%s\n' "$dgot" | head -2 | sed 's/^/      /'

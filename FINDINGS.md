@@ -10898,6 +10898,63 @@ to say so.
 - **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/triple.elf`, and
   `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/ ./elf/out/triple.elf`.
 
+### C-166: what the branch proves — three of seven overflow checks, and loopsum overtakes gcc
+
+C-165 left `triple` at 43 instructions an iteration against gcc's 16, and named where they go.
+Seven of ours are `jo`, which gcc does not have because C says signed overflow is undefined and
+wat says it traps. That is a semantic difference and not a missing optimisation — **except where
+the check is provably dead**, and in this loop three of the seven are.
+
+- **Inside the THEN arm of `(> x 1000000)`, `x` is greater than a million.** So `(- x 1000000)`
+  there cannot underflow, and the `jo` guarding it can never be taken on any path that reaches
+  it. The same fact is in every `fib`: the ELSE arm of `(< n 2)` knows `n >= 2`, so `(- n 1)` and
+  `(- n 2)` are both safe.
+- **The rule is the narrowest one that is obviously true.** If `x >= 0` and `k >= 0` then `x - k`
+  lies in `[-k, x]`, which is inside i64 for every i64 `x` and every non-negative `k` — including
+  `x = 0, k = 9223372036854775807`, whose result is `-9223372036854775807` and still fits. So all
+  that has to be carried is **one name known to be non-negative**, and all the comparison has to
+  yield is that fact: `(> x k)` and `(>= x k)` with `k >= 0` give it to the THEN arm, `(< x k)`
+  and `(<= x k)` give it to the ELSE arm. `=` and `not=` are left out — they prove it too, but
+  the arm that knows it is the one where `x` is a constant, and that is constant folding's job.
+- **It rides on `:c::Prog`**, for the reason `nlr` does: `pg` is already threaded through every
+  expression, so a fact put there is scoped exactly to the subtree it was put there for, and no
+  new parameter has to be added to `:c::expr` and its twenty call sites.
+- **Measured, two events at a time, interleaved:**
+
+  | | instructions before | after | cycles before | after | vs `gcc -O2` before | after |
+  |---|---|---|---|---|---|---|
+  | `triple` | 1,290,000,316 | 1,200,000,316 (**-7.0%**) | 210.9M | 180.5M (**-14.4%**) | 1.90x | **1.63x** |
+  | `loopsum` | 1,900,000,359 | 1,800,000,347 (-5.3%) | 300.3M | 270.1M (**-10.1%**) | 0.99x | **0.89x** |
+  | `fib32` | 68,569,909 | 62,794,950 (**-8.4%**) | 19.29M | 19.33M (**+0.2%**) | 1.93x | 1.94x |
+  | `bench` | 6,303,642 | 5,789,276 (-8.2%) | 1.861M | 1.832M (-1.6%) | | |
+
+- **`loopsum` now beats `gcc -O2` by 11% in cycles while issuing three times the instructions.**
+  270.1M against 304.0M, from 1.80G instructions against 600M. That is the C-153/C-164 rule
+  running the other way: on a latency-bound loop the machine has width to spare, and the side
+  with the shorter dependency chain wins whatever its instruction count.
+- **And `fib` is the control.** Same change, **-8.4% instructions and no cycles at all** — the
+  eighth time this compiler has removed real work from `fib` and been paid nothing, because the
+  `jo`s were never on its critical path. C-158 measured exactly this by deleting every overflow
+  check: -13% instructions, -3% cycles. **The instruction count is a ceiling on throughput-bound
+  code and nothing at all on latency-bound code**, and the same edit demonstrates both in one run.
+- **The probe found a real bug, which is why it exists.** `elf/bad/nnegshadow.wat` guards `x` with
+  `(> x 0)` and then rebinds `x` to the most negative i64 inside the arm. **The proof is about a
+  value, and a name that has been rebound is a different value.** The first cut cleared the fact
+  as each binding landed, inside `:c::bind-each` — which is the wrong place twice over: the
+  initialisers are compiled in the OUTER scope, where the fact is still true, and `:c::let-form`
+  hands the BODY the `pg` it started with, so the clear never reached the code that needed it.
+  The compiled program printed an answer where the interpreter raised `IntegerOverflow`. It is
+  asked once of the whole binding vector now, on the way into the body.
+- **`elf/src/nnegsub.wat`** is the positive side: the largest right operand the one-instruction
+  form reaches taken from the smallest `x` the branch admits, the same fact reached from the
+  `<` side, a chain where only the first step is covered, and a negative literal that proves
+  nothing. Both sides agree on all eleven.
+- **`tools/bootstrap.sh` green from the interpreter — 56 binaries byte-identical, fixpoint at
+  163,425 bytes; `elf-run` 26/26, four refusals and three traps; `vs-c` and `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` sections 5 and 6; `taskset -c 2 perf stat -e
+  cpu_core/cycles/,cpu_core/instructions/ ./elf/out/triple.elf`; `./elf/out/nnegshadow.elf`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

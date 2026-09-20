@@ -1159,6 +1159,8 @@
    ;; how many of r8-r11 the scratch pool may still have: four normally, fewer when this
    ;; function has spent some of them on `let` bindings
    nscr <- :wat::core::i64
+   ;; **a name this branch has already proved non-negative, or empty.** See `:c::nneg-of`.
+   nneg <- :wat::core::String
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -1194,6 +1196,7 @@
             :recs (:wat::core::Vector :- [:c::Rec])
             :aliases (:wat::core::Vector :- [:c::Alias])
             :nscr (:c::nscratch)
+            :nneg ""
             :linear (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
             :nlr 0 :regbase 0
@@ -2114,9 +2117,10 @@
                      (:c::imul3 ar (:c::to-int (:c::text pg (:wat::core::nth ks i)) pg)) "")
              o0 (:wat::core::if (:wat::core::not= three "") o
                   (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o))
+             dead? (:c::ovf-dead? op (:wat::core::nth ks i) o env pg ar)
              o1 (:c::emit o0 (:wat::core::if (:wat::core::not= three "") three fast))]
             (:c::fold op ks (:wat::core::+ i 1)
-              (:c::ovf-check op o1 rt) env pg rt tb slot -1)))
+              (:wat::core::if dead? o1 (:c::ovf-check op o1 rt)) env pg rt tb slot -1)))
         ;; **an accumulator in a CALLEE-SAVED register does not have to wait anywhere.** rbx,
         ;; r12, r13 and rbp survive a call because every callee this compiler emits pushes and
         ;; pops the ones it uses -- so the operand can be evaluated straight into rax and the
@@ -2302,7 +2306,8 @@
      o3k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o3 :rax (:c::Out/rax o1)) o3)
      at (:wat::core::- (:c::codelen o3k) w)
-     o4 (:c::expr (:wat::core::nth ks 2) o3k env pg rt tb slot tc)
+     o4 (:c::expr (:wat::core::nth ks 2) o3k env
+          (:wat::core::assoc pg :nneg (:c::nneg-of cks op true pg)) rt tb slot tc)
      o5 (:c::emit o4 "e900000000")
      jmp-at (:wat::core::- (:c::codelen o5) 4)
      o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at w)) w))
@@ -2312,7 +2317,8 @@
      ;; its uses ARE joins; this is the one place that knows better.)
      o6k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o6 :rax (:c::Out/rax o1)) o6)
-     o7 (:c::expr (:wat::core::nth ks 3) o6k env pg rt tb slot tc)]
+     o7 (:c::expr (:wat::core::nth ks 3) o6k env
+          (:wat::core::assoc pg :nneg (:c::nneg-of cks op false pg)) rt tb slot tc)]
     (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4))))
 
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
@@ -2669,6 +2675,16 @@
                     :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env pg)))
         pg rt tb (:wat::core::+ slot 1)))))
 
+;; is one of these bindings called `name`? **A binding of the same name is a different value**,
+;; so whatever an enclosing branch proved about the old one stops being true in the body. The
+;; INITIALISERS are compiled in the outer scope, where it is still true, which is why this is
+;; asked once of the whole vector rather than as each binding lands.
+(:wat::core::defn :c::binds-name? [bs <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
+                                   pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) false
+    (:wat::core::or (:wat::core::= (:c::text pg (:wat::core::nth bs i)) name)
+                    (:c::binds-name? bs (:wat::core::+ i 2) name pg))))
+
 (:wat::core::defn :c::let-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                 rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "let arity" a pg)
@@ -2676,7 +2692,10 @@
       (:wat::core::if (:wat::core::not= (:wat::core::rem (:wat::core::length bs) 2) 0) (:c::fail "let bindings" a pg)
         (:wat::core::let [r (:c::bind-each bs 0 o env pg rt tb slot)]
           ;; the bindings go out of scope with the body, so the env is not carried back out
-          (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r) pg rt tb (:c::BindR/slot r) tc))))))
+          (:c::seq ks 2 (:c::BindR/o r) (:c::BindR/env r)
+            (:wat::core::if (:c::binds-name? bs 0 (:c::Prog/nneg pg) pg)
+              (:wat::core::assoc pg :nneg "") pg)
+            rt tb (:c::BindR/slot r) tc))))))
 
 ;; ---------------------------------------------------------------- sequences, and the heap
 ;;
@@ -3101,6 +3120,59 @@
                                  pg <- :c::Prog] -> :wat::core::bool
   (:c::noret-seq? ks start true name arity env pg))
 
+;; ---------------------------------------------------------------- what the branch proves
+;;
+;; **Inside the THEN arm of `(> x 1000000)`, `x` is greater than a million.** So `(- x 1000000)`
+;; there cannot underflow, and the `jo` that guards it is dead code on every path that can reach
+;; it. That is the whole of the `elf/bench/triple.wat` idiom, and it is three of the seven
+;; overflow checks in that loop.
+;;
+;; The rule is deliberately the narrowest one that is obviously true: **if `x >= 0` and `k >= 0`
+;; then `x - k` lies in `[-k, x]`, which is inside i64.** So all this has to carry is a single
+;; name known to be non-negative, and all the comparison has to give is that fact:
+;;
+;;   (> x k) / (>= x k) with k >= 0   ->  the THEN arm knows x >= 0
+;;   (< x k) / (<= x k) with k >= 0   ->  the ELSE arm knows x >= 0
+;;
+;; `=` and `not=` are left out: `(= x k)` proves it too, but the arm that knows it is the one
+;; where `x` is a constant, and constant folding is a different job.
+;;
+;; It rides on `:c::Prog` rather than in a new parameter for the same reason `nlr` does -- `pg`
+;; is already threaded through every expression, and a value put there is scoped exactly to the
+;; subtree it was put there for. A `let` that rebinds the name takes the fact away again.
+(:wat::core::defn :c::nneg-of [cks <- :c::Kids op <- :wat::core::String then? <- :wat::core::bool
+                               pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) ""
+    (:wat::core::let [x (:wat::core::nth cks 1) k (:wat::core::nth cks 2)]
+      (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kind x pg) "symbol")
+                                      (:wat::core::not= (:c::kind k pg) "int")) ""
+        (:wat::core::if (:wat::core::< (:c::to-int (:c::text pg k) pg) 0) ""
+          (:wat::core::if
+            (:wat::core::if then?
+              (:wat::core::or (:wat::core::= op ">") (:wat::core::= op ">="))
+              (:wat::core::or (:wat::core::= op "<") (:wat::core::= op "<=")))
+            (:c::text pg x) ""))))))
+
+;; **does the accumulator currently hold the name the branch proved non-negative?** Before the
+;; first fold step it is still in its own register (`ar`); after it, `:c::Out/rax` names what rax
+;; holds, and every `:c::emit` clears that -- which is what stops the fact surviving one step
+;; into `(- x j k)`, where `x - j` is nothing the branch said anything about.
+(:wat::core::defn :c::acc-nneg? [o <- :c::Out env <- :c::Env pg <- :c::Prog
+                                 ar <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::let [nn (:c::Prog/nneg pg)]
+    (:wat::core::and (:wat::core::not= nn "")
+      (:wat::core::if (:wat::core::>= ar 0)
+        (:wat::core::= ar (:c::reg-of-name nn env))
+        (:wat::core::= (:c::Out/rax o) nn)))))
+
+;; `x - k` with both known non-negative: the check is provably dead, so it is not emitted
+(:wat::core::defn :c::ovf-dead? [op <- :wat::core::String a <- :wat::core::i64 o <- :c::Out
+                                 env <- :c::Env pg <- :c::Prog ar <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= op "-")
+    (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
+      (:wat::core::and (:wat::core::>= (:c::to-int (:c::text pg a) pg) 0)
+                       (:c::acc-nneg? o env pg ar)))))
+
 (:wat::core::defn :c::imin [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::< a b) a b))
 
@@ -3263,8 +3335,9 @@
      ;; against a program that says so. `pg` still carries the PREVIOUS function's `nlr` and
      ;; `regbase` at this point -- harmless while the pool was a constant four, and not harmless
      ;; now that a binding can reach into it.
-     pgw (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc pg :nlr 0) :regbase 0)
-                            :nscr (:c::nscratch))
+     pgw (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
+            (:wat::core::assoc pg :nneg "") :nlr 0) :regbase 0)
+            :nscr (:c::nscratch))
      ;; **not a function with a self tail call.** C-121 makes such a call a `jmp` to the end of
      ;; the prologue -- and the test now lives BEFORE the prologue, so the jump would skip it and
      ;; the loop would never end (`elf/src/vectors.wat` hangs). It would buy nothing there in any
@@ -3304,7 +3377,7 @@
      ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
      ;; break invariants the rest of the compiler is entitled to assume about wat.
      pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-          (:wat::core::assoc pg :nscr nscr) :nlr nlr) :regbase nr)
+          (:wat::core::assoc (:wat::core::assoc pg :nneg "") :nscr nscr) :nlr nlr) :regbase nr)
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
      tc (:wat::core::if (:c::has-clone? node pg)
@@ -3972,6 +4045,8 @@
   (:wat::core::do
     (:c::compile "elf/src/four.wat"   "elf/out/four.elf")
     (:c::compile "elf/src/extremes.wat" "elf/out/extremes.elf")
+    (:c::compile "elf/src/nnegsub.wat"  "elf/out/nnegsub.elf")
+    (:c::compile "elf/bad/nnegshadow.wat" "elf/out/nnegshadow.elf")
     (:c::compile "elf/bad/overflow.wat" "elf/out/overflow.elf")
     (:c::compile "elf/bad/divzero.wat"  "elf/out/divzero.elf")
     (:c::compile "elf/src/arith.wat"  "elf/out/arith.elf")
