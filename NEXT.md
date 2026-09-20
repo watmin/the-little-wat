@@ -77,18 +77,41 @@ count, which is identical to what shipped, but six fewer branches.
 an iteration in `triple`.** Three of those come from `(* i 3)`, `(* i 5)` and `(* i 7)`, and
 those three are the ones the next item deletes outright.
 
-**NEXT: strength reduction, which is the one change that empties both buckets at once.** gcc
-emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns all three into registers
-counting down by 3, 5 and 7, and drops `i` itself because one of them reaches zero exactly when
-`i` does. For us that is **three `imul`s and three `jo`s an iteration**: six uops off a loop that
-is rename-limited, and three branches off a front end that cannot deliver across the fifteen it
-already has. 12 of our 34 instructions against 3 of gcc's 16.
+~~**strength reduction**~~ **REFUTED 2026-09-19, F-131 — and by a program, not an argument.**
+`elf/bench/triple2.wat` is `triple` with the three induction variables written out as parameters,
+which is the best output the transform could produce. It is **worse**: 43 instructions an
+iteration against 34, 39 uops against 30, **7.45 cycles against 6.00 (+24%)**. It costs two
+things gcc does not pay — the check (`imul`+`jo` becomes `sub`+`jo`; gcc's `sub` owes nothing)
+and the registers (four parameters become seven, three of which live in the frame; frame
+references go from ten an iteration to sixteen). **A transform that trades a multiply for an
+addition is only free in a language where the addition is unchecked.**
 
-The shape it needs: a self-tail-recursive function whose parameter `i` is passed as `(- i K)` in
-every self tail call, and a `(* i C)` in the body with `C` a literal. The induction variable is
-initialised once in the PROLOGUE — which a self tail call jumps past, so it is paid per call and
-not per iteration — and decremented by `K*C` where the tail call sets up its arguments. C-165
-freed r8-r11 for exactly this class of function, so there are registers to put it in.
+**WHAT REPLACES IT, AND IT IS THE LARGEST ITEM ON THE BOARD — F-130.** Deleting every overflow
+check and measuring:
+
+| | instructions | cycles | vs `gcc -O2` |
+|---|---|---|---|
+| `triple` with checks | 1,020,000,357 | 180.09M | 1.63x |
+| `triple` without | -20.6% | **122.47M (-32.0%)** | **1.11x** |
+| `loopsum` without | -18.8% | 239.64M (-11.6%) | 0.79x |
+| `fib32` without | -8.0% | 15.67M (**+3.9%**) | 1.56x |
+
+**On a throughput-bound loop the checks are a third of the time and they are the ENTIRE gap to
+gcc** — everything else about our code adds up to eleven percent. On a call-heavy one they are
+free and slightly better than free. C-153 priced an interval analysis at 4% using `fib` and
+struck it; measured on the right shape it is worth **32%**, and C-166 has already shown the first
+instalment works — a dominating comparison retires three of `triple`'s ten checks for free.
+
+So the item is **a range analysis that proves overflow checks dead**, and the shape that pays is
+the loop induction variable: `i` starts at a literal, decreases by a literal, and the loop exits
+at zero, so `i` and every `(* i C)` have known bounds throughout. Three cheap instalments before
+anything general is needed:
+
+  * generalise C-166's bound — `(- x k)` under a dominating `(> x C)` is safe whenever
+    `C >= INT64_MIN + k - 1`, not only when `C >= 0`;
+  * carry a lower AND upper bound rather than the single non-negative flag;
+  * propagate the entry constant of a self-tail-recursive function into its own parameters,
+    which is what turns `(* i 3)` into a bounded value.
 
 **WHAT MOVES `fib` IS CONTROL FLOW, NOT WORK — nine experiments, one rule** (C-167). Everything
 that removed work bought nothing: overflow checks **-13% instructions / -3% cycles**, a register

@@ -11165,6 +11165,72 @@ that check is provably dead, and what is left is a `lea` that cannot overflow an
   ./elf/out/triple.elf`, and the top-down bucket with `cpu_core/topdown-retiring/` against
   `cpu_core/topdown-fe-bound/`.
 
+### F-130: trapping arithmetic costs 32% on a throughput-bound loop, and it is the WHOLE remaining gap to gcc
+
+C-148 made `+`, `-` and `*` trap, because i64 traps in wat and a compiled program must agree with
+the interpreter. Every one of those operators carries a `jo` to a handler. C-158 priced that on
+`fib` by deleting every check and measuring: -13% instructions, **-3% cycles**, and the item was
+struck from the queue as not worth an interval analysis.
+
+**That price was measured on the wrong shape.** The same one-line experiment, on the benchmarks
+C-164 added since:
+
+| | instructions | uops | cycles | vs `gcc -O2` |
+|---|---|---|---|---|
+| `triple` with checks | 1,020,000,357 | 900,064,374 | 180.09M | 1.63x |
+| `triple` **without** | 810,000,265 (-20.6%) | 690,068,933 (-23.3%) | **122.47M (-32.0%)** | **1.11x** |
+| `loopsum` with checks | 1,600,000,360 | 1,400,094,000 | 271.10M | 0.89x |
+| `loopsum` **without** | 1,300,000,375 (-18.8%) | 1,100,196,914 (-21.4%) | **239.64M (-11.6%)** | 0.79x |
+| `fib32` with checks | 59,931,365 | | 15.09M | 1.50x |
+| `fib32` **without** | 55,132,597 (-8.0%) | 49,528,057 | **15.67M (+3.9%)** | 1.56x |
+
+- **On a throughput-bound loop the checks are a third of the time, and they are the entire gap.**
+  `triple` without them is **1.11x `gcc -O2`** where with them it is 1.63x. Every other difference
+  between our code and gcc's — the register allocation, the calling convention, the peepholes —
+  adds up to eleven percent. The trapping semantics is the rest.
+- **On a call-heavy one they are FREE, and slightly better than free**: `fib32` is 3.9% SLOWER
+  without them, which is C-158's -3% arriving at the opposite sign and the same conclusion —
+  those `jo`s are never on `fib`'s critical path, and removing them only perturbs the layout.
+- **This is not a defect and there is nothing to fix.** wat says i64 traps and C says signed
+  overflow is undefined; we are paying for a guarantee gcc does not make. What the number changes
+  is the PRICE of proving a check dead, which C-153 estimated at 4% from `fib` and struck. On
+  `triple` the same analysis is worth **32%**, and C-166 has already shown the first instalment
+  works: a dominating comparison retires three of the ten checks in that loop for free.
+- **Class:** IMPROVE — not the checks, the analysis that proves them dead.
+- **Repro:** make `:c::ovf?` return false and rebuild; `elf/bad/overflow.wat` stops agreeing,
+  which is the check that the experiment really did what it says.
+
+### F-131: strength reduction is not the missing optimisation — `elf/bench/triple2.wat`
+
+`gcc -O2` emits **no `imul` at all** for `triple`: it turns `(* i 3)`, `(* i 5)` and `(* i 7)`
+into three registers counting down by 3, 5 and 7, and drops `i` itself because one of them
+reaches zero exactly when `i` does. That was the largest named item on the queue. It is refuted,
+and by a program rather than an argument: `elf/bench/triple2.wat` is the same loop with those
+three induction variables written out as parameters, which is the best output any compiler doing
+the transform could hand us.
+
+| | instructions/iter | uops/iter | cycles/iter | frame references |
+|---|---|---|---|---|
+| `triple` | 34.0 | 30.0 | **6.00** | 10 |
+| `triple2` — strength reduced | 43.0 | 39.0 | **7.45 (+24%)** | 16 |
+| `gcc -O2` | 16.0 | | 3.69 | 0 |
+
+- **It costs two things gcc does not pay.** First the check: gcc replaces an `imul` with a `sub`
+  and owes nothing, while we replace `imul`+`jo` with `sub`+`jo` and still owe it, because
+  nothing proves `m - 3` cannot underflow. Second the registers: carrying three induction
+  variables takes the function from four parameters to **seven**, and there are four
+  callee-saved registers, so three of them live in the frame. Frame references go from ten an
+  iteration to sixteen.
+- **So the item comes off the queue**, and what replaces it is F-130: the gap on this loop is the
+  overflow checks, and the instrument is the analysis that proves them dead, not a loop
+  transform. **A transform that trades a multiply for an addition is only free in a language
+  where the addition is unchecked.**
+- **Kept as a benchmark**, because it is the evidence: if a range analysis ever retires the
+  checks, `triple2` is where the transform stops being a loss and the queue item comes back.
+- **Class:** CLEAN (a queue item removed on evidence).
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/
+  ./elf/out/triple2.elf` against `./elf/out/triple.elf`; both print 6570000225000000.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
