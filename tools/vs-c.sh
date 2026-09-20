@@ -26,6 +26,7 @@ gcc -O2 -static -o $B/out_noop   $B/noop.c || fail=1
 gcc -O2         -o $B/out_noop_dyn $B/noop.c || fail=1
 gcc -O2 -static -o $B/out_spew   $B/spew.c || fail=1
 gcc -O2 -static -o $B/out_loopsum $B/loopsum.c || fail=1
+gcc -O2 -static -o $B/out_triple  $B/triple.c  || fail=1
 
 sz () { stat -c%s "$1"; }
 best () { local n=$1; shift; local b=99999999 s m
@@ -87,8 +88,31 @@ if command -v perf >/dev/null && [ -r /proc/sys/kernel/perf_event_paranoid ]; th
     "instructions retired" "$o" "$c" "$((o/100000000))" "$((c/100000000))"
 fi
 
+# **the same loop with work to overlap.** Section 5 carries ONE accumulator, so both compilers
+# wait on the same dependency chain and the machine's spare width hides our extra instructions --
+# which is why we tie there while issuing 3.3x as many. C-153 predicted that tie would not survive
+# a loop that is throughput-bound, and this is that loop: three independent chains. gcc's IPC goes
+# from 1.97 to 4.34 and ours stays pinned at ~6.4, which is the issue width. On code of this shape
+# the instruction count IS the ceiling.
 echo
-echo "== 6. tail calls: 1000000 deep, which wat eliminates and so must we =="
+echo "== 6. throughput: three independent chains, 30M iterations, best of 3 =="
+a=$(./elf/out/triple.elf); b=$(./$B/out_triple)
+if [ "$a" = "$b" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours"     "$(best 3 ./elf/out/triple.elf)" "$a"
+  printf '  %-34s %6s ms\n' "C, gcc -O2"             "$(best 3 ./$B/out_triple)"
+else
+  echo "  FAIL: ours '$a', C '$b'"; fail=1
+fi
+if command -v perf >/dev/null && [ -r /proc/sys/kernel/perf_event_paranoid ]; then
+  ins () { taskset -c 2 perf stat -e cpu_core/instructions/ "$1" 2>&1 \
+           | awk '/instructions/{gsub(",","",$1); print $1}'; }
+  o=$(ins ./elf/out/triple.elf); c=$(ins ./$B/out_triple)
+  [ -n "$o" ] && [ -n "$c" ] && printf '  %-34s %s vs %s  (%s vs %s an iteration)\n' \
+    "instructions retired" "$o" "$c" "$((o/30000000))" "$((c/30000000))"
+fi
+
+echo
+echo "== 7. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?
 if [ "$o" = "$i" ] && [ $orc -eq $irc ]; then

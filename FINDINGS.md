@@ -10795,6 +10795,50 @@ complete at check time. Any openness either moves it to link time or gives it up
   ./elf/out/fib32.elf`, minimum of eighteen, interleaved with the binary it is compared against.
 
 
+### C-164: a benchmark that is THROUGHPUT bound — C-153's prediction, tested, and the register it found
+
+- **Where:** `elf/bench/triple.wat` and `triple.c` (new), `tools/vs-c.sh` (a sixth section),
+  `elf/compile.wat` (`:c::comm-op?`, `:c::fold`).
+- **Two benchmarks was a thin basis, and one of them had to be rewritten** because `gcc -O2`
+  solved the first version in closed form. `loopsum` carries ONE accumulator, so every iteration
+  waits on the previous one's `add` and both compilers are pinned to the same dependency chain.
+  C-153 said the tie we get there is the machine's spare width covering our fat, and that it
+  would not survive a loop with work to overlap. **`triple` is that loop**: three independent
+  chains, same conditional-subtraction trick to defeat the closed form.
+- **The prediction held exactly:**
+
+  | | instructions/iter | cycles/iter | IPC | ours vs gcc, cycles |
+  | --- | --- | --- | --- | --- |
+  | `loopsum` (latency-bound) | 20 vs 6 | 3.04 vs 3.04 | 6.57 vs **1.97** | **1.00x** |
+  | `triple` (throughput-bound) | 46 vs 16 | 7.16 vs 3.69 | 6.42 vs **4.34** | **1.94x** |
+
+  Give the loop something to overlap and gcc's IPC climbs from 1.97 to 4.34 while **ours stays
+  pinned at 6.4, which is the issue width**. We are saturated and it is not. **So the rule
+  inverts with shape**: on `fib` the instruction count does not predict cycles (C-163), and on
+  throughput-bound code it is the entire ceiling.
+- **And the disassembly named a free instruction.** `(+ a (* i 3))` with `a` in a register was
+  emitting `mov %r12,%r9` / `imul $3,%rbx,%rax` / `add %r9,%rax` — the accumulator copied to a
+  scratch register only to be added back. **rbx, r12, r13 and rbp survive anything**, including a
+  call, because every callee this compiler emits pushes and pops the ones it uses. So the operand
+  goes straight into rax and the accumulator is added from where it already is: `add %r12,%rax`.
+  Commutative only — for `-` that would be the wrong answer rather than a slower one.
+- **Measured, interleaved, minimum of ten:** `triple` **46 -> 43** instructions an iteration
+  (-6.5% instructions, -1.9% cycles), `loopsum` **20 -> 19** (-5.0%, -0.7%), `fib32` and the
+  compiler unmoved.
+- **What the new benchmark says is next, and it is the biggest item on the board.** `triple`
+  spills three `let` bindings to the frame every iteration — `mov %rax,0x38(%rsp)` and two more —
+  because its four parameters take all four callee-saved registers and `nlr` is zero. gcc has
+  sixteen registers and keeps everything in them. **A function that makes no returning call could
+  allocate r8-r11 as well**, since nothing else would clobber them and they would need no saving;
+  `:c::scratch-safe?` already computes that whitelist for subtrees. Four registers to eight, and
+  six memory references an iteration removed.
+- **`tools/bootstrap.sh` green from the interpreter — 54 binaries byte-identical, fixpoint at
+  154,688 bytes, and the compiled compiler is **784x** the interpreter; `elf-run` 25/25 and four
+  refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `tools/vs-c.sh` sections 5 and 6.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

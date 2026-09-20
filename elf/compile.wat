@@ -661,6 +661,10 @@
     ((:c::disp8? n) (:wat::string::concat "4883c4" (:asm::le n 1)))
     (:else (:wat::string::concat "4881c4" (:asm::le n 4)))))
 
+;; `+` and `*` do not care which side an operand came from; `-`, `quot` and `rem` do
+(:wat::core::defn :c::comm-op? [op <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= op "+") (:wat::core::= op "*")))
+
 (:wat::core::defn :c::op-hex [op <- :wat::core::String] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= op "+") "4801c8")       ;; add rax, rcx
@@ -2069,6 +2073,19 @@
              o1 (:c::emit o0 (:wat::core::if (:wat::core::not= three "") three fast))]
             (:c::fold op ks (:wat::core::+ i 1)
               (:c::ovf-check op o1 rt) env pg rt tb slot -1)))
+        ;; **an accumulator in a CALLEE-SAVED register does not have to wait anywhere.** rbx,
+        ;; r12, r13 and rbp survive a call because every callee this compiler emits pushes and
+        ;; pops the ones it uses -- so the operand can be evaluated straight into rax and the
+        ;; accumulator added from where it already is. That is one instruction where the scratch
+        ;; path needs two (`mov %r12,%r9` ... `add %r9,%rax`) and the stack path needs three.
+        ;; Commutative only: `add %r12,%rax` puts the sum in rax whichever side each came from,
+        ;; and for `-` that would be the wrong answer rather than a slower one.
+        ((:wat::core::and (:c::comm-op? op) (:wat::core::>= ar 0))
+          (:wat::core::let
+            [s2 (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))
+             s3 (:c::emit s2 (:c::reg-op op ar))]
+            (:c::fold op ks (:wat::core::+ i 1) (:c::ovf-check op s3 rt)
+              env pg rt tb slot -1)))
         ;; the accumulator waits in a register instead of on the stack
         (scr?
           (:wat::core::let
@@ -3840,6 +3857,7 @@
     (:c::compile "elf/src/asmbits.wat" "elf/out/asmbits.elf")
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
     (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
+    (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/spew.wat"  "elf/out/spew.elf")
     (:c::compile "elf/bench/mix.wat"   "elf/out/mix.elf")
     (:c::compile "elf/bench/poly.wat"  "elf/out/poly.elf")

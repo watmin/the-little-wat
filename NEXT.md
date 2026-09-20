@@ -33,6 +33,19 @@ measurement lives, and why it was not done at the time.
 
 **Performance — and C-158 measured the gap ONE MORE TIME, at the other end of the machine.**
 
+**The rule depends on the SHAPE of the code, which is why breadth was worth more than another
+fib peephole** (C-164). On a latency-bound loop we tie `gcc -O2` while issuing 3.3x the
+instructions, because both wait on the same chain and the machine has width to spare. On a
+throughput-bound loop — three independent chains — gcc's IPC climbs to 4.34 and ours stays
+pinned at **6.4, the issue width**: we are saturated and it is not, and we lose 1.94x. **There
+the instruction count is the whole ceiling, and it is 43 an iteration against 16.**
+
+**The biggest single item now: `triple` spills three `let` bindings to the frame every
+iteration**, because its four parameters take all four callee-saved registers and `nlr` is zero.
+A function that makes no RETURNING call could allocate r8-r11 as well — nothing else would
+clobber them and they would need no saving, and `:c::scratch-safe?` already computes that
+whitelist for subtrees. Four registers to eight, six memory references an iteration removed.
+
 **`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
 experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
 the commutative fold **-1.9%** — took instructions OFF the dependency chain. The five that failed
