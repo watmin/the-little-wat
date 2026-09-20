@@ -57,23 +57,38 @@ instructions and **zero** cycles — the same edit demonstrating both halves of 
 one run. `elf/bad/nnegshadow.wat` caught the first cut eliding a check a rebinding should have
 kept.
 
-**The biggest single item now: if-conversion.** `triple` still spends **18** of its 40
-instructions an iteration on three `(if (> x K) (- x K) x)` — `cmp`, `jcc`, `mov`, `sub`, `jmp`,
-`mov` each — where gcc spends **9**: `lea -K(%r),%r9`, `cmp`, `cmovg`. Two pieces:
+~~**if-conversion**~~ **DONE 2026-09-19, C-169 — half taken, half measured and thrown away.**
+`cmov` costs `loopsum` **+34.9% cycles** for -11% instructions, because it turns a control
+dependence into a data dependence on a loop carrying one accumulator (`gcc -O2` if-converts that
+loop and is 11% slower than our branch for it). The destination half was kept: each arm goes
+straight into the register the value belongs in, both branches `rel8`, **-15% instructions on
+`triple` and -11% on `loopsum`**.
 
-  * **`cmov`.** Both arms have to be evaluated, so both have to be flag-free and trap-free.
-    C-166 made `(- x K)` trap-free in exactly this shape, and `lea -K(%r),%rcx` computes it
-    without touching flags — so the blocker C-165 named is gone and this is now reachable.
-    Needs `lea` and `cmov` encodings, and arms restricted to names, constants and that one
-    arithmetic form.
-  * **The destination register.** Each arm computes into rax and the `if` then copies rax into
-    the register the value belongs in. Compiling an arm **straight into its destination**
-    removes one instruction per arm, independently of `cmov`.
+**And it produced the number that sets the whole agenda.** `triple` was at **6.00 uops per cycle
+and 100% retiring** — pinned exactly at the rename width. C-169 removed **16.7% of the uops and
+0.0% of the cycles**: the loop now issues 5.00/cycle and **16.9% of its slots are front-end
+bound**, which was zero before. The branches did not move — **450,000,132 of them, fifteen an
+iteration** — and the front end cannot deliver six uops per cycle across that many. **Both of our
+loops are now limited by instruction DELIVERY, which is governed by taken branches, exactly as
+C-167 found on `fib`.** It is also why `cmov` won its 1.6% on `triple`: not its instruction
+count, which is identical to what shipped, but six fewer branches.
 
-**And the item after that, which is worth more instructions than either: strength reduction.**
-gcc emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns all three into
-registers counting down by 3, 5 and 7, and drops `i` itself because one of them reaches zero
-exactly when `i` does. That is 12 of our 43 instructions against 3 of its 16.
+**So the biggest single item is now BRANCHES, and the largest block of them is the `jo`s — seven
+an iteration in `triple`.** Three of those come from `(* i 3)`, `(* i 5)` and `(* i 7)`, and
+those three are the ones the next item deletes outright.
+
+**NEXT: strength reduction, which is the one change that empties both buckets at once.** gcc
+emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns all three into registers
+counting down by 3, 5 and 7, and drops `i` itself because one of them reaches zero exactly when
+`i` does. For us that is **three `imul`s and three `jo`s an iteration**: six uops off a loop that
+is rename-limited, and three branches off a front end that cannot deliver across the fifteen it
+already has. 12 of our 34 instructions against 3 of gcc's 16.
+
+The shape it needs: a self-tail-recursive function whose parameter `i` is passed as `(- i K)` in
+every self tail call, and a `(* i C)` in the body with `C` a literal. The induction variable is
+initialised once in the PROLOGUE — which a self tail call jumps past, so it is paid per call and
+not per iteration — and decremented by `K*C` where the tail call sets up its arguments. C-165
+freed r8-r11 for exactly this class of function, so there are registers to put it in.
 
 **WHAT MOVES `fib` IS CONTROL FLOW, NOT WORK — nine experiments, one rule** (C-167). Everything
 that removed work bought nothing: overflow checks **-13% instructions / -3% cycles**, a register
