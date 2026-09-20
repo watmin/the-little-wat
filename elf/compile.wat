@@ -2092,8 +2092,16 @@
           [o0 (:wat::core::if (:wat::core::>= ar 0) (:c::emit o (:c::reg-mov-to ar)) o)
            o1 (:c::push o0 "50" 8)                            ;; push rax
            o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
-           o3 (:c::emit o2 "4889c1")                          ;; mov rcx, rax
-           o4 (:c::popn o3 "58" 8)                            ;; pop rax
+           ;; **`+` and `*` do not care which side they came from**, so the accumulator can be
+           ;; popped straight into rcx: `pop rcx ; add rcx,rax` is what `mov rcx,rax ; pop rax ;
+           ;; add rcx,rax` was doing in three instructions instead of two. `-`, `quot` and `rem`
+           ;; keep the long form, because for them the order is the answer. The profile of
+           ;; `fib(32)` put this sequence at 15% of its cycles: it is how the two halves of
+           ;; `(+ (fib (- n 1)) (fib (- n 2)))` are brought together, once per invocation.
+           comm? (:wat::core::or (:wat::core::= op "+") (:wat::core::= op "*"))
+           o4 (:wat::core::if comm?
+                (:c::popn o2 "59" 8)                          ;; pop rcx
+                (:c::popn (:c::emit o2 "4889c1") "58" 8))     ;; mov rcx, rax ; pop rax
            o5 (:c::arith-emit op o4 rt)]
           (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1)))))))
 

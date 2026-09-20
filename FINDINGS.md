@@ -10662,6 +10662,52 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/ ./elf/out/fib32.elf`, min of fourteen.
 
 
+### C-161: `+` and `*` do not care which side they came from
+
+- **Where:** `elf/compile.wat` (`:c::fold`'s general path). Found by reading C-159's profile
+  rather than by reasoning about the compiler.
+- **The profile of `fib(32)` after shrink-wrapping put one sequence at 15% of its cycles** — the
+  `add %rcx,%rax` sites, which are where the two halves of `(+ (fib (- n 1)) (fib (- n 2)))`
+  are brought together. Around each one:
+
+  ```
+  push %rax        ; the left result, saved across the second call
+  <the second call>
+  mov  %rax,%rcx   ; the right result out of the way
+  pop  %rax        ; the left result back
+  add  %rcx,%rax
+  ```
+
+  Four instructions and three memory operations to add two numbers. The `mov` and the `pop`
+  exist only to put the operands on the sides `add` expects.
+- **`+` and `*` have no sides.** `pop %rcx ; add %rcx,%rax` leaves the sum in rax whichever
+  operand came from where, so the `mov` is not needed. `-`, `quot` and `rem` keep the long form,
+  because for them the order **is** the answer — and getting that wrong would be a silent wrong
+  answer rather than a crash, which is why the test is the operator and not a guess about
+  operands.
+- **Measured, interleaved, minimum of ten:**
+
+  | | instructions | cycles |
+  | --- | --- | --- |
+  | `fib32` | 72,094,500 -> **68,569,916** (-4.9%) | 19,667,511 -> **19,293,379** (-1.9%) |
+  | `loopsum` | flat | flat |
+  | the compiler | flat | flat |
+
+  `fib` is now **1.94x `gcc -O2` on cycles and 1.33x on instructions** — the instruction ratio was
+  1.54x three findings ago. The two ratios still disagreeing by that much is the same statement
+  C-158 made: what is left is not how much we do, it is how fast the front end can be made to
+  supply it.
+- **What is left in that sequence.** Three instructions and two memory operations, where a frame
+  slot would do it in two: `mov %rax,SLOT` ... `add SLOT,%rax`. That needs the frame-size
+  analysis to count spill slots as well as `let` bindings, and a frame one slot too small is
+  silent corruption rather than a crash — so it is written down rather than attempted here.
+- **`tools/bootstrap.sh` green from the interpreter — 53 binaries byte-identical, fixpoint at
+  154,004 bytes; `elf-run` 25/25 and four refusals, `mem`, `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `taskset -c 2 perf stat ./elf/out/fib32.elf`; the profile is
+  `perf record -e cpu_core/cycles/ -c 2000`.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
