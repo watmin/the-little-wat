@@ -10520,6 +10520,56 @@ complete at check time. Any openness either moves it to link time or gives it up
   `elf/bench/out_loopsum`.
 
 
+### C-158: the register allocator, measured before it was built — and the four levers that do not close fib
+
+- **Where:** no code. The builder asked for a register allocator; this is the probe that was run
+  first, and the reason it was not built.
+- **`fib(32)` against `gcc -O2`, pinned, minimum of ten:**
+
+  | | wall | instructions | cycles | IPC |
+  | --- | --- | --- | --- | --- |
+  | ours | 14 ms | 79,389,356 | 21,927,866 | 3.62 |
+  | gcc `-O2` | 7 ms | 51,422,402 | 9,972,984 | 5.16 |
+  | gcc `-O0` | 37 ms | 113,017,444 | 56,025,125 | 2.02 |
+
+  **2.2x the cycles at 1.54x the instructions** — so the gap is not only how much we do, it is
+  how fast the machine can be made to do it.
+- **The top-down breakdown says which end of the machine.** Measured two counters at a time,
+  because five at once multiplexes and one run in five disagreed by a factor of two:
+
+  | | slots | front-end bound | |
+  | --- | --- | --- | --- |
+  | ours | 132,763,248 | 57,270,420 | **43%** |
+  | gcc `-O2` | 61,042,344 | 11,011,560 | 17% |
+
+  **Back-end bound is ZERO** across every run — no dependency stall, no memory stall, no spill
+  pressure. **A register allocator exists to relieve exactly that, and we do not have it.** It
+  would have been the largest change in `elf/` to date and it would have bought nothing
+  measurable on this benchmark.
+- **Four levers, all measured, none of them enough:**
+  - **Register allocation: 0%.** Back-end bound is zero.
+  - **Overflow-check elimination: -3%.** Compiled with every `jo` removed — unsound, purely to
+    find the ceiling — cycles go 21.95M to 21.29M. It **raises** front-end boundedness to 47%,
+    because the checks were cheap uops filling slots the front-end was not using anyway.
+  - **Inlining depth: -16% cycles for 14x the code** (C-153), and depth 5 is worse than depth 4.
+  - **Branch density: ~8% of the bytes.** `fib32`'s hot function is 3,094 bytes; all 46 `jge` and
+    24 of 46 `jmp` would fit an `rel8`, which is 256 bytes. The `jo`s are **26.4% of the bytes on
+    their own** (136 x 6) and cannot shorten without a handler within 127 bytes.
+- **What the machine is actually short of.** The uop cache is delivering (MITE is ~0.01% for
+  both, so this is not legacy decode and not a length-changing-prefix stall) but it is idle a
+  quarter of the time, against gcc's one seventh, and delivers 4.55 uops a cycle against 5.34.
+  Our basic blocks are about three instructions long and our instructions average 4.5 bytes to
+  gcc's 3.5. **We ask the front end for 1.63x the uops in shorter runs and longer encodings, and
+  it is the front end that runs out.**
+- **So the honest statement of where `elf/` stands on compute** is not "we need a register
+  allocator". It is: **we execute half again as many instructions as `gcc -O2` in basic blocks
+  half the length, and no single mechanism on the list above recovers more than a few per cent.**
+  What would is emitting fewer instructions across the board — which is a grind, not a feature.
+- **Class:** IMPROVE (a negative result that redirects the work).
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/slots/,cpu_core/topdown-fe-bound/ ./elf/out/fib32.elf`
+  against `elf/bench/out_fib_O2`; two events at a time.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

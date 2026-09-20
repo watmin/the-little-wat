@@ -31,6 +31,15 @@ measurement lives, and why it was not done at the time.
    (C-139). A magic number where an `Option` belongs, and a record wearing a string. Both are
    internal and consistent; both are the shape C-139 was about.
 
+**Performance — and C-158 measured the gap ONE MORE TIME, at the other end of the machine.**
+
+**A register allocator is NOT the next thing.** `fib(32)` is 43% front-end bound and **0%
+back-end bound**; a register allocator relieves back-end pressure and there is none. Four levers
+measured, none enough: register allocation **0%**, overflow-check elimination **-3%**, inlining
+depth 8 **-16% for 14x the code**, branch `rel8` density **~8% of the bytes**. The remaining 2.2x
+is that we ask the front end for 1.63x the uops in basic blocks half as long, and what fixes that
+is emitting fewer instructions everywhere — a grind, not a feature. C-158 has the counters.
+
 **Performance — and C-153 measured where the gap actually is, so this list is now evidence.**
 
 **What is NOT the gap, measured and struck:** the overflow checks are 45% of our branches and
