@@ -10839,6 +10839,65 @@ complete at check time. Any openness either moves it to link time or gives it up
 - **Repro:** `tools/vs-c.sh` sections 5 and 6.
 
 
+### C-165: eight registers instead of four — and the spill it removed cost nothing
+
+C-164 named this the biggest item on the board: `elf/bench/triple.wat` has four parameters, which
+take all four callee-saved registers, so `nlr` is zero and its three per-iteration `let` bindings
+round-trip through the frame. gcc keeps everything in registers. So: **a function that makes no
+returning call can allocate r8-r11 too.** Nothing else preserves them — every callee this compiler
+emits pushes and pops rbx, r12, r13 and rbp and treats r8-r11 as dead — so a function that never
+gets control back from a call owns them outright, and needs no prologue push and no epilogue pop
+to say so.
+
+- **"No returning call" is not "no call".** A self tail call is a `jmp`; control never comes back
+  through it, and the next iteration rewrites the same registers from the top. That is the whole
+  reason the loop shape qualifies. `:c::noret?` walks the body carrying tail position the way
+  `:c::tail-self?` does — `if` arms and the last form of a `do`, a `let` and a `cond` clause
+  inherit it, conditions and initialisers do not — and asks of everything else the question
+  `:c::scratch-safe?` already answers: does this subtree emit a call? The syscalls fall out for
+  free, which matters more than it looks: `syscall` itself destroys rcx and **r11**.
+- **The two groups approach the same four registers from opposite ends.** C-137's scratch pool
+  now counts DOWN from r11 and a `let` binding counts UP from r8, so they meet in the middle;
+  `:c::Prog/nscr` carries what is left of the pool and `nscr = 4 - max(0, nr+nlr-4)` keeps them
+  from ever overlapping. Reversing the pool's order is behaviour-neutral on its own and was
+  committed as its own green build before anything was allocated.
+- **It works. The loop has no memory traffic left**: `mov %rax,0x38(%rsp)` and its reload became
+  `mov %rax,%r8` and `cmp $0xf4240,%r8`, three stores and three loads an iteration gone.
+- **And it bought nothing.** `triple` retires **1,290,000,318** instructions before and
+  **1,290,000,318** after — not approximately, exactly — and 210.2M cycles against 210.5M. Best
+  of fourteen interleaved: 111 ms before, 108 ms after, inside a spread that runs to 170.
+- **Why, and it is the point.** The loop is at **IPC 6.14 on a 6-wide core**: every issue slot is
+  full, so cycles are instructions and nothing else. A spill costs one store and one reload — two
+  slots. A register binding costs `mov %rax,%r8` to write it and `mov %r8,%rax` to read it back
+  for the `if` arms — also two slots. The store never missed L1 and the reload always forwarded,
+  so the memory was free and replacing free memory with registers is a wash **by construction**,
+  not by accident. It pays only where the loop is load/store-port bound, and this one issues three
+  stores and three loads per seven cycles against a port budget of two loads and one store *per
+  cycle*.
+- **What it does change is the shape of the next move.** The value is now in a named register that
+  the compare reads directly, which is what a `cmov` needs; the two `mov`s that make it a wash are
+  the round trip through rax that if-conversion removes. Kept for that reason, and reported
+  honestly as cycle-neutral on its own.
+- **Only one binary in the suite moved.** 54 programs, and `triple.elf` is the only one whose
+  bytes changed — no other function in `elf/src/` is call-free-or-tail-only with more `let`
+  bindings than it has spare callee-saved registers.
+- **What `triple` actually spends its 43 instructions on**, against gcc's 16, now that the
+  disassembly is register-to-register:
+  - **21** on three `(if (> x K) (- x K) x)` — `cmp`, `jcc`, `mov`, `sub`, `jo`, `jmp`, `mov`.
+    gcc spends **9**: `lea -K(%r),%r9`, `cmp`, `cmovg`. That is if-conversion, and it is the
+    biggest remaining gap.
+  - **12** on `(* i 3)`, `(* i 5)`, `(* i 7)` plus the `jo` on each and the decrement of `i`.
+    gcc has **no `imul` at all**: it strength-reduced all three into registers counting down by
+    3, 5 and 7, and dropped `i` entirely because one of them reaches zero exactly when `i` does.
+  - **7 `jo`s**, which gcc does not have because C says signed overflow is undefined and wat says
+    it traps. That is a semantic difference, not a missing optimisation — but it is 16% of the
+    issue slots, and on an issue-bound loop 16% of the slots is 16% of the time.
+- **`tools/bootstrap.sh` green from the interpreter — 54 binaries byte-identical, fixpoint at
+  161,176 bytes; `elf-run` 25/25 and four refusals, `vs-c`, `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/triple.elf`, and
+  `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/instructions/ ./elf/out/triple.elf`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

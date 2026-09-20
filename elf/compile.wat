@@ -1009,12 +1009,19 @@
 ;; what keeps rbp available as its frame pointer.
 (:wat::core::defn :c::nregs [] -> :wat::core::i64 4)
 
+;; **0-3 are the callee-saved registers and 4-7 are r8-r11.** The second group is only ever
+;; handed out to a function that makes no returning call (`:c::callfree?`), because nothing else
+;; preserves them -- and for exactly that reason they need no saving in the prologue either.
 (:wat::core::defn :c::reg-mov-to [r <- :wat::core::i64] -> :wat::core::String   ;; mov rax, REG
   (:wat::core::cond ((:wat::core::= r 0) "4889d8") ((:wat::core::= r 1) "4c89e0")
-                    ((:wat::core::= r 2) "4c89e8") (:else "4889e8")))
+                    ((:wat::core::= r 2) "4c89e8") ((:wat::core::= r 3) "4889e8")
+                    ((:wat::core::= r 4) "4c89c0") ((:wat::core::= r 5) "4c89c8")
+                    ((:wat::core::= r 6) "4c89d0") (:else "4c89d8")))
 (:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String ;; mov REG, rax
   (:wat::core::cond ((:wat::core::= r 0) "4889c3") ((:wat::core::= r 1) "4989c4")
-                    ((:wat::core::= r 2) "4989c5") (:else "4889c5")))
+                    ((:wat::core::= r 2) "4989c5") ((:wat::core::= r 3) "4889c5")
+                    ((:wat::core::= r 4) "4989c0") ((:wat::core::= r 5) "4989c1")
+                    ((:wat::core::= r 6) "4989c2") (:else "4989c3")))
 (:wat::core::defn :c::reg-push [r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond ((:wat::core::= r 0) "53") ((:wat::core::= r 1) "4154")
                     ((:wat::core::= r 2) "4155") (:else "55")))
@@ -1032,7 +1039,11 @@
                           ((:wat::core::= r 0) (:wat::core::if short? "4883fb" "4881fb"))
                           ((:wat::core::= r 1) (:wat::core::if short? "4983fc" "4981fc"))
                           ((:wat::core::= r 2) (:wat::core::if short? "4983fd" "4981fd"))
-                          (:else (:wat::core::if short? "4883fd" "4881fd")))]
+                          ((:wat::core::= r 3) (:wat::core::if short? "4883fd" "4881fd"))
+                          ((:wat::core::= r 4) (:wat::core::if short? "4983f8" "4981f8"))
+                          ((:wat::core::= r 5) (:wat::core::if short? "4983f9" "4981f9"))
+                          ((:wat::core::= r 6) (:wat::core::if short? "4983fa" "4981fa"))
+                          (:else (:wat::core::if short? "4983fb" "4981fb")))]
     (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
 
 ;; which register this operand already lives in, or -1
@@ -1046,7 +1057,11 @@
                           ((:wat::core::= r 0) (:wat::core::if short? "486bc3" "4869c3"))
                           ((:wat::core::= r 1) (:wat::core::if short? "496bc4" "4969c4"))
                           ((:wat::core::= r 2) (:wat::core::if short? "496bc5" "4969c5"))
-                          (:else (:wat::core::if short? "486bc5" "4869c5")))]
+                          ((:wat::core::= r 3) (:wat::core::if short? "486bc5" "4869c5"))
+                          ((:wat::core::= r 4) (:wat::core::if short? "496bc0" "4969c0"))
+                          ((:wat::core::= r 5) (:wat::core::if short? "496bc1" "4969c1"))
+                          ((:wat::core::= r 6) (:wat::core::if short? "496bc2" "4969c2"))
+                          (:else (:wat::core::if short? "496bc3" "4969c3")))]
     (:wat::string::concat pre (:asm::le n (:wat::core::if short? 1 4)))))
 
 (:wat::core::defn :c::reg-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
@@ -1069,16 +1084,24 @@
   (:wat::core::cond
     ((:wat::core::= op "+")
       (:wat::core::cond ((:wat::core::= r 0) "4801d8") ((:wat::core::= r 1) "4c01e0")
-                        ((:wat::core::= r 2) "4c01e8") (:else "4801e8")))
+                        ((:wat::core::= r 2) "4c01e8") ((:wat::core::= r 3) "4801e8")
+                        ((:wat::core::= r 4) "4c01c0") ((:wat::core::= r 5) "4c01c8")
+                        ((:wat::core::= r 6) "4c01d0") (:else "4c01d8")))
     ((:wat::core::= op "-")
       (:wat::core::cond ((:wat::core::= r 0) "4829d8") ((:wat::core::= r 1) "4c29e0")
-                        ((:wat::core::= r 2) "4c29e8") (:else "4829e8")))
+                        ((:wat::core::= r 2) "4c29e8") ((:wat::core::= r 3) "4829e8")
+                        ((:wat::core::= r 4) "4c29c0") ((:wat::core::= r 5) "4c29c8")
+                        ((:wat::core::= r 6) "4c29d0") (:else "4c29d8")))
     ((:wat::core::= op "*")
       (:wat::core::cond ((:wat::core::= r 0) "480fafc3") ((:wat::core::= r 1) "490fafc4")
-                        ((:wat::core::= r 2) "490fafc5") (:else "480fafc5")))
+                        ((:wat::core::= r 2) "490fafc5") ((:wat::core::= r 3) "480fafc5")
+                        ((:wat::core::= r 4) "490fafc0") ((:wat::core::= r 5) "490fafc1")
+                        ((:wat::core::= r 6) "490fafc2") (:else "490fafc3")))
     ((:c::cmp? op)
       (:wat::core::cond ((:wat::core::= r 0) "4839d8") ((:wat::core::= r 1) "4c39e0")
-                        ((:wat::core::= r 2) "4c39e8") (:else "4839e8")))
+                        ((:wat::core::= r 2) "4c39e8") ((:wat::core::= r 3) "4839e8")
+                        ((:wat::core::= r 4) "4c39c0") ((:wat::core::= r 5) "4c39c8")
+                        ((:wat::core::= r 6) "4c39d0") (:else "4c39d8")))
     (:else "")))
 
 (:wat::core::defn :c::lookup-reg [env <- :c::Env name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
@@ -1133,6 +1156,9 @@
    ;; threading a new argument through every expression form.
    nlr <- :wat::core::i64
    regbase <- :wat::core::i64
+   ;; how many of r8-r11 the scratch pool may still have: four normally, fewer when this
+   ;; function has spent some of them on `let` bindings
+   nscr <- :wat::core::i64
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -1167,6 +1193,7 @@
   (:c::Prog :fns (:wat::core::Vector :- [:c::Fn])
             :recs (:wat::core::Vector :- [:c::Rec])
             :aliases (:wat::core::Vector :- [:c::Alias])
+            :nscr (:c::nscratch)
             :linear (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
             :nlr 0 :regbase 0
@@ -1802,9 +1829,13 @@
 
 (:wat::core::defn :c::nscratch [] -> :wat::core::i64 4)
 
+
 (:wat::core::defn :c::scr-save [r <- :wat::core::i64] -> :wat::core::String     ;; mov rN, rax
-  (:wat::core::cond ((:wat::core::= r 0) "4989c0") ((:wat::core::= r 1) "4989c1")
-                    ((:wat::core::= r 2) "4989c2") (:else "4989c3")))
+;; **the pool counts DOWN from r11 so the allocator can count up from r8.** They are the same
+  ;; four registers; taking them from opposite ends is what lets a call-free function spend the
+  ;; ones the pool does not need without either side having to know which.
+  (:wat::core::cond ((:wat::core::= r 0) "4989c3") ((:wat::core::= r 1) "4989c2")
+                    ((:wat::core::= r 2) "4989c1") (:else "4989c0")))
 ;; `mov SCRATCH, CALLEE-SAVED` -- the scratch copy taken from where rax got it, rather than from
 ;; rax. `:c::expr` puts a register-resident name into rax and the scratch pool immediately copies
 ;; rax onward, so the pair reads `mov %r12,%rax ; mov %rax,%r9` where one instruction does it and
@@ -1812,17 +1843,30 @@
 (:wat::core::defn :c::reg-to-scr [lr <- :wat::core::i64 r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= lr 0)
-      (:wat::core::cond ((:wat::core::= r 0) "4989d8") ((:wat::core::= r 1) "4989d9")
-                        ((:wat::core::= r 2) "4989da") (:else "4989db")))
+      (:wat::core::cond ((:wat::core::= r 0) "4989db") ((:wat::core::= r 1) "4989da")
+                        ((:wat::core::= r 2) "4989d9") (:else "4989d8")))
     ((:wat::core::= lr 1)
-      (:wat::core::cond ((:wat::core::= r 0) "4d89e0") ((:wat::core::= r 1) "4d89e1")
-                        ((:wat::core::= r 2) "4d89e2") (:else "4d89e3")))
+      (:wat::core::cond ((:wat::core::= r 0) "4d89e3") ((:wat::core::= r 1) "4d89e2")
+                        ((:wat::core::= r 2) "4d89e1") (:else "4d89e0")))
     ((:wat::core::= lr 2)
-      (:wat::core::cond ((:wat::core::= r 0) "4d89e8") ((:wat::core::= r 1) "4d89e9")
-                        ((:wat::core::= r 2) "4d89ea") (:else "4d89eb")))
+      (:wat::core::cond ((:wat::core::= r 0) "4d89eb") ((:wat::core::= r 1) "4d89ea")
+                        ((:wat::core::= r 2) "4d89e9") (:else "4d89e8")))
+    ((:wat::core::= lr 3)
+      (:wat::core::cond ((:wat::core::= r 0) "4989eb") ((:wat::core::= r 1) "4989ea")
+                        ((:wat::core::= r 2) "4989e9") (:else "4989e8")))
+    ;; ...and the source can be one of r8-r11 as well, now that a `let` binding can live there
+    ((:wat::core::= lr 4)
+      (:wat::core::cond ((:wat::core::= r 0) "4d89c3") ((:wat::core::= r 1) "4d89c2")
+                        ((:wat::core::= r 2) "4d89c1") (:else "4d89c0")))
+    ((:wat::core::= lr 5)
+      (:wat::core::cond ((:wat::core::= r 0) "4d89cb") ((:wat::core::= r 1) "4d89ca")
+                        ((:wat::core::= r 2) "4d89c9") (:else "4d89c8")))
+    ((:wat::core::= lr 6)
+      (:wat::core::cond ((:wat::core::= r 0) "4d89d3") ((:wat::core::= r 1) "4d89d2")
+                        ((:wat::core::= r 2) "4d89d1") (:else "4d89d0")))
     (:else
-      (:wat::core::cond ((:wat::core::= r 0) "4989e8") ((:wat::core::= r 1) "4989e9")
-                        ((:wat::core::= r 2) "4989ea") (:else "4989eb")))))
+      (:wat::core::cond ((:wat::core::= r 0) "4d89db") ((:wat::core::= r 1) "4d89da")
+                        ((:wat::core::= r 2) "4d89d9") (:else "4d89d8")))))
 
 ;; the register a tracked NAME lives in, or -1 -- including for the empty name, which is what
 ;; `:c::Out/rax` holds when it knows nothing
@@ -1831,28 +1875,28 @@
     (:c::lookup-reg env name (:wat::core::- (:wat::core::length env) 1))))
 
 (:wat::core::defn :c::scr-back [r <- :wat::core::i64] -> :wat::core::String     ;; mov rax, rN
-  (:wat::core::cond ((:wat::core::= r 0) "4c89c0") ((:wat::core::= r 1) "4c89c8")
-                    ((:wat::core::= r 2) "4c89d0") (:else "4c89d8")))
+  (:wat::core::cond ((:wat::core::= r 0) "4c89d8") ((:wat::core::= r 1) "4c89d0")
+                    ((:wat::core::= r 2) "4c89c8") (:else "4c89c0")))
 
 ;; rax = rN OP rax, where rN holds the left operand
 (:wat::core::defn :c::scr-op [op <- :wat::core::String r <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= op "+")
-      (:wat::core::cond ((:wat::core::= r 0) "4c01c0") ((:wat::core::= r 1) "4c01c8")
-                        ((:wat::core::= r 2) "4c01d0") (:else "4c01d8")))
+      (:wat::core::cond ((:wat::core::= r 0) "4c01d8") ((:wat::core::= r 1) "4c01d0")
+                        ((:wat::core::= r 2) "4c01c8") (:else "4c01c0")))
     ((:wat::core::= op "*")
-      (:wat::core::cond ((:wat::core::= r 0) "490fafc0") ((:wat::core::= r 1) "490fafc1")
-                        ((:wat::core::= r 2) "490fafc2") (:else "490fafc3")))
+      (:wat::core::cond ((:wat::core::= r 0) "490fafc3") ((:wat::core::= r 1) "490fafc2")
+                        ((:wat::core::= r 2) "490fafc1") (:else "490fafc0")))
     ;; subtraction is not commutative, so it runs backwards and comes home
     ((:wat::core::= op "-")
       (:wat::string::concat
-        (:wat::core::cond ((:wat::core::= r 0) "4929c0") ((:wat::core::= r 1) "4929c1")
-                          ((:wat::core::= r 2) "4929c2") (:else "4929c3"))
+        (:wat::core::cond ((:wat::core::= r 0) "4929c3") ((:wat::core::= r 1) "4929c2")
+                          ((:wat::core::= r 2) "4929c1") (:else "4929c0"))
         (:c::scr-back r)))
     ((:c::cmp? op)
       (:wat::string::concat
-        (:wat::core::cond ((:wat::core::= r 0) "4939c0") ((:wat::core::= r 1) "4939c1")
-                          ((:wat::core::= r 2) "4939c2") (:else "4939c3"))
+        (:wat::core::cond ((:wat::core::= r 0) "4939c3") ((:wat::core::= r 1) "4939c2")
+                          ((:wat::core::= r 2) "4939c1") (:else "4939c0"))
         (:c::setcc op) "480fb6c0"))
     (:else "")))
 
@@ -1926,7 +1970,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
     (:wat::core::let [r (:c::scratch-need (:wat::core::nth ks i) env pg)
                       use? (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
-                                            (:wat::core::< r (:c::nscratch)))]
+                                            (:wat::core::< r (:c::Prog/nscr pg)))]
       (:c::need-fold ks (:wat::core::+ i 1) env pg
         (:c::imax best (:wat::core::if use? (:wat::core::+ r 1) r))))))
 
@@ -2057,7 +2101,7 @@
                       scr? (:wat::core::and (:wat::core::= fast "")
                              (:wat::core::and (:wat::core::not= (:c::scr-op op 0) "")
                                (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
-                                                (:wat::core::< r (:c::nscratch)))))]
+                                                (:wat::core::< r (:c::Prog/nscr pg)))))]
       (:wat::core::cond
         ((:wat::core::not= fast "")
           (:wat::core::let
@@ -2984,8 +3028,84 @@
                           name arity pg))
         (:c::tail-self-clauses ks (:wat::core::+ i 1) name arity pg)))))
 
+;; ---------------------------------------------------------------- who gets r8-r11
+;;
+;; **A function that makes no RETURNING call owns r8-r11.** Nothing else preserves them -- our
+;; own callees save rbx, r12, r13 and rbp and treat r8-r11 as dead -- so a function that never
+;; gets control back from a call can put `let` bindings there, and needs no prologue push and no
+;; epilogue pop to do it. That doubles the register file for exactly the shape where the
+;; register file is the ceiling: `elf/bench/triple.wat` has four parameters, which took all four
+;; callee-saved registers and left its three per-iteration `let` bindings round-tripping through
+;; the frame.
+;;
+;; "No returning call" is not "no call": a SELF TAIL CALL is a `jmp`, and control never comes
+;; back through it. The next iteration rewrites the same registers from the top, which is what
+;; makes the loop shape eligible at all. So this walks the body the way `:c::tail-self?` does,
+;; carrying whether the node it is looking at is in tail position, and asks of everything else
+;; the question `:c::scratch-safe?` already answers: does this subtree emit a call?
+;;
+;; The syscalls are excluded for free, which matters more than it looks: `syscall` itself
+;; destroys rcx and r11.
+(:wat::core::defn :c::noret? [a <- :wat::core::i64 tail? <- :wat::core::bool
+                              name <- :wat::core::String arity <- :wat::core::i64
+                              env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::cond
+      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kind a pg) "list"))
+      ((:wat::core::not= (:c::kind a pg) "list") (:c::all-safe? ks 0 env pg))
+      (:else
+        (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))
+                          nk (:wat::core::length ks)]
+          (:wat::core::cond
+            ((:wat::core::and (:c::if? h) (:wat::core::= nk 4))
+              (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks 1) env pg)
+                (:wat::core::and (:c::noret? (:wat::core::nth ks 2) tail? name arity env pg)
+                                 (:c::noret? (:wat::core::nth ks 3) tail? name arity env pg))))
+            ((:c::do? h) (:c::noret-seq? ks 1 tail? name arity env pg))
+            ((:wat::core::and (:c::let? h) (:wat::core::>= nk 3))
+              (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks 1) env pg)
+                               (:c::noret-seq? ks 2 tail? name arity env pg)))
+            ((:c::cond? h) (:c::noret-clauses? ks 1 tail? name arity env pg))
+            ;; a call, or a head this does not take apart: quiet subtrees pass, and the one
+            ;; call that passes is the self tail call with its arguments quiet
+            (:else
+              (:wat::core::or (:c::scratch-safe? a env pg)
+                (:wat::core::and tail?
+                  (:wat::core::and (:wat::core::= h name)
+                    (:wat::core::and (:wat::core::= (:wat::core::- nk 1) arity)
+                                     (:c::all-safe? ks 1 env pg))))))))))))
+
+;; a sequence of forms: the last one inherits the tail position, the rest cannot have one
+(:wat::core::defn :c::noret-seq? [ks <- :c::Kids i <- :wat::core::i64 tail? <- :wat::core::bool
+                                  name <- :wat::core::String arity <- :wat::core::i64
+                                  env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::if (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
+      (:c::noret? (:wat::core::nth ks i) tail? name arity env pg)
+      (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
+                       (:c::noret-seq? ks (:wat::core::+ i 1) tail? name arity env pg)))))
+
+(:wat::core::defn :c::noret-clauses? [ks <- :c::Kids i <- :wat::core::i64 tail? <- :wat::core::bool
+                                      name <- :wat::core::String arity <- :wat::core::i64
+                                      env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:wat::core::and (:wat::core::>= (:wat::core::length cks) 2)
+        (:wat::core::and (:c::scratch-safe? (:wat::core::nth cks 0) env pg)
+          (:wat::core::and (:c::noret-seq? cks 1 tail? name arity env pg)
+                           (:c::noret-clauses? ks (:wat::core::+ i 1) tail? name arity env pg)))))))
+
+;; the whole body, as one sequence whose last form is in tail position
+(:wat::core::defn :c::callfree? [ks <- :c::Kids start <- :wat::core::i64 name <- :wat::core::String
+                                 arity <- :wat::core::i64 env <- :c::Env
+                                 pg <- :c::Prog] -> :wat::core::bool
+  (:c::noret-seq? ks start true name arity env pg))
+
 (:wat::core::defn :c::imin [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::< a b) a b))
+
+(:wat::core::defn :c::imax0 [a <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< a 0) 0 a))
 
 (:wat::core::defn :c::reg-saves [i <- :wat::core::i64 nr <- :wat::core::i64
                                  acc <- :wat::core::String] -> :wat::core::String
@@ -3104,8 +3224,23 @@
      ;; slot -- a store and a load per read -- where gcc keeps the value in a register. Excluded
      ;; for a function that clones, for C-136's reason exactly: the child inherits the frame, so
      ;; a value moved out of it is a value the child cannot see.
+     ;; **and r8-r11 on top of them, when no call will ever return into this function.**
+     ;; See `:c::callfree?`: those four need no saving and no restoring, so the only cost of
+     ;; using them is that the scratch pool has fewer -- which is why `nscr` goes down by
+     ;; exactly as many as the bindings take.
+     free? (:wat::core::and (:wat::core::not (:c::has-clone? node pg))
+             (:c::callfree? ks start (:c::text pg (:wat::core::nth ks 1)) n env pg))
      nlr (:wat::core::if (:c::has-clone? node pg) 0
-           (:c::imin (:wat::core::- (:c::nregs) nr) slots))
+           (:c::imin (:wat::core::+ (:wat::core::- (:c::nregs) nr)
+                       (:wat::core::if free? (:c::nscratch) 0))
+                     slots))
+     ;; the pushes and pops cover the callee-saved four and stop there
+     nsave (:c::imin (:c::nregs) (:wat::core::+ nr nlr))
+     ;; what is left of the pool after the bindings have taken theirs. The two groups are the
+     ;; same four registers approached from opposite ends -- bindings count up from r8, the
+     ;; pool counts down from r11 -- so they meet in the middle and never overlap.
+     nscr (:wat::core::- (:c::nscratch)
+            (:c::imax0 (:wat::core::- (:wat::core::+ nr nlr) (:c::nregs))))
      ;; the System V ABI wants rsp 16-byte aligned at a call, so the frame is rounded up
      frame (:wat::core::* 8 (:wat::core::if (:wat::core::= (:wat::core::rem slots 2) 0) slots
                               (:wat::core::+ slots 1)))
@@ -3118,12 +3253,18 @@
      ;; that -- so without the push the whole frame moves up by those eight bytes, and forgetting
      ;; them puts every parameter one slot out.
      fkv (:wat::core::if fpr? 0
-           (:wat::core::+ frame (:wat::core::* 8 (:wat::core::+ nr nlr))))
+           (:wat::core::+ frame (:wat::core::* 8 nsave)))
      o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv)
      ;; **before the frame exists, the parameters are still where the caller put them**, so this
      ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
      ;; because a cloning function keeps its frame pointer and its parameters with it.
      env0 (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg false)
+     ;; ...and no registers have been handed out yet either, so the peeled head is compiled
+     ;; against a program that says so. `pg` still carries the PREVIOUS function's `nlr` and
+     ;; `regbase` at this point -- harmless while the pool was a constant four, and not harmless
+     ;; now that a binding can reach into it.
+     pgw (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc pg :nlr 0) :regbase 0)
+                            :nscr (:c::nscratch))
      ;; **not a function with a self tail call.** C-121 makes such a call a `jmp` to the end of
      ;; the prologue -- and the test now lives BEFORE the prologue, so the jump would skip it and
      ;; the loop would never end (`elf/src/vectors.wat` hangs). It would buy nothing there in any
@@ -3132,7 +3273,7 @@
              (:wat::core::and
                (:wat::core::not (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
                                   (:c::text pg (:wat::core::nth ks 1)) n pg))
-               (:c::wrappable? ks start pv env0 pg)))
+               (:c::wrappable? ks start pv env0 pgw)))
      ;; **fk is zero here and `fkv` afterwards.** Before the prologue rsp still points at the
      ;; return address, so an argument is eight bytes up; after it, the frame and the saved
      ;; registers are in between. Getting this wrong reads the argument at the offset it will
@@ -3140,7 +3281,7 @@
      ow (:wat::core::if wrap?
           (:wat::core::assoc
             (:c::wrap-head (:c::kidsof pg (:wat::core::nth ks start))
-              (:wat::core::assoc o0 :fk 0) env0 pg rt tb)
+              (:wat::core::assoc o0 :fk 0) env0 pgw rt tb)
             :fk fkv)
           o0)
      ;; make room / save the registers this function will use / load the parameters into them.
@@ -3148,7 +3289,7 @@
      o1 (:c::emit ow (:wat::string::concat
                        (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
                        (:c::sub-rsp frame)
-                       (:c::reg-saves 0 (:wat::core::+ nr nlr) "")
+                       (:c::reg-saves 0 nsave "")
                        (:c::reg-loads pv 0 n nr pg fkv fpr? "")))
      ;; the top of the body is wherever the prologue ended -- which is NOT a constant any more,
      ;; now that `sub rsp` is one byte of displacement when it fits and nothing at all when the
@@ -3162,7 +3303,8 @@
      ;; overwrote `i` while four children were still reading it, and the answer fell from 1000
      ;; to 400. Same shape as `:c::releasable?` and `poke`, and the same lesson: the intrinsics
      ;; break invariants the rest of the compiler is entitled to assume about wat.
-     pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc pg :nlr nlr) :regbase nr)
+     pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
+          (:wat::core::assoc pg :nscr nscr) :nlr nlr) :regbase nr)
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
      tc (:wat::core::if (:c::has-clone? node pg)
@@ -3175,7 +3317,7 @@
             o1 env pg rt tb 0 tc)
           (:c::seq ks start o1 env pg rt tb 0 tc))]
     (:c::at-depth0 o2 (:wat::string::concat
-      (:c::reg-restores (:wat::core::- (:wat::core::+ nr nlr) 1) "")
+      (:c::reg-restores (:wat::core::- nsave 1) "")
       ;; `leave` is `mov rbp,rsp ; pop rbp`; without a frame pointer the same job is one `add`
       (:wat::core::if fpr? "c9" (:c::add-rsp frame)) "c3"))))
 

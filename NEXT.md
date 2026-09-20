@@ -40,11 +40,33 @@ throughput-bound loop — three independent chains — gcc's IPC climbs to 4.34 
 pinned at **6.4, the issue width**: we are saturated and it is not, and we lose 1.94x. **There
 the instruction count is the whole ceiling, and it is 43 an iteration against 16.**
 
-**The biggest single item now: `triple` spills three `let` bindings to the frame every
-iteration**, because its four parameters take all four callee-saved registers and `nlr` is zero.
-A function that makes no RETURNING call could allocate r8-r11 as well — nothing else would
-clobber them and they would need no saving, and `:c::scratch-safe?` already computes that
-whitelist for subtrees. Four registers to eight, six memory references an iteration removed.
+~~**The biggest single item now: `triple` spills three `let` bindings to the frame every
+iteration.**~~ **DONE 2026-09-19, C-165 — and it bought exactly nothing.** A function that makes
+no RETURNING call now allocates r8-r11 as well (a self tail call is a `jmp`, so it does not count
+as returning), the pool counts down from r11 while a binding counts up from r8, and the loop has
+no memory traffic left. It retires **the same 1,290,000,318 instructions** and the same cycles:
+at IPC 6.14 on a 6-wide core a spill costs one store and one reload, and a register binding costs
+one `mov` in and one `mov` out — **two issue slots either way**. Kept because the value now sits
+in a register the compare reads directly, which is what the next item needs.
+
+**The biggest single item now: if-conversion.** `triple` spends **21** of its 43 instructions an
+iteration on three `(if (> x K) (- x K) x)` — `cmp`, `jcc`, `mov`, `sub`, `jo`, `jmp`, `mov` each
+— where gcc spends **9**: `lea -K(%r),%r9`, `cmp`, `cmovg`. Two things stand between us and that,
+and both are real:
+
+  * `cmov` needs both arms evaluated, and `(- x K)` **traps**. `lea` computes the same value and
+    sets no flags, but then there is no check at all. The sound route is narrow and classic:
+    **under a dominating comparison the check is provably dead** — inside the THEN arm of
+    `(> x 1000000)` we know `x > 1000000`, so `x - 1000000` cannot underflow. That is range
+    propagation from the branch condition, and it is the same fact that makes the `lea` safe.
+  * The second `mov` is the round trip through rax: each arm computes into rax and the `if` then
+    copies rax into the destination register. Compiling an arm **straight into its destination**
+    removes one instruction per arm taken, independently of `cmov`.
+
+**And the item after that, which is worth more instructions than either: strength reduction.**
+gcc emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns all three into
+registers counting down by 3, 5 and 7, and drops `i` itself because one of them reaches zero
+exactly when `i` does. That is 12 of our 43 instructions against 3 of its 16.
 
 **`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
 experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
