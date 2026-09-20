@@ -2270,6 +2270,32 @@
     ((:wat::core::= op "<") "7d") ((:wat::core::= op ">=") "7c")
     ((:wat::core::= op ">") "7e") (:else "7f")))
 
+;; **the branch taken when the condition HOLDS**, which is the one an `if` wants when its THEN
+;; arm has nothing to emit: the branch over the arm and the jump to the join are then the same
+;; jump, and two instructions collapse into one. See `:c::if-cmp`.
+(:wat::core::defn :c::jcc [op <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "<") "0f8c") ((:wat::core::= op ">=") "0f8d")
+    ((:wat::core::= op ">") "0f8f") ((:wat::core::= op "<=") "0f8e")
+    ((:wat::core::= op "=") "0f84") (:else "0f85")))
+
+(:wat::core::defn :c::jcc8 [op <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= op "<") "7c") ((:wat::core::= op ">=") "7d")
+    ((:wat::core::= op ">") "7f") ((:wat::core::= op "<=") "7e")
+    ((:wat::core::= op "=") "74") (:else "75")))
+
+;; **an arm that emits nothing is an arm whose value is already in rax.** C-149 tracks what rax
+;; holds by name and the compare does not disturb it, so this is knowable BEFORE the branch is
+;; emitted -- which is what lets the branch be chosen rather than patched afterwards. In `fib`
+;; it is 45 of the 99 conditional branches in the binary: every `(if (< n 2) n ...)` compares
+;; `n` and then jumps over an arm that would have re-loaded the register it just compared.
+(:wat::core::defn :c::arm-free? [a <- :wat::core::i64 kept <- :wat::core::String
+                                 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::not= kept "")
+    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+                     (:wat::core::= (:c::text pg a) kept))))
+
 (:wat::core::defn :c::if-cmp [ks <- :c::Kids op <- :wat::core::String o <- :c::Out env <- :c::Env
                               pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
                               slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
@@ -2291,13 +2317,27 @@
             [p1 (:c::push o1 "50" 8)
              p2 (:c::expr (:wat::core::nth cks 2) p1 env pg rt tb slot (:c::no-tail))]
             (:c::popn p2 (:wat::string::concat "4889c1" "58" "4839c8") 8)))
+     ;; **what rax will still hold on both arms**, or "" when the general path destroyed it
+     kept (:wat::core::if (:wat::core::not= fast "") (:c::Out/rax o1) "")
+     ;; **an arm that emits nothing does not need a branch over it.** With the THEN arm empty,
+     ;; the branch over it and the jump to the join are the same jump, so the branch is taken
+     ;; when the condition HOLDS and goes straight to the join -- one instruction instead of
+     ;; two, and on the other path a taken branch becomes a fall-through. With the ELSE arm
+     ;; empty it is the `jmp` that goes: it would jump zero bytes.
+     then0? (:c::arm-free? (:wat::core::nth ks 2) kept pg)
+     else0? (:wat::core::and (:wat::core::not then0?)
+                             (:c::arm-free? (:wat::core::nth ks 3) kept pg))
      ;; the arm this branch jumps over is a name or a constant, so it and the `jmp` after it
-     ;; come to at most fifteen bytes -- a displacement that fits in one
-     short? (:c::tiny-arm? (:wat::core::nth ks 2) pg)
+     ;; come to at most fifteen bytes -- a displacement that fits in one. When the THEN arm is
+     ;; the empty one the branch clears the ELSE arm instead, so that is the one to measure.
+     short? (:c::tiny-arm? (:wat::core::nth ks (:wat::core::if then0? 3 2)) pg)
      w (:wat::core::if short? 1 4)
-     o3 (:c::emit o2 (:wat::core::if short?
-                       (:wat::string::concat (:c::jcc-not8 op) "00")
-                       (:wat::string::concat (:c::jcc-not op) "00000000")))
+     o3 (:c::emit o2
+          (:wat::core::if then0?
+            (:wat::core::if short? (:wat::string::concat (:c::jcc8 op) "00")
+                                   (:wat::string::concat (:c::jcc op) "00000000"))
+            (:wat::core::if short? (:wat::string::concat (:c::jcc-not8 op) "00")
+                                   (:wat::string::concat (:c::jcc-not op) "00000000"))))
      ;; **neither the compare nor the branch writes rax**, so whatever it held before them it
      ;; still holds on BOTH arms -- the fall-through and the jump alike, which is what makes
      ;; this sound rather than merely true on one path. Only when the right operand compiled to
@@ -2308,9 +2348,12 @@
      at (:wat::core::- (:c::codelen o3k) w)
      o4 (:c::expr (:wat::core::nth ks 2) o3k env
           (:wat::core::assoc pg :nneg (:c::nneg-of cks op true pg)) rt tb slot tc)
-     o5 (:c::emit o4 "e900000000")
+     o5 (:wat::core::if (:wat::core::or then0? else0?) o4 (:c::emit o4 "e900000000"))
      jmp-at (:wat::core::- (:c::codelen o5) 4)
-     o6 (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at w)) w))
+     ;; the branch points AT the else arm -- unless it is the jump to the join, in which case it
+     ;; has to clear the else arm as well and is patched after it instead
+     o6 (:wat::core::if then0? o5
+          (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at w)) w)))
      ;; that patch pointed the branch AT the else arm; it is not a join. The else arm has
      ;; exactly one predecessor -- the branch itself -- so it inherits what rax held there,
      ;; the same as the fall-through did. (`:c::patch` clears conservatively because most of
@@ -2318,8 +2361,12 @@
      o6k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o6 :rax (:c::Out/rax o1)) o6)
      o7 (:c::expr (:wat::core::nth ks 3) o6k env
-          (:wat::core::assoc pg :nneg (:c::nneg-of cks op false pg)) rt tb slot tc)]
-    (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ jmp-at 4)) 4))))
+          (:wat::core::assoc pg :nneg (:c::nneg-of cks op false pg)) rt tb slot tc)
+     o8 (:wat::core::if then0?
+          (:c::patch o7 at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ at w)) w))
+          o7)]
+    (:wat::core::if (:wat::core::or then0? else0?) o8
+      (:c::patch o8 jmp-at (:asm::le (:wat::core::- (:c::codelen o8) (:wat::core::+ jmp-at 4)) 4)))))
 
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out

@@ -75,6 +75,24 @@ gcc emits **no `imul` at all** for `(* i 3)`, `(* i 5)`, `(* i 7)` — it turns 
 registers counting down by 3, 5 and 7, and drops `i` itself because one of them reaches zero
 exactly when `i` does. That is 12 of our 43 instructions against 3 of its 16.
 
+**WHAT MOVES `fib` IS CONTROL FLOW, NOT WORK — nine experiments, one rule** (C-167). Everything
+that removed work bought nothing: overflow checks **-13% instructions / -3% cycles**, a register
+calling convention -6.6%/**+1.2%**, a frame-slot spill -5.1%/**+3.9%**, `jo` trampolines -9.5%
+bytes/**+2.1%**, `rel8` -5% bytes/**~0**, C-166's provably-dead checks **-8.4%/+0.2%**. Everything
+that removed control flow was paid in full: shrink-wrapping **-11.2%**, and C-167's collapse of
+`jcc`+`jmp` into one branch **-22.1% cycles for -4.6% instructions** — `fib32` 1.94x -> **1.50x**
+vs `gcc -O2`. The counters say why: the uop cache delivers everything, there are no icache stalls
+and no branch misses, so the front end is bound by **taken branches**, and a taken branch costs a
+fetch redirect whether it was predicted or not. **On front-end-bound code the unit of cost is a
+taken branch, not an instruction.**
+
+**A lead, measured but not explained:** naming the intermediate — `(let [a (fib (- n 1))]
+(+ a (fib (- n 2))))` instead of `(+ (fib (- n 1)) (fib (- n 2)))` — costs **112.8M instructions
+against 62.8M and 37.1M cycles against 19.3M**, because the `let` form stops the function
+inlining. `:c::inl-limit` is a node count of 34 and the `let` adds nodes, which is the suspected
+mechanism and is NOT yet confirmed. If that is it, it is a cliff that punishes naming a value,
+and the fix is to measure the callee's cost rather than its node count.
+
 **`fib` is CRITICAL-PATH bound, and counting instructions does not predict its cycles.** Seven
 experiments (C-158, C-160, C-162, C-163): the two that worked — shrink-wrapping **-11.2%** and
 the commutative fold **-1.9%** — took instructions OFF the dependency chain. The five that failed

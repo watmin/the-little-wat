@@ -10955,6 +10955,62 @@ the check is provably dead**, and in this loop three of the seven are.
 - **Repro:** `tools/vs-c.sh` sections 5 and 6; `taskset -c 2 perf stat -e
   cpu_core/cycles/,cpu_core/instructions/ ./elf/out/triple.elf`; `./elf/out/nnegshadow.elf`.
 
+### C-167: the branch that was two branches — fib −22% cycles, the largest move it has ever made
+
+C-158 measured `fib(32)` at **43% front-end bound and 0% back-end bound**, and eight experiments
+since then took work off it and were paid nothing (C-158, C-160, C-162, C-163, C-166). The
+counters say why that kept happening: with the whole loop running out of the uop cache, no icache
+stalls and no branch misses, the front end is bound by **taken branches** — every one redirects
+the fetch pipeline whether or not it was predicted. `fib32` issued **17.3M branches against gcc's
+7.4M**, and 45 of the 99 conditional branches in the binary were immediately followed by a `jmp`.
+
+- **An arm that emits nothing does not need a branch over it.** `(if (< n 2) n ...)` compiles the
+  compare, then a branch over the THEN arm, then the THEN arm — which emits **zero bytes**,
+  because C-149 already knows `n` is the register the compare just read — then a `jmp` to the
+  join. Two branches, one of them always taken, wrapped around nothing:
+
+  ```
+    cmp  $0x2,%r12          cmp  $0x2,%r12
+    jge  +5            ->   jl   <join>
+    jmp  <join>
+  ```
+
+- **Both paths get better, not just the short one.** On the `n < 2` path two branches become one.
+  On the `n >= 2` path — the hot one, the one that recurses — a **taken** branch becomes a
+  fall-through, and a fall-through costs the front end nothing at all.
+- **It is decidable before the branch is emitted, which is what makes it a choice rather than a
+  patch.** `:c::Out/rax` names what rax holds, the compare does not disturb it, and an arm that
+  is that same name compiles to nothing. So `:c::arm-free?` asks the question up front and
+  `:c::if-cmp` picks `:c::jcc` (branch when the condition HOLDS, straight to the join) instead of
+  `:c::jcc-not` plus a `jmp`. The mirror case — an empty ELSE arm — drops the `jmp` instead,
+  because it would have jumped zero bytes.
+- **Measured, two events at a time, interleaved:**
+
+  | | instructions | cycles | branches | vs `gcc -O2` |
+  |---|---|---|---|---|
+  | `fib32` before | 62,794,950 | 19.33M | 17,307,734 | 1.94x |
+  | `fib32` after | 59,931,366 (-4.6%) | **15.05M (-22.1%)** | 14,444,149 (-16.5%) | **1.50x** |
+  | `bench` before | 5,789,276 | 1.832M | | |
+  | `bench` after | 5,554,310 (-4.1%) | **1.473M (-19.6%)** | 1,361,653 | |
+  | `loopsum` | 1,800,000,350 (0%) | 269.1M (-0.4%) | | 0.89x |
+  | `triple` | 1,200,000,311 (0%) | 180.2M (-0.2%) | | 1.63x |
+
+- **-4.6% of the instructions bought -22.1% of the cycles**, which is the exact inverse of every
+  earlier `fib` experiment and the point of the whole entry: on front-end-bound code an
+  instruction is not a unit of cost — **a taken branch is**. `loopsum` and `triple` do not move at
+  all, because neither has an arm that compiles to nothing.
+- **The nine-experiment table now reads one way.** Everything that removed *work* from `fib`
+  (overflow checks -13% instructions, a register calling convention -6.6%, a frame-slot spill
+  -5.1%, C-166's provably-dead checks -8.4%) bought between -3% and +4% of cycles. Everything that
+  removed *control flow* — shrink-wrapping -11.2%, this -22.1% — was paid in full.
+- **`tools/bootstrap.sh` green from the interpreter — 56 binaries byte-identical, fixpoint at
+  165,408 bytes; `elf-run` 26/26 with four refusals and three traps; `run.sh elf` 30/30; `vs-c`
+  and `loop` green.**
+- **Class:** IMPROVE.
+- **Repro:** `taskset -c 2 perf stat -e cpu_core/cycles/,cpu_core/branches/ ./elf/out/fib32.elf`,
+  and `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/fib32.elf` — there is no
+  conditional branch followed by a `jmp` left in it.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
