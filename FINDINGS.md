@@ -12505,10 +12505,17 @@ The instruction counts are stale by one each: C-188 removed an instruction from 
 loop and the record trio was never re-measured. **The gap is 3.9 cycles**, and the pair F-148
 quotes -- 6.20 minus 2.67 -- is **3.53**. It was reported as "about five."
 
-**And "store-to-load forward" names an event that did not happen.**
-`cpu_core/ld_blocks.store_forward` reads **0**. Nothing was blocked. A latency figure was
-attached to a microarchitectural mechanism that was never measured, derived from a
-subtraction that was never performed.
+**The FIGURE was invented; the mechanism was not.** The first draft of this entry said
+"store-to-load forward names an event that did not happen" because
+`cpu_core/ld_blocks.store_forward` reads **0** -- and that is an inversion, caught by the
+third peer strike. `perf list`: *"Counts the number of times where store forwarding was
+PREVENTED for a load operation."* Zero means no load was BLOCKED from forwarding. It does
+not mean no forward occurred, and **there is no counter for successful forwards**. Zero is
+the clean case. A non-zero count would have meant the forward FAILED, which is slower and
+different from what `rec` does.
+
+So what falls is the number and the name attached to it -- "a ~5-cycle store-to-load
+forward" -- derived from a subtraction never performed. What stands is the dependence.
 
 **The split repeated F-157's error.** F-148 priced the two extra instructions at `rec1`'s IPC
 (~0.8 cycles) and called the remainder (~2.25) the forward. That IPC belongs to a loop whose
@@ -12529,7 +12536,13 @@ answers (F-146), and the instruction gap is two, not "the field read."
 is at 6.0-6.4 cycles and `recflat` -- the same loop with the accumulator in a register -- is
 at 1.50. Those are the two ends, measured in one sitting. Nothing in between is claimed.
 
-- **Class:** Correct. C-181 and C-183 stand; F-148's numbers and its mechanism do not.
+- **Class:** Correct, and **narrower than this entry first claimed**. C-181 and C-183 stand.
+  F-148's numbers do not, and neither does the five-cycle figure or the IPC split that
+  produced it. **Its mechanism DOES stand**: a loop-carried store and reload of one qword,
+  forwarded rather than blocked, with the loaded value as the next call's argument. Retiring
+  the mechanism along with the arithmetic was over-correction -- having been struck twice, I
+  discarded more than the evidence required, which is a third failure rather than a cure for
+  the first two.
 
 ### F-148 (numbers SUPERSEDED by F-158): the record loop is store-to-load bound, and the instruction work is spent
 
