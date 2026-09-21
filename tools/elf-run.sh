@@ -123,6 +123,23 @@ echo
 echo "== and the compiler refuses what it cannot translate =="
 # Both files are generated from elf/compile.wat by tools/gen-refuse.sh, so they are the SAME
 # compiler; both programs are valid wat that the interpreter runs.
+#
+# **And that is only true if they have been REGENERATED** (F-152). They are generated but
+# committed, and nothing regenerated them, so they drifted across seven changes to
+# elf/compile.wat while still passing -- the injected error kept firing for its own reason
+# and the stale copy underneath it went unnoticed. A negative test that has drifted from the
+# thing it tests proves nothing, which gen-refuse.sh's own header says. So check.
+stale=0
+for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat; do
+  [ -f "$f" ] || continue
+  # the generated body is elf/compile.wat up to its driver; compare that, not the driver
+  if ! diff -q <(sed '/^(:wat::core::defn :user::main/,$d' elf/compile.wat) \
+                <(sed -e '1,/^$/d' -e '/^(:wat::core::defn :user::main/,$d' "$f") >/dev/null; then
+    echo "   STALE: $f has drifted from elf/compile.wat -- run tools/gen-refuse.sh"
+    stale=$((stale+1))
+  fi
+done
+[ $stale -eq 0 ] || fail=1
 refuses () {   # driver, needle, what it proves
   local drv="$1" needle="$2" why="$3" msg
   refused=$((refused+1))

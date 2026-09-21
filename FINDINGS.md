@@ -12599,6 +12599,94 @@ latency-bound.
   on this benchmark.
 - **Repro:** `tools/vs-c.sh` section 10; `elf/bench/recflat.wat` is the ceiling.
 
+### F-151: throughput is one quarter safety and three quarters the missing register allocator
+
+**Improve.** `elf/bench/triple.wat`, 30M iterations, pinned, `taskset -c 0`. The only benchmark
+on the board where both `-O2` compilers beat us on ordinary code, and the question was what
+about wat's NATURE makes it lose.
+
+| | ins/it | cyc/it | branches/it | misses/it | IPC |
+|---|---|---|---|---|---|
+| ours | 28.0 | 4.55 | 11.0 | **0.000** | **6.16** |
+| `gcc -O2` | 16.0 | 3.69 | 1.0 | 0.000 | 4.34 |
+| `clang -O2` | 16.0 | 3.67 | 1.0 | 0.000 | 4.36 |
+
+**IPC 6.16 is the machine's allocation width**, so here -- and nowhere else on the board -- the
+instruction count IS the cost. We are 1.75x the instructions for 1.23x the cycles because we
+convert them at a better rate than gcc can. And **zero mispredictions**: the branchy selects
+are perfectly predicted, so they cost nothing in the front end.
+
+Decomposing the twelve-instruction gap by cause:
+
+| | ours | gcc | cause |
+|---|---|---|---|
+| three multiplies | `imul` x3 | `sub` x3, strength-reduced | wash in COUNT |
+| three adds | `add` x3 | `add` x3 | wash |
+| overflow checks | `jo` x3 | -- | **the language** |
+| results leaving rax | `mov %rax,%rN` x3 | -- | **the compiler** |
+| three selects | 12 | 9 | consequence, below |
+| loop test + decrement | `lea`, `cmp`, `jne` | `jne` folded into `sub` | **the compiler** |
+
+**The language's share is three, and it is deliberate.** i64 `+ - *` trap, so each carries a
+`jo`; the same tax F-132 measured on `fib`.
+
+The subtler language effect is on TRANSFORMS. gcc never computes `i*3` -- it keeps three
+counters and decrements them by 3, 5 and 7, which is what lets its loop test fold into a
+decrement and lets it drop the induction variable entirely. Strictly, **trapping does not
+forbid that**: it requires PROVING the induction variable's range so the multiply cannot
+overflow. gcc needs no proof because signed overflow is undefined in C. We would need
+loop-range analysis we do not have. It is a proof obligation C is exempt from, not a wall.
+
+**The compiler's share is nine, and only three of them are visible.** Every value is computed
+in rax and then moved: `imul $3,%rbx,%rax ; add %r12,%rax ; jo ; mov %rax,%r8` where gcc writes
+`add %rcx,%rsi` in place. That is an ACCUMULATOR MACHINE -- one hot register, everything
+through it, parameters assigned to registers positionally and locals taking the leftovers.
+
+**And that is why the branchless select cannot be taken.** Those `mov`s sit ON the loop-carried
+chain:
+
+```
+ours   a -> add -> mov -> lea -> a         depth 3, and cmov would make it 4
+gcc    a -> add -> lea -> cmov -> a        depth 3, cmov already in it
+```
+
+gcc can afford `cmov` BECAUSE it has no `mov` to pay for first. So the accumulator model costs
+three instructions directly and three more indirectly, by making the cheaper select
+unaffordable. **Measured, not argued:** C-185 built the cmov select and it went 28 instructions
+/ 4.55 cycles to 25 / **5.82** -- eleven percent fewer instructions for twenty-eight percent
+more cycles, IPC falling 6.16 to 4.30 as the loop stopped being issue-bound and became
+latency-bound. Reverted.
+
+**This was already known and written down, and I rebuilt it anyway.** The comment above
+`:c::sel-ok?` in `elf/compile.wat` says so: *"and the branch STAYS. `cmov` was built first and
+measured: `triple` -15% instructions for -1.6% cycles, and `loopsum` -11% instructions for
++34% cycles."* I read `:c::selv` and `:c::sel` in the same session and went straight to the
+definitions without reading the section header above them. The cost was one bootstrap cycle.
+**`:c::sel` has exactly one caller, `:c::tail-direct`, whose destination is always a parameter
+register of a self tail call -- so every select it emits feeds the recurrence BY
+CONSTRUCTION**, and there is no gate under which cmov is right there. That is the general
+statement the earlier measurement did not have, and it is why this is settled rather than
+merely measured twice.
+
+**The unification, which is the point of the entry.** F-150 disqualified scalar replacement for
+records because `step` has exactly ONE unclaimed callee-saved register and a four-parameter
+function has none. That is the same shortage:
+
+- **records** -- the field round-trips through the HEAP because there is no register to hold it
+- **throughput** -- values round-trip through RAX because there is no allocator to compute in
+  place, and that is also what makes the branchless select unaffordable
+
+They are not two targets. **A register allocator is the single thing behind both**, and
+trapping -- the part that is genuinely our nature -- accounts for three of twelve here and
+nothing at all in records.
+
+- **Class:** Improve. Not taken, and the queue item is the allocator, not the peepholes.
+- **Modelled, not measured:** computing in place would be 25 instructions with a chain of 2,
+  which would in turn make cmov affordable at 22 and a chain of 3 -- about 3.6 cyc/it against
+  gcc's measured 3.74. That is a model and is labelled as one.
+- **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/,
+  cpu_core/branches/,cpu_core/branch-misses/ ./elf/out/triple.elf`.
+
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74

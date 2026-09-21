@@ -418,9 +418,10 @@
 (:wat::core::defn :c::jbe-over [body <- :wat::core::String] -> :wat::core::String
   (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) body))
 
-(:wat::core::defn :c::imul-rri [src <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::imul-rri [src <- :wat::core::i64 n <- :wat::core::i64
+                                dst <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let [short? (:c::disp8? n)]
-    (:wat::string::concat (:c::rr (:wat::core::if short? "6b" "69") (:c::rax) src)
+    (:wat::string::concat (:c::rr (:wat::core::if short? "6b" "69") dst src)
                           (:asm::le n (:wat::core::if short? 1 4)))))
 
 ;; `mov SRC, DST` for any two of them
@@ -623,8 +624,9 @@
 ;; multiplies a register by a literal into a DIFFERENT register, so the `mov` that every other
 ;; binop needs to get its left operand into rax is not needed here. `add` and `sub` have no such
 ;; form -- `lea` does the arithmetic but sets no flags, and every one of these carries a `jo`.
-(:wat::core::defn :c::imul3 [r <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:c::imul-rri r n))
+(:wat::core::defn :c::imul3 [r <- :wat::core::i64 n <- :wat::core::i64
+                             dst <- :wat::core::i64] -> :wat::core::String
+  (:c::imul-rri r n dst))
 (:wat::core::defn :c::reg-load [r <- :wat::core::i64 d <- :wat::core::i64
                                 fp? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::cond
