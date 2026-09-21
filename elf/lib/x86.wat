@@ -511,7 +511,16 @@
   (:wat::string::concat "80" (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 1)))
 (:wat::core::defn :c::mov-mr8 [src <- :wat::core::i64 base <- :wat::core::i64
                                disp <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "88" (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))                                   ;; 0x41 = REX.B, and no W
+  (:wat::string::concat "88" (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))
+;; the load: `8a` is `88` with the direction bit set, the same pair as `8b`/`89` one size up
+(:wat::core::defn :c::mov-r8m [base <- :wat::core::i64 disp <- :wat::core::i64
+                               dst <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "8a" (:c::mrm (:c::rcode dst) base (:c::no-reg) 1 disp)))
+;; **`cmp $imm8, %al` has its own one-byte opcode.** x86 gives the accumulator short forms for
+;; the common immediates -- no ModRM at all -- which is why a scanner comparing a byte against a
+;; character is two bytes rather than three. It is `%al` ONLY; any other register needs `80 /7`.
+(:wat::core::defn :c::cmp-al [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "3c" (:asm::le n 1)))                                   ;; 0x41 = REX.B, and no W
 (:wat::core::defn :c::mov-mi32 [base <- :wat::core::i64 disp <- :wat::core::i64
                                 n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rex-narrow base) "c7"
@@ -637,4 +646,6 @@
 (:wat::core::defn :c::cc-above [] -> :wat::core::i64 7)
 ;; `js` -- the sign flag, so a subtraction that went negative is tested without a second compare
 (:wat::core::defn :c::cc-sign [] -> :wat::core::i64 8)
+;; `jge` -- signed greater-or-equal, the pair of `jl`
+(:wat::core::defn :c::cc-ge [] -> :wat::core::i64 13)
 (:wat::core::defn :c::cc-greater [] -> :wat::core::i64 15)

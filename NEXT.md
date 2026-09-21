@@ -85,9 +85,16 @@ char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
 `slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`,
-`tree-from-arr`, `vec-conj`, `print-i64`+`i64-to-str` via a shared `:c::rt-digits`); **5 left**:
-`print-str` 147, `prim-write-hex` 163, `io-read-file` 175, `tree-push` 199, `prim-read-hex` 227,
-`vec-conj-own` 240.
+`tree-from-arr`, `vec-conj`, `print-i64`+`i64-to-str` via a shared `:c::rt-digits`,
+`print-str`); **5 left**: `prim-write-hex` 163, `io-read-file` 175, `tree-push` 199,
+`prim-read-hex` 227, `vec-conj-own` 240.
+
+**`print_str` is the REPL's blocker, and it is now legible.** It wraps its argument in quotes and
+escapes it -- so a PROMPT cannot go through it, which is exactly why `mal/step0_repl.wat` needs
+a Python shim to be a terminal. The raw-output path is a sibling of this routine and is small now
+that it is expressions. It also builds its result at r15 WITHOUT allocating: the heap top is
+scratch, safe only because `buf_put` copies it out before returning, which is why a routine
+writing unbounded heap bytes needs no `oom` check.
 
 **The conversion keeps finding duplicates, which is its real payoff.** So far: three abort
 routines that were one (`ovf`/`oom`/`divzero`), `rt-cap` (the power-of-two size, computed

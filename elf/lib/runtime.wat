@@ -217,13 +217,104 @@
       zero-arm
       (:c::cqto) (:c::idiv-r (:c::rcx)) (:c::mov-rr (:c::rdx) (:c::rax)) (:c::ret))))
 
-(:wat::core::defn :c::rt-print-str [] -> :wat::core::String
+;; ---------------------------------------------------------------- EDN escaping, in machine code
+;;
+;; `print_str(rax = s)` prints a String as a quoted literal: the two characters that would end or
+;; continue it are escaped AS THEMSELVES, and three control characters are escaped as letters.
+;;
+;; **It builds the result at r15 WITHOUT allocating.** The heap top is scratch -- nothing is
+;; bumped, so the bytes are gone the moment anything else allocates, which is safe only because
+;; `buf_put` copies them out before returning. That is why a routine writing an unbounded number
+;; of heap bytes needs no `oom` check: it never owns any of them.
+;;
+;; **The REPL will need a path that does none of this** -- a prompt cannot be printed by a
+;; routine that wraps its argument in quotes (see the REPL section of NEXT.md).
+(:wat::core::defn :c::esc-slash [] -> :wat::core::i64 (:asm::code-of "\\"))
+(:wat::core::defn :c::esc-quote [] -> :wat::core::i64 (:asm::code-of "\""))
+;; `\` then a fixed letter -- how a control character is escaped
+(:wat::core::defn :c::rt-esc-as [letter <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat
-    "4989c04d8b08498d70084c89ff4d89fac6072248ffc74d31db4d39cb7d5a"
-    "8a063c2274173c5c74133c0a741c3c0974263c0d7430880748ffc7eb35c6"
-    "075c48ffc7880748ffc7eb28c6075c48ffc7c6076e48ffc7eb1ac6075c48"
-    "ffc7c6077448ffc7eb0cc6075c48ffc7c6077248ffc748ffc649ffc3eba1"
-    "c6072248ffc7c6070a48ffc74889fa4c29d24c89d6e84dfdffffc3"))
+    (:c::mov-mi8 (:c::rdi) 0 (:c::esc-slash)) (:c::inc-r (:c::rdi))
+    (:c::mov-mi8 (:c::rdi) 0 letter) (:c::inc-r (:c::rdi))))
+;; `\` then the character itself -- how a quote or a backslash is escaped
+(:wat::core::defn :c::rt-esc-self [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-mi8 (:c::rdi) 0 (:c::esc-slash)) (:c::inc-r (:c::rdi))
+    (:c::mov-mr8 (:c::rax) (:c::rdi) 0) (:c::inc-r (:c::rdi))))
+;; one byte, unescaped
+(:wat::core::defn :c::rt-emit1 [] -> :wat::core::String
+  (:wat::string::concat (:c::mov-mr8 (:c::rax) (:c::rdi) 0) (:c::inc-r (:c::rdi))))
+;; a `cmp $ch, %al` and the branch to that character's arm, given the distance to it
+(:wat::core::defn :c::rt-esc-test [ch <- :wat::core::i64 to <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::cmp-al ch)
+                        (:c::br-len (:c::jcc-rel8 (:c::cc-zero)) to)))
+
+(:wat::core::defn :c::rt-print-str [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    ;; **every distance here is a sum of arm lengths, and the arms are right there.** Each arm
+    ;; but the last jumps to the shared tail, so an arm "costs" its own length plus that jump.
+    [q (:c::esc-quote)
+     plain (:c::rt-emit1)
+     self (:c::rt-esc-self)
+     as (:c::rt-esc-as (:asm::code-of "n"))
+     j (:c::rel8-size)
+     pj (:wat::core::+ (:c::hexlen plain) j)
+     sj (:wat::core::+ (:c::hexlen self) j)
+     aj (:wat::core::+ (:c::hexlen as) j)
+     ;; one test is a compare and a branch, and there are five of them before the arms
+     tl (:wat::core::+ (:c::hexlen (:c::cmp-al 0)) j)
+     dispatch (:wat::string::concat
+                (:c::rt-esc-test q (:wat::core::+ (:wat::core::* 4 tl) pj))
+                (:c::rt-esc-test (:c::esc-slash) (:wat::core::+ (:wat::core::* 3 tl) pj))
+                (:c::rt-esc-test (:c::nl)
+                  (:wat::core::+ (:wat::core::* 2 tl) (:wat::core::+ pj sj)))
+                (:c::rt-esc-test (:c::tab)
+                  (:wat::core::+ tl (:wat::core::+ pj (:wat::core::+ sj aj))))
+                (:c::rt-esc-test (:c::cr)
+                  (:wat::core::+ pj (:wat::core::+ sj (:wat::core::+ aj aj)))))
+     ;; **the distance from each arm to the shared tail is the arms after it**, which is a
+     ;; recurrence from the last one back -- and writing it any other way is how two of these
+     ;; came out short the first time, each missing the final arm
+     aft-t (:c::hexlen as)
+     aft-n (:wat::core::+ aj aft-t)
+     aft-self (:wat::core::+ aj aft-n)
+     aft-plain (:wat::core::+ sj aft-self)
+     arms (:wat::string::concat
+            plain (:c::br-len "eb" aft-plain)
+            self  (:c::br-len "eb" aft-self)
+            as    (:c::br-len "eb" aft-n)
+            (:c::rt-esc-as (:asm::code-of "t")) (:c::br-len "eb" aft-t)
+            (:c::rt-esc-as (:asm::code-of "r")))
+     body (:wat::string::concat
+            (:c::mov-r8m (:c::rsi) 0 (:c::rax))
+            dispatch arms
+            (:c::inc-r (:c::rsi)) (:c::inc-r (:c::r11)))
+     loop (:wat::string::concat
+            (:c::cmp-rr (:c::r9) (:c::r11))
+            (:c::br-len (:c::jcc-rel8 (:c::cc-ge)) (:wat::core::+ (:c::hexlen body) j))
+            body)
+     head (:wat::string::concat
+            (:c::mov-rr (:c::rax) (:c::r8))
+            (:c::mov-rm (:c::r8) 0 (:c::r9))
+            (:c::lea-at (:c::r8) (:c::str-data) (:c::rsi))
+            ;; r15 is the cursor and r10 remembers where it started
+            (:c::mov-rr (:c::r15) (:c::rdi))
+            (:c::mov-rr (:c::r15) (:c::r10))
+            (:c::mov-mi8 (:c::rdi) 0 q) (:c::inc-r (:c::rdi))
+            (:c::xor-rr (:c::r11) (:c::r11))
+            loop (:c::jmp-back loop)
+            (:c::mov-mi8 (:c::rdi) 0 q) (:c::inc-r (:c::rdi))
+            (:c::mov-mi8 (:c::rdi) 0 (:c::nl)) (:c::inc-r (:c::rdi))
+            ;; how far the cursor moved IS the length
+            (:c::mov-rr (:c::rdi) (:c::rdx))
+            (:c::sub-rr (:c::r10) (:c::rdx))
+            (:c::mov-rr (:c::r10) (:c::rsi)))]
+    (:wat::string::concat
+      head
+      (:c::rt-call (:c::at-put lay)
+        (:wat::core::+ (:c::at-str lay)
+          (:wat::core::+ (:c::hexlen head) (:c::call-size))))
+      (:c::ret))))
 
 ;; `print_bool(rax)` -- **`true` and `false` are built on the stack**, so the routine needs no data
 ;; section and no relocation. Five bytes and six, written as a 4+1 and a 4+2, which is why the
@@ -999,7 +1090,7 @@
     ((:wat::core::= i 7) (:c::rt-divzero lay))
     ((:wat::core::= i 8) (:c::rt-i64-quot lay))
     ((:wat::core::= i 9) (:c::rt-i64-rem lay))
-    ((:wat::core::= i 10) (:c::rt-print-str))
+    ((:wat::core::= i 10) (:c::rt-print-str lay))
     ((:wat::core::= i 11) (:c::rt-str-cat lay))
     ((:wat::core::= i 12) (:c::rt-str-cat-own lay))
     ((:wat::core::= i 13) (:c::rt-str-subs lay))
@@ -1152,6 +1243,10 @@
 (:wat::core::defn :c::sys-exit [] -> :wat::core::i64 60)
 (:wat::core::defn :c::fd-stdout [] -> :wat::core::i64 1)
 (:wat::core::defn :c::fd-stderr [] -> :wat::core::i64 2)
+;; the two other control characters EDN escapes, beside the newline `:c::nl` already names.
+;; `:asm::code-of` cannot give any of the three -- its table starts at 32 (F-062).
+(:wat::core::defn :c::tab [] -> :wat::core::i64 9)
+(:wat::core::defn :c::cr [] -> :wat::core::i64 13)
 ;; what a program exits with when the runtime stops it -- an overflow, a division by zero, a
 ;; `die`. Distinct from anything a correct program returns; `tools/elf-run.sh` asserts on it.
 (:wat::core::defn :c::exit-fail [] -> :wat::core::i64 70)
