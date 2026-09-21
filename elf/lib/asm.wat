@@ -43,9 +43,30 @@
         (:wat::string::concat acc (:asm::u8 b))))))
 
 ;; little-endian, `width` bytes, signed
+;; **an immediate that does not fit its width is a DIFFERENT NUMBER, silently.** `:asm::le`
+;; keeps the low bytes and says nothing: -129 at width 1 is `7f`, which is +127, and a forward
+;; `:c::br-over` of a 128-byte body is `eb 80`, which the processor reads as a backward jump of
+;; 128. `:c::disp8?` and `:c::imm32?` know the ranges and the memory forms consult them; the
+;; branch helpers and the immediate forms consult nothing and trust this function. F-160 found
+;; it with an llvm-mc audit, because nothing here could: truncated bytes still assemble, still
+;; round-trip, and still produce the same answer on every program that does not reach the edge.
+;;
+;; The range admits BOTH readings of the width -- a byte is -128..127 signed or 0..255 unsigned,
+;; and callers use both -- so this catches the value that fits neither, which is the one that
+;; becomes a different number. This is the check rung: the encoder stops rather than emit it.
+(:wat::core::defn :asm::fits? [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= width 1) (:wat::core::and (:wat::core::>= n -128) (:wat::core::<= n 255)))
+    ((:wat::core::= width 2) (:wat::core::and (:wat::core::>= n -32768) (:wat::core::<= n 65535)))
+    ((:wat::core::= width 4) (:wat::core::and (:wat::core::>= n -2147483648)
+                                              (:wat::core::<= n 4294967295)))
+    (:else true)))
+
 (:wat::core::defn :asm::le [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if (:wat::core::>= n 0) (:asm::le-pos n width "")
-    (:asm::le-neg n width "")))
+  (:wat::core::do
+    (:wat::test::assert-eq (:asm::fits? n width) true)
+    (:wat::core::if (:wat::core::>= n 0) (:asm::le-pos n width "")
+      (:asm::le-neg n width ""))))
 
 ;; ---------------------------------------------------------------- ASCII, without a char type
 ;;

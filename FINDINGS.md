@@ -12913,7 +12913,32 @@ the branch helpers consult nothing: **`:c::br-over` of a 128-byte body emits `eb
 `jmp -128`** -- a forward skip that jumps backward. Shipped uses are far under; `:c::br-len` will
 do it the first time a length outside -128..127 reaches it, and it will still assemble.
 
-- **Class:** C-190 Fix (hole 1, landed). F-160 holes 2 and 3 open, named, not bundled.
+**C-191 closes holes 2 and 3 at the check rung.** `:asm::fits?` admits BOTH readings of a
+width -- a byte is -128..127 signed or 0..255 unsigned, and callers use both -- so it refuses
+only the value that fits neither, which is the one that becomes a different number.
+`:c::sib-byte` refuses `rsp` as an index, checked there rather than in `:c::mrm` because an
+index only exists when a SIB does.
+
+Verified firing, not merely present: `le 256`, `le -129`, `le 65536`, `le 4294967296` at
+width 1 all abort; `127`, `255`, `-128` return `7f`, `ff`, `80`. **The first test written for
+this was wrong, not the check** -- `le 128 1` was expected to abort and correctly did not,
+because 128 is a legal unsigned byte.
+
+**And a full compile of 75 programs fired neither assert**, which is itself the finding:
+nothing this compiler emits today truncates an immediate or passes `rsp` as an index. Both
+holes were entirely latent -- landmines for the next instruction added, not defects in what
+ships.
+
+`tools/emitted.sh` moved **exactly one** program, `asmbits.elf`, and that is correct rather
+than tolerable: `elf/src/asmbits.wat` loads `lib/asm.wat`, so the binary embeds the layer that
+changed. A zero there would have meant the tool was not seeing what it claims to.
+
+**The highest rung the material allows.** `extirpare`'s top rung is a shape the mistake cannot
+be written in. Neither reaches it: `:asm::le` takes two `i64`s and wat has no type here for
+"an i64 that fits in one byte", and `rsp` is an ordinary register value. A runtime check is
+the top of this ladder, and the primer says to hold the highest rung reached and say so.
+
+- **Class:** C-190 Fix (hole 1), C-191 Fix (holes 2 and 3). F-160 closed.
 - **Oracle:** fixpoint 218,901; `tools/emitted.sh` 73/73 byte-identical; elf-run 30/30. The
   bytes themselves verified by `llvm-mc -disassemble -triple=x86_64` against the encoder's own
   output -- which is the only check that could have found any of this.

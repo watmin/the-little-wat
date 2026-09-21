@@ -249,9 +249,17 @@
 
 (:wat::core::defn :c::sib-byte [base <- :wat::core::i64 index <- :wat::core::i64
                                 scale <- :wat::core::i64] -> :wat::core::String
+  ;; **rsp cannot be an index, and its encoding means NO index** -- so `[rax+rsp]` silently
+  ;; became `[rax]`, scale and all (F-160). r12 is fine: it sets REX.X and the same code 4
+  ;; then really is r12. The machine has no encoding for the rsp case, so there are no correct
+  ;; bytes to emit and the only honest act is to stop. Checked here rather than in `:c::mrm`
+  ;; because an index only exists when a SIB does.
+  (:wat::core::do
+    (:wat::test::assert-eq
+      (:wat::core::and (:c::reg? index) (:wat::core::= index (:c::rsp))) false)
   (:asm::u8 (:wat::core::+ (:wat::core::* (:c::sib-scale scale) 64)
               (:wat::core::+ (:wat::core::* (:wat::core::if (:c::reg? index) (:c::rcode index) 4) 8)
-                             (:wat::core::if (:c::reg? base) (:c::rcode base) 5)))))
+                             (:wat::core::if (:c::reg? base) (:c::rcode base) 5))))))
 
 ;; mod says how wide the displacement is -- except with no base, where mod is 0 and it is a
 ;; disp32 regardless, which is the one case the mod field does not tell you
