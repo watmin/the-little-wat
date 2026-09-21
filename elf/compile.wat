@@ -997,7 +997,8 @@
 
 ;; a header is eight bytes, so the bytes after it are padded back up to a multiple of eight
 ;; a String constant in the read-only tail, and the address of it in rax
-(:wat::core::defn :c::static-str [text <- :wat::core::String o <- :c::Out tb <- :wat::core::i64] -> :c::Out
+(:wat::core::defn :c::static-str [text <- :wat::core::String o <- :c::Out tb <- :wat::core::i64
+                                  dst <- :wat::core::i64] -> :c::Out
   (:wat::core::let
     [n (:wat::string::length text)
 
@@ -1010,13 +1011,14 @@
           (:c::buf-add (:c::Out/tail o)
             (:wat::string::concat (:asm::le 0 8) (:asm::le n 8)
               (:asm::ascii text 0 "") (:c::zeros pad ""))))]
-    (:c::emit o1 (:c::mov-rax (:wat::core::+ addr 8)))))
+    (:c::emit o1 (:c::movabs dst (:wat::core::+ addr 8)))))
 
-(:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+(:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64
+                               pg <- :c::Prog dst <- :wat::core::i64] -> :c::Out
   (:wat::core::let [src (:c::text pg a)]
     (:c::static-str
       (:c::unescape (:wat::string::subs src 1 (:wat::core::- (:wat::string::length src) 1)) 0 "")
-      o tb)))
+      o tb dst)))
 
 ;; ---------------------------------------------------------------- frame size
 ;;
@@ -1146,7 +1148,7 @@
       ((:wat::core::= k "bool")
         (:c::emit o (:c::mov-rax
           (:wat::core::if (:wat::core::= (:c::text pg a) "true") 1 0))))
-      ((:wat::core::= k "string") (:c::str-lit a o tb pg))
+      ((:wat::core::= k "string") (:c::str-lit a o tb pg (:c::rax)))
       ((:wat::core::= k "list") (:c::form a o env pg rt tb slot tc))
       (:else (:c::fail "expression" a pg)))))
 
@@ -1790,6 +1792,23 @@
            o5 (:c::arith-emit op o4 rt dead?)]
           (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1 ab2)))))))
 
+;; **an operand with a home of its own does not have to displace the accumulator.**
+;; `cat-fold` brackets every right-hand operand with `push rax ... mov rax,rcx ; pop rax` --
+;; four instructions of protocol so that the accumulator in rax survives evaluating the
+;; operand. A string literal is a `movabs` and a parameter in a register is a `mov`; neither
+;; passes through rax on its way to rcx, so for those the protocol IS the whole cost. F-144
+;; found three of the seventeen instructions in `strbuild`'s loop were exactly this.
+(:wat::core::defn :c::rcx-direct? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= (:c::kind a pg) "string") true)
+    ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::>= (:c::reg-of a env pg) 0))
+    (:else false)))
+
+(:wat::core::defn :c::rcx-direct [a <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                  pg <- :c::Prog tb <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::= (:c::kind a pg) "string") (:c::str-lit a o tb pg (:c::rcx))
+    (:c::emit o (:c::mov-rr (:c::reg-of a env pg) (:c::rcx)))))
+
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
@@ -1797,10 +1816,12 @@
                                 own? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
-      [o1 (:c::push o (:c::push-rax) 8)                                 ;; push rax
-       o2 (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail))
-       o3 (:c::emit o2 "4889c1")                              ;; mov rcx, rax
-       o4 (:c::popn o3 (:c::pop-rax) 8)                                ;; pop rax
+      [direct? (:c::rcx-direct? (:wat::core::nth ks i) env pg)
+       o1 (:wat::core::if direct? o (:c::push o (:c::push-rax) 8))      ;; push rax
+       o2 (:wat::core::if direct? (:c::rcx-direct (:wat::core::nth ks i) o1 env pg tb)
+            (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail)))
+       o3 (:wat::core::if direct? o2 (:c::emit o2 "4889c1"))  ;; mov rcx, rax
+       o4 (:wat::core::if direct? o3 (:c::popn o3 (:c::pop-rax) 8))     ;; pop rax
        o5 (:c::call o4 (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))]
       ;; after the first step the accumulator is a temporary this expression made, so nothing
       ;; else can be holding it and every later step may extend in place
@@ -2307,7 +2328,8 @@
      o4 (:wat::core::if str? (:c::call o3 (:c::at-streq rt)) (:c::emit o3 (:c::op-hex "=")))
      o5 (:c::emit (:c::emit o4 "4885c0") "0f8500000000")      ;; test ; jnz over the diagnostic
      at (:wat::core::- (:c::codelen o5) 4)
-     o6 (:c::static-str (:wat::string::concat "assert failed: " (:c::text pg a)) o5 tb)
+     o6 (:c::static-str (:wat::string::concat "assert failed: " (:c::text pg a)) o5 tb
+          (:c::rax))
      o7 (:c::call o6 (:c::at-die rt))
      o8 (:c::patch o7 at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ at 4)) 4))]
     (:c::emit o8 (:c::mov-rax 0))))

@@ -12367,7 +12367,20 @@ stale.
 bytes to 212,310 -- the new `cond` arm in the source outweighs the instructions it removes
 from the compiler's own loops. Both numbers are real and they point in opposite directions.
 
-- **Class:** F-144 Improve (five of six items outstanding); C-177 done.
+**C-178 takes the literal argument.** `:c::cat-fold` bracketed every right-hand operand of a
+`concat` with `push rax ; <operand into rax> ; mov rax,rcx ; pop rax` -- four instructions of
+protocol so the accumulator in rax would survive evaluating the operand. A string literal is
+one `movabs` and a parameter in a register is one `mov`; neither passes through rax on its way
+to rcx, so for those the protocol was the entire cost. `:c::static-str` and `:c::str-lit` took
+a destination, and reading `:c::mov-rax`'s comment while doing it caught a bug in the first
+draft: a literal's ADDRESS must stay a fixed-width `movabs`, because pass one compiles with
+every address zero purely to measure and pass two has to come out the same length.
+
+`strbuild`'s loop: **15 instructions to 12**, an append 37 to 32. And the compiler sped
+*itself* up by 21% -- stage 1 from 816 ms to 647 ms -- because `concat` against a literal is
+everywhere in its own source. Fixpoint 212,692 bytes.
+
+- **Class:** F-144 Improve (four of six items outstanding); C-177, C-178 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
   byte-identical across stages, fixpoint 212,310; `tools/elf-run.sh` 30/30 agreeing with the
   interpreter, refusals and traps unchanged.
