@@ -129,10 +129,23 @@ already thread (`elf/compile.wat:1370`, `:1804`). The last-use analysis exists; 
 wired to it. **The compiler would be its own first beneficiary** -- `:c::emit` is
 `(assoc (assoc o :code ...) ...)` on the `:c::Out` record, once per instruction emitted.
 
-**Strings still want one measurement**: building a String by repeated `concat` in a loop. That is
-`str_cat_own`'s territory and the path DOES exist, so the question is whether the analysis
-actually fires -- which is the same question F-140 asks about records, pointed at a path that is
-supposed to work.
+**AND THE ANALYSIS ITSELF IS THE DEEPER GAP (F-141).** `str_cat_own` fires and is the difference
+between linear and quadratic -- but `:c::linear?` decides ownership by COUNTING MENTIONS
+(`:c::occ-sum`, at most one), not by asking whether a use is the LAST one in evaluation order.
+
+  strbuild.wat   (acc mentioned once)   200000 in 19 ms; 3,200,000 in 46 ms, linear
+  strbuild2.wat  (mentioned twice)      HEAP EXHAUSTED at 200000; quadratic
+
+The second mention is a read that happens BEFORE the write and cannot observe it. One harmless
+extra read changes the complexity class.
+
+**So F-140 and F-141 are ONE piece of work.** Wiring `assoc` to the existing `own?` would hand
+records a path that the natural idiom cannot reach, because
+`(assoc s :a (+ (St/a s) i))` mentions `s` twice. Give records a path AND make the test a
+liveness question -- "is this the last use, in evaluation order" -- or neither pays.
+
+The analysis is SOUND (it never wrongly permits a mutation), which is why both are Improve and
+not Fix. It is sufficient where it should be necessary-and-sufficient.
 
 ### The next objective is a REPL, not an XDP driver (2026-09-20, the builder's call)
 

@@ -12106,6 +12106,53 @@ semantics bought it"*; the same caution is owed when it is ahead by fifty times.
 from `argc` now, and the load-bearing comparison is the one with no C compiler in it at all.
 
 
+### F-141: ownership is decided by COUNTING MENTIONS, so one harmless extra read turns linear into quadratic
+
+F-127/C-151 gave Strings and Vectors a last-use fast path -- `str_cat_own` extends a buffer in
+place when the compiler has proved nothing else holds it. **It works, and it is the difference
+between linear and quadratic.** But the proof it requires is the wrong one.
+
+`:c::linear?` is a membership test in `(:c::Prog/linear pg)`, and that list is built by
+`:c::linear-of` from `:c::occ-sum` -- **an occurrence count of at most one**. So a name mentioned
+twice is disqualified, no matter where or when the second mention happens.
+
+- **Where:** `elf/bench/strbuild.wat` builds a String by `concat` in a loop, mentioning the
+  accumulator ONCE. `elf/bench/strbuild2.wat` is the identical loop with one extra read --
+  `(if (>= (byte-length acc) 0) ...)` -- which happens **before** the concat and therefore cannot
+  observe a change made after it. Extending in place is still safe. The analysis does not know.
+- **Measured**, both at n = 200,000:
+
+  | | result |
+  |---|---|
+  | one mention | `200000` in **19 ms** |
+  | two mentions | **`wat: heap exhausted`, exit 70** |
+
+  The one-mention version builds **3,200,000** characters in 46 ms -- linear, confirmed by
+  16/32/47 ms at 800k/1.6M/3.2M. The two-mention version is quadratic and cannot finish a
+  problem a sixteenth the size:
+
+  | n | two mentions |
+  |---|---|
+  | 20,000 | 64 ms |
+  | 50,000 | 580 ms |
+
+  2.5x the work for 9.1x the time.
+
+- **The condition it wants is not "mentioned once".** It is *"is this the LAST use, in evaluation
+  order"* -- ordinary liveness. In `(concat acc "x")` inside `(if (>= (byte-length acc) 0) ...)`
+  the read is finished before the concat begins; `acc` is dead afterwards; the write is safe. The
+  same holds for the idiom F-140 measured, `(assoc s :a (+ (St/a s) i))`, where the field read is
+  an ARGUMENT to the update and strictly precedes it.
+- **So F-140's fix is not enough on its own.** Wiring `assoc` to the existing `own?` would give
+  records an ownership path that **the most natural record-update idiom cannot reach** -- because
+  reading a field to compute the new value mentions the record a second time. The two findings
+  are one piece of work: give records a path, and make the test a liveness question.
+- **Class:** Improve. The conservative test is SOUND -- it never wrongly permits a mutation --
+  and that is why this is not a Fix. It is sufficient where it should be necessary-and-sufficient,
+  and the cost of the gap is not a constant factor but a change of complexity class.
+- **Repro:** `elf/bench/strbuild.wat` and `elf/bench/strbuild2.wat`; compile both and run.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
