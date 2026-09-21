@@ -81,81 +81,39 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Thirty done
-(`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
-`vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
-`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`,
-`tree-from-arr`, `vec-conj`, `print-i64`+`i64-to-str` via a shared `:c::rt-digits`,
-`print-str`, `prim-write-hex`, `io-read-file`); **3 left**: `tree-push` 199, `prim-read-hex`
-227, `vec-conj-own` 240.
+**THE RUNTIME IS DONE. Thirty-three of thirty-three; not one hex blob left** (check with
+`for n in ...; grep -E '"[0-9a-f]{16,}"'`, or just read the file). Every routine is composed from
+`elf/lib/x86.wat`'s mnemonics, every displacement is computed from the pieces it spans, and
+`tools/rt-disasm.sh` reads the emitted bytes beside the claim each routine makes.
 
-**C-174's module boundary earned itself.** `runtime.wat` reached UP for `:c::cond-code`, which
-lives in `compile.wat`. The compiler would have been fine with it; `tools/rt-disasm.sh` loads
-only prim/asm/reader/x86/runtime and failed instantly on the unresolved reference. A grep-checkable
-seam that something actually runs against is worth more than one that is merely documented.
+**The payoff was DUPLICATION, not legibility** -- seven pieces of shared code that were
+invisible as hex: `ovf`/`oom`/`divzero` were one routine with three messages; `str_eq` and
+`str_starts` shared 32 bytes; `:c::rt-cap` (the power-of-two size) was computed at four sites;
+`:c::rt-bump` (the limit check) had four callers and three shapes; `:c::rt-digits` was 55 bytes
+identical between `print_i64` and `i64_to_str`; `:c::rt-cpath` 24 bytes between the two syscall
+routines; and `:c::rt-slurp` **108 bytes** between `io_read_file` and `prim_read_hex`.
 
-**`print_str` is the REPL's blocker, and it is now legible.** It wraps its argument in quotes and
-escapes it -- so a PROMPT cannot go through it, which is exactly why `mal/step0_repl.wat` needs
-a Python shim to be a terminal. The raw-output path is a sibling of this routine and is small now
-that it is expressions. It also builds its result at r15 WITHOUT allocating: the heap top is
-scratch, safe only because `buf_put` copies it out before returning, which is why a routine
-writing unbounded heap bytes needs no `oom` check.
+**And things nobody could have read out of the bytes**, now written down where they are used:
+`print_str` builds its result at r15 WITHOUT allocating (safe only because `buf_put` copies it
+out first, which is why it needs no `oom` check); `io_read_file` reads onto the heap top and
+allocates only afterwards, because the bytes are already where they need to be;
+`vec_conj_own` has FOUR paths and only the last copies, the third asking "is this vector the
+youngest thing on the heap?" by comparing one past its last element against r15.
 
-**The conversion keeps finding duplicates, which is its real payoff.** So far: three abort
-routines that were one (`ovf`/`oom`/`divzero`), `rt-cap` (the power-of-two size, computed
-identically in four places), `rt-bump` (the limit check, four callers and three shapes), and now
-`rt-digits` -- 55 bytes byte-identical between `print_i64` and `i64_to_str`, differing only in
-where rsi starts and what they do with the result. None of it was visible as hex.
+**Cost, measured honestly**: 1.573G instructions against 1.423G when the conversion was a third
+done -- and the compiler is FASTER in wall clock than when it started, because F-137 and the
+build-once fix were found by doing this. 207,515 bytes, 69 binaries byte-identical, elf-run
+30/30 with 4 refusals and 4 traps.
 
-**THE BLOCK IS BUILT ONCE PER COMPILE NOW, and nothing else rebuilds it.** Three times was the
-count -- `(:c::layout 0)` to measure, `(:c::layout rt-addr)` for the real addresses, and
-`:c::runtime` to emit. Free while a routine was a string literal; **36% of the compiler's time by
-the twenty-sixth conversion** (509 -> 694 ms). The block is position-independent -- every internal
-reference is a difference between two of its own addresses, verified at base 0 and at a real load
-address when F-137 first built the layout -- so `(:c::layout rt-addr)` is the base-0 layout
-shifted, and emitting slices the one build. **503 ms on the largest compiler yet.**
+### Next: strings and records must be shown sound, then the REPL
 
-This is the THIRD instance of one class today (the `at-*` chain, `stub-len`'s duplicate layout,
-this). Each time the work was always there and invisible, because it was cheap before the
-routines became expressions. After this there is nothing left rebuilding per compile -- one
-build, one shift, one slice -- which matters because the last seven conversions would each have
-made any survivor worse.
+The builder's ordering (2026-09-20): *"repl is our target after we know strings and records are
+sound -- we are clear out the hex literals to get our maintainability better before we work on
+capability and then our first real app"*.
 
-**A byte count does not belong in a comment.** The first audit of the claims against the real
-bytes -- possible only once `tools/rt-disasm.sh` stopped grepping hex out of the source -- found
-two of the four that stated a size were WRONG: `i64_to_str` by ten, and `vec_conj_own` by 188,
-a routine that had grown 4.6x while its comment stood still. `str_cat` claimed 97 for 96. The
-counts are out of the comments; the disassembler prints them.
-
-**A routine must not derive its own address by arithmetic.** `divzero` computed its start as
-`at-quot - hexlen(rt-divzero)`, which was fine while it was a hex literal and is an infinite
-recursion once it is an expression: measuring it requires building it. The layout holds an offset
-for EVERY routine including the ones nothing calls, so `:c::at-divzero` is `(nth lay 7)` and the
-cycle is gone. **Check for this in each remaining conversion** -- it presents as stage 1 hanging,
-not crashing, and it poisons the seed so the next `--fast` fails on an already-fixed source.
-
-The encoder carries a full 16-register file, a general memory-operand layer (ModRM+SIB, all four
-addressing shapes), forward and backward jumps, operand sizes (32/16/8-bit stores, which needed
-a REX that can be OMITTED -- REX.W is exactly what makes a store 64-bit), and
-`rep movsq`/`rep stosq`/`repz cmpsb`/`syscall`/`leave`.
-
-**`def` was weighed and is not a speed lever** (2026-09-20). 57 zero-arg constants are spelled as
-function calls, and wat-rs HAS `:wat::core::def` -- but a `def`'d name is a SYMBOL LOOKUP, and the
-reader profile puts `env_key` + `Environment::lookup` at ~15% already, so it moves cost rather
-than removing it. Measured directly, the difference was below the noise floor (+-25% run to run).
-And `def` cannot memoize: the source is explicit that it binds an UNEVALUATED expression consumed
-at registration, so the expensive things here -- a routine's hex, the runtime block -- which
-depend on arguments, are out of its reach entirely. Worth doing for legibility, not for speed.
-
-**TIME EACH BATCH, do not trust green** -- F-137 is exactly this change regressing 5x while all
-68 binaries stayed byte-identical and the fixpoint held.
-
-**AND THE GUARD IS `tools/cc-time.sh`, NOT THE BOOTSTRAP'S PRINTED TIME.** That number is one
-sample and it lied three times in one session -- 739 and 828 ms against real measurements of 546
-or better, plus a phantom 36% from comparing a `--fast` sample to a full-bootstrap one. cc-time
-copies the binary (R-006), checks every exit, takes the best of fourteen, and reports an
-**instruction count**, which barely moves with load. Compare instructions; they said +0.6% for
-the batch the wall clock called +43%.
+**Strings were measured in F-135/C-172 and again in F-139; records have never been measured
+against C at all**, and neither has memory traffic. That is the gap NEXT.md has named since
+F-132 and it is now the front of the queue.
 
 ### The next objective is a REPL, not an XDP driver (2026-09-20, the builder's call)
 

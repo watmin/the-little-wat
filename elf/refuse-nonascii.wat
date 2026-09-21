@@ -3521,12 +3521,16 @@
 ;; measured, not asserted: every form in the stub is fixed-width, so its length does not depend
 ;; on the addresses it is given. This was written in by hand as 117.
 ;; **the stub's length, measured with placeholder addresses** -- every address in it is a fixed
-;; width, so what they point at cannot change the size. The layout handed in is a real one built
-;; at base 0 rather than a vector of the one index the stub happens to read today: this is called
-;; twice per compile, so the cost is nothing, and it cannot go wrong when the stub grows a second
-;; runtime call.
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64
-  (:c::hexlen (:c::stub 0 (:c::layout 0))))
+;; width, so what they point at cannot change the size.
+;;
+;; It takes the layout rather than building one. It used to build its own, and it is called TWICE
+;; per compile, and pass one built a third -- so `:c::layout` ran three times per program, and
+;; each run constructs all thirty-three runtime routines to measure them. That was free while the
+;; routines were string literals and is not now that they are expressions (F-137 again, one level
+;; up): the compiled compiler drifted 509 -> 690 ms over three more conversions before this was
+;; noticed. One layout, built once, threaded.
+(:wat::core::defn :c::stub-len [lay0 <- :c::Layout] -> :wat::core::i64
+  (:c::hexlen (:c::stub 0 lay0)))
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
@@ -3991,18 +3995,23 @@
      pg0 (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one -- but every instruction
-     ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0
-     p1 (:c::pass pg0 0 (:c::layout 0) 0 (:c::empty-pass))
+     ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0.
+     ;; Built ONCE here and handed to everything that measures (see `:c::stub-len`).
+     ;; ONE build of the runtime block, here. Everything else shifts or slices it.
+     lay0 (:c::layout 0)
+     p1 (:c::pass pg0 0 lay0 0 (:c::empty-pass))
      code-total (:c::total (:c::PassR/lens p1) 0 0)
 
      ;; now every address follows from the lengths
      pg1 (:c::place pg0 (:c::PassR/lens p1) 0
-            (:wat::core::+ (:asm::entry) (:c::stub-len)) (:wat::core::Vector :- [:c::Fn]))
-     rt-addr (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len)) code-total)
+            (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) (:wat::core::Vector :- [:c::Fn]))
+     rt-addr (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
      lvl (:c::rt-level pg0)
-     ;; **once, here** -- every `(:c::at-X rt)` downstream is now an index into this (F-137)
-     rt (:c::layout rt-addr)
-     tail-base (:wat::core::+ rt-addr (:c::hexlen (:c::runtime lvl rt)))
+     ;; **once, here** -- every `(:c::at-X rt)` downstream is an index into this (F-137), and it
+     ;; is the base-0 layout shifted rather than a second build of all thirty-three routines
+     rt (:c::rebase lay0 rt-addr)
+     rt-hex (:c::runtime lvl lay0)
+     tail-base (:wat::core::+ rt-addr (:c::hexlen rt-hex))
      ;; either spelling of the entry point, because a program is allowed to be written in
      ;; either -- and this compiler's own source happens to use the keyword one
      main-clj (:c::fn-addr pg1 "user/main" 0)
@@ -4012,7 +4021,7 @@
      ;; PASS TWO: now they do
      p2 (:c::pass pg1 0 rt tail-base (:c::empty-pass))
      text (:wat::string::concat (:c::stub main-addr rt) (:c::buf-str (:c::PassR/code p2))
-            (:c::runtime lvl rt))
+            rt-hex)
      written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)

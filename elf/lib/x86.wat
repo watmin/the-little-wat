@@ -359,6 +359,8 @@
 (:wat::core::defn :c::shr-1 [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d1" 5 dst))
 (:wat::core::defn :c::shl-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rd "c1" 4 dst) (:asm::le n 1)))
+(:wat::core::defn :c::shr-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rd "c1" 5 dst) (:asm::le n 1)))
 
 ;; `cmp $imm, %dst` and `imul $imm, %src, %rax` -- both pick a short opcode when the immediate
 ;; fits in a byte, which is the only thing that varies between their two forms
@@ -471,10 +473,15 @@
                               reg <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "03" reg base disp))
 ;; the other direction -- `add %rdx,(%r14)` bumps a counter that lives in memory without loading
-;; it first. `03` reads memory into a register; `01` adds a register into memory.
+;; it first. `03` reads memory into a register; `01` adds a register into memory, and `3b`/`39`
+;; are the same pair for `cmp`. For an equality test either will do; they are not interchangeable
+;; in the bytes, and the runtime uses both.
 (:wat::core::defn :c::add-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "01" src base disp))
+(:wat::core::defn :c::cmp-mr [src <- :wat::core::i64 base <- :wat::core::i64
+                              disp <- :wat::core::i64] -> :wat::core::String
+  (:c::rm-at "39" src base disp))
 ;; `movzbq disp(BASE,INDEX,1), DST` -- one byte, zero-extended, which is how a string's
 ;; characters are read (C-172)
 (:wat::core::defn :c::movzb [base <- :wat::core::i64 index <- :wat::core::i64

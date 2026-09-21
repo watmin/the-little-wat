@@ -497,10 +497,12 @@
 ;; `scratch` holds `len+15` only long enough for `bsr` to read it, and the callers do not agree
 ;; on which register that is -- three use rdx and `i64_to_str` reuses `out`. It is a parameter
 ;; rather than a choice made here, because the caller is the one holding everything else.
+;; the rounding `bsr` needs to reach the NEXT power of two rather than the current one
+(:wat::core::defn :c::cap-bias [] -> :wat::core::i64 15)
 (:wat::core::defn :c::rt-cap [len <- :wat::core::i64 scratch <- :wat::core::i64
                               out <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat
-    (:c::lea-at len 15 scratch)
+    (:c::lea-at len (:c::cap-bias) scratch)
     (:c::bsr-rr scratch (:c::rcx))
     (:c::mov-ri out 2)
     (:c::shl-cl out)))
@@ -537,25 +539,113 @@
       (:c::mov-rr (:c::r10) (:c::rax))
       (:c::ret))))
 
-;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
-;; the end. `rep movsq` moves the old slots in three bytes of code. This is `conj`, and it is
-;; O(n) every time, which is the same thing the interpreter's Vector does (F-023).
-;; `vec_conj_own` -- `conj` where the compiler has PROVED the container is a last use.
-;; That plus a reference count of 1 (never stored anywhere durable) plus being the top of the
-;; heap is enough to extend in place, which turns an accumulator loop from O(n^2) into O(n). It
-;; is Rust's `Vec::push` and Clojure's transient, assembled from the two halves neither wat nor
-;; this compiler had alone: the count rules out aliases, last-use rules out later reads. Any of
-;; the three tests failing falls through to the copying `vec_conj` below.
-(:wat::core::defn :c::rt-vec-conj-own [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f0000f8587ffffff49b901000000010000004c3948f8743d488378"
-    "f8010f856cffffff4c8b004a8d54c0084c39fa74054989c9eb564d89fb49"
-    "83c3084d3b5e087605e828f9ffff49890f4d89df498d5001488910c34c8b"
-    "004989c94a8d14c517000000480fbdca48c7c20200000048d3e24e8d1cc5"
-    "200000004939d3770d4e894cc008498d5001488910c34c8b004a8d14c51f"
-    "000000480fbdca48c7c20200000048d3e24d89fb4901d34d3b5e087605e8"
-    "baf8ffff49c7070000000048ba0100000001000000498957084d8d571049"
-    "8d5001498912498d7a08488d70084c89c1f348a54c890f4d89df4c89d0c3"))
+;; `vec_conj_own(rax = vec, rcx = value) -> rax` -- `conj` where the compiler has PROVED the
+;; container is a last use (F-127), so the copy may sometimes be skipped entirely.
+;;
+;; **Four paths, and only the last one copies.** In order of how much they save:
+;;
+;;   * the Vector is a TRIE, not a flat array -> hand off to the copying `vec_conj`;
+;;   * it carries `:c::arm-own` AND the new element fits the power-of-two block it was given
+;;     -> write the element in place and bump the length. Nothing is allocated at all;
+;;   * it carries `:c::heap-arm` and its last element ENDS EXACTLY AT THE HEAP TOP -> it was the
+;;     most recent allocation, so the heap can simply be extended by one word over it;
+;;   * otherwise -> copy, and mark the copy `:c::arm-own` so the next `conj` can take path two.
+;;
+;; That third test is the whole trick: `lea 0x8(%rax,%r8,8)` is the address just past the last
+;; element, and comparing it to r15 asks "is this vector the youngest thing on the heap?"
+(:wat::core::defn :c::rt-vec-conj-own [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [P (:c::at-vconj-own lay)
+     w (:c::word)
+     ;; the sizes, each a power-of-two rounding of a byte count
+     used-plus-one (:wat::core::+ w (:c::cap-bias))
+     need (:wat::core::+ (:c::varr-hdr) w)
+     fresh (:wat::core::+ (:c::varr-ptr) (:c::cap-bias))
+     bump-len (:wat::string::concat
+                (:c::lea-at (:c::r8) 1 (:c::rdx))
+                (:c::mov-mr (:c::rdx) (:c::rax) 0)
+                (:c::ret))
+     ;; path 3: the vector is the youngest allocation, so grow the heap over it
+     extend (:wat::string::concat
+              (:c::rt-bump (:wat::core::+ P 56) lay (:c::add-ri (:c::r11) w) (:c::r11))
+              (:c::mov-mr (:c::rcx) (:c::r15) 0)
+              (:c::mov-rr (:c::r11) (:c::r15))
+              bump-len)
+     ;; path 2: it has room inside the block it was already given
+     grown-test (:wat::string::concat
+                  (:c::mov-rm (:c::rax) 0 (:c::r8))
+                  (:c::mov-rr (:c::rcx) (:c::r9))
+                  (:c::lea (:c::no-reg) (:c::r8) w used-plus-one (:c::rdx))
+                  (:c::bsr-rr (:c::rdx) (:c::rcx))
+                  (:c::mov-ri (:c::rdx) 2)
+                  (:c::shl-cl (:c::rdx))
+                  (:c::lea (:c::no-reg) (:c::r8) w need (:c::r11))
+                  (:c::cmp-rr (:c::rdx) (:c::r11)))
+     grown-tail (:wat::string::concat
+                  (:c::rm "89" (:c::r9) (:c::rax) (:c::r8) w (:c::vec-data))
+                  bump-len)
+     grown (:wat::string::concat grown-test
+             (:c::br-len (:c::jcc-rel8 (:c::cc-above)) (:c::hexlen grown-tail))
+             grown-tail)
+     ;; path 4: copy, and mark the copy so the next conj can take path two
+     copy-pre (:wat::string::concat
+                (:c::mov-rm (:c::rax) 0 (:c::r8))
+                (:c::lea (:c::no-reg) (:c::r8) w fresh (:c::rdx))
+                (:c::bsr-rr (:c::rdx) (:c::rcx))
+                (:c::mov-ri (:c::rdx) 2)
+                (:c::shl-cl (:c::rdx)))
+     copy (:wat::string::concat
+            copy-pre
+            (:c::rt-bump (:wat::core::+ P (:wat::core::+ 142 (:c::hexlen copy-pre))) lay
+              (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11))
+            (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
+            (:c::movabs (:c::rdx) (:c::arm-own))
+            (:c::mov-mr (:c::rdx) (:c::r15) w)
+            (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
+            (:c::lea-at (:c::r8) 1 (:c::rdx))
+            (:c::mov-mr (:c::rdx) (:c::r10) 0)
+            (:c::lea-at (:c::r10) (:c::vec-data) (:c::rdi))
+            (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
+            (:c::mov-rr (:c::r8) (:c::rcx))
+            (:c::rep-movsq)
+            (:c::mov-mr (:c::r9) (:c::rdi) 0)
+            (:c::mov-rr (:c::r11) (:c::r15))
+            (:c::mov-rr (:c::r10) (:c::rax))
+            (:c::ret))
+     head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat))
+     own-test (:wat::string::concat
+                (:c::movabs (:c::r9) (:c::arm-own))
+                (:c::cmp-mr (:c::r9) (:c::rax) (:wat::core::- 0 w)))
+     flat-test (:c::cmp-mi (:c::rax) (:wat::core::- 0 w) (:c::heap-arm))
+     tail-test (:wat::string::concat
+                 (:c::mov-rm (:c::rax) 0 (:c::r8))
+                 (:c::rm "8d" (:c::rdx) (:c::rax) (:c::r8) w (:c::vec-data))
+                 (:c::cmp-rr (:c::r15) (:c::rdx)))
+     fallback (:wat::string::concat
+                (:c::mov-rr (:c::rcx) (:c::r9))
+                (:c::br-len "eb" (:wat::core::+ (:c::hexlen extend) (:c::hexlen grown))))
+     a-j1 (:wat::core::+ P (:c::hexlen head))
+     a-j2 (:wat::core::+ a-j1
+            (:wat::core::+ (:c::rel32-size)
+              (:wat::core::+ (:c::hexlen own-test)
+                (:wat::core::+ (:c::rel8-size) (:c::hexlen flat-test)))))]
+    (:wat::string::concat
+      head
+      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-vconj lay)
+        (:wat::core::+ a-j1 (:c::rel32-size)))
+      own-test
+      (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+        (:wat::core::+ (:c::hexlen flat-test)
+          (:wat::core::+ (:c::rel32-size)
+            (:wat::core::+ (:c::hexlen tail-test)
+              (:wat::core::+ (:c::rel8-size)
+                (:wat::core::+ (:c::hexlen fallback) (:c::hexlen extend)))))))
+      flat-test
+      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-vconj lay)
+        (:wat::core::+ a-j2 (:c::rel32-size)))
+      tail-test
+      (:c::br-len (:c::jcc-rel8 (:c::cc-zero)) (:c::hexlen fallback))
+      fallback extend grown copy)))
 
 ;; `varr_new(rax = len) -> rax` -- a Vector's leaf array, which carries one more header word
 ;; than a record does and is otherwise the same allocation
@@ -647,15 +737,107 @@
       body
       leaf)))
 
-(:wat::core::defn :c::rt-tree-push [] -> :wat::core::String
-  (:wat::string::concat
-    "53415441554989cc4c8b28488b50084c8b481049c7c2200000004889d149"
-    "d3e24d39ea7510e83fffffff4c8948084989c14883c205524c89c8e86aff"
-    "ffff4989c04889c34885d274344c89e84889d148d3e84883e01f4989c14a"
-    "8b44cb084885c07407e840ffffffeb05e8fafeffff4a8944cb084889c348"
-    "83ea05ebc74c89e84883e01f4c8964c3085a4d89fb4983c3284d3b5e0876"
-    "05e876faffff49c7070100000049c7470801000000498d4710498d4d0148"
-    "8908488950084c8940104d89df415d415c5bc3"))
+;; `tree_push(rax = vec, rcx = value) -> rax` -- append to a Vector held as a 32-way trie, by
+;; **copying the path** from the root to the leaf and sharing everything else. That is what makes
+;; the structure persistent: the old Vector is still valid and still points at the untouched
+;; siblings of every node on the path.
+;;
+;; Three things happen in order. If the trie is FULL -- capacity is `32 << shift` and the count
+;; has reached it -- a new root is made with the old one as its first child and the shift grows
+;; by five. Then the root is copied, and the descent copies each node it passes (or makes one
+;; where the trie was empty), five bits of the index at a time. Finally the value goes in the
+;; leaf and a new Vector object is allocated to carry the new count, shift and root.
+;;
+;; `shift` is pushed across the descent because the loop consumes it and the new object needs it.
+(:wat::core::defn :c::rt-tree-push [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [bits 5
+     mask (:wat::core::- (:c::node-arity) 1)
+     pre (:wat::string::concat
+           (:c::reg-push (:c::rbx)) (:c::reg-push (:c::r12)) (:c::reg-push (:c::r13))
+           (:c::mov-rr (:c::rcx) (:c::r12))
+           (:c::mov-rm (:c::rax) 0 (:c::r13))
+           (:c::mov-rm (:c::rax) (:c::vec-shift) (:c::rdx))
+           (:c::mov-rm (:c::rax) (:c::vec-root) (:c::r9))
+           ;; capacity = arity << shift
+           (:c::mov-ri (:c::r10) (:c::node-arity))
+           (:c::mov-rr (:c::rdx) (:c::rcx))
+           (:c::shl-cl (:c::r10))
+           (:c::cmp-rr (:c::r13) (:c::r10)))
+     a-grow (:wat::core::+ (:c::at-tpush lay)
+              (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
+     ;; the trie is full: a new root, with the old one beneath it
+     grow (:wat::string::concat
+            (:c::rt-call (:c::at-nnew lay) (:wat::core::+ a-grow (:c::call-size)))
+            (:c::mov-mr (:c::r9) (:c::rax) (:c::node-data))
+            (:c::mov-rr (:c::rax) (:c::r9))
+            (:c::add-ri (:c::rdx) bits))
+     a-mid (:wat::core::+ a-grow (:c::hexlen grow))
+     mid-head (:wat::string::concat (:c::reg-push (:c::rdx)) (:c::mov-rr (:c::r9) (:c::rax)))
+     mid (:wat::string::concat
+           mid-head
+           (:c::rt-call (:c::at-ncopy lay)
+             (:wat::core::+ a-mid (:wat::core::+ (:c::hexlen mid-head) (:c::call-size))))
+           (:c::mov-rr (:c::rax) (:c::r8))
+           (:c::mov-rr (:c::rax) (:c::rbx)))
+     ;; one level of the descent: the slot, then the child -- copied if it exists, made if not
+     a-body (:wat::core::+ a-mid
+              (:wat::core::+ (:c::hexlen mid)
+                (:wat::core::+ (:c::hexlen (:c::test-rr (:c::rdx) (:c::rdx))) (:c::rel8-size))))
+     slot (:wat::string::concat
+            (:c::mov-rr (:c::r13) (:c::rax))
+            (:c::mov-rr (:c::rdx) (:c::rcx))
+            (:c::shr-cl (:c::rax))
+            (:c::and-ri (:c::rax) mask)
+            (:c::mov-rr (:c::rax) (:c::r9))
+            (:c::rm "8b" (:c::rax) (:c::rbx) (:c::r9) (:c::word) (:c::node-data))
+            (:c::test-rr (:c::rax) (:c::rax)))
+     a-copy (:wat::core::+ a-body (:wat::core::+ (:c::hexlen slot) (:c::rel8-size)))
+     a-new (:wat::core::+ a-copy (:wat::core::+ (:c::call-size) (:c::rel8-size)))
+     child (:wat::string::concat
+             (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+               (:wat::core::+ (:c::call-size) (:c::rel8-size)))
+             (:c::rt-call (:c::at-ncopy lay) (:wat::core::+ a-copy (:c::call-size)))
+             ;; skip the "make one" call; a call is a call-size, not a string to measure
+             (:c::br-len "eb" (:c::call-size))
+             (:c::rt-call (:c::at-nnew lay) (:wat::core::+ a-new (:c::call-size))))
+     body (:wat::string::concat
+            slot child
+            (:c::rm "89" (:c::rax) (:c::rbx) (:c::r9) (:c::word) (:c::node-data))
+            (:c::mov-rr (:c::rax) (:c::rbx))
+            (:c::sub-ri (:c::rdx) bits))
+     ;; **the jump back goes to the loop's TOP, not to its body** -- so it spans the test and the
+     ;; branch as well, and `inner` is named to make that the only thing it can mean
+     inner (:wat::string::concat
+             (:c::test-rr (:c::rdx) (:c::rdx))
+             (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+               (:wat::core::+ (:c::hexlen body) (:c::rel8-size)))
+             body)
+     loop (:wat::string::concat inner (:c::jmp-back inner))
+     leaf (:wat::string::concat
+            (:c::mov-rr (:c::r13) (:c::rax))
+            (:c::and-ri (:c::rax) mask)
+            (:c::rm "89" (:c::r12) (:c::rbx) (:c::rax) (:c::word) (:c::node-data))
+            (:c::reg-pop (:c::rdx)))
+     obj (:wat::core::+ (:c::varr-ptr) (:wat::core::* 3 (:c::word)))
+     a-bump (:wat::core::+ a-mid
+              (:wat::core::+ (:c::hexlen mid)
+                (:wat::core::+ (:c::hexlen loop) (:c::hexlen leaf))))]
+    (:wat::string::concat
+      pre
+      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) grow)
+      grow mid loop leaf
+      (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11))
+      (:c::mov-mi (:c::r15) 0 (:c::vec-tree))
+      (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
+      (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::rax))
+      (:c::lea-at (:c::r13) 1 (:c::rcx))
+      (:c::mov-mr (:c::rcx) (:c::rax) 0)
+      (:c::mov-mr (:c::rdx) (:c::rax) (:c::vec-shift))
+      (:c::mov-mr (:c::r8) (:c::rax) (:c::vec-root))
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::reg-pop (:c::r13)) (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::rbx))
+      (:c::ret))))
 
 ;; `tree_from_arr(rax = flat array) -> rax` -- promote a flat Vector to the 32-way trie, by
 ;; making an empty tree and pushing every element into it. Called once, when a vector outgrows
@@ -1107,17 +1289,107 @@
       (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::rbx))
       (:c::ret))))
 
-;; `prim_read_hex(rax = path) -> rax = a String of hex`.
-(:wat::core::defn :c::rt-prim-read-hex [] -> :wat::core::String
-  (:wat::string::concat
-    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
-    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
-    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d480f480f"
-    "bdc948c7c60200000048d3e64c01c6493b76087605e8e3f6ffff4989f749"
-    "c700010000004d8d5008498902498d7a084c89e64885d2742e480fb60648"
-    "89c148c1e804e88ffeffff880748ffc74889c84883e00fe87efeffff8807"
-    "48ffc748ffc648ffca75d24c89d0415cc3"))
+;; `prim_read_hex(rax = path) -> rax = a String of hex` -- read a file and render its bytes as
+;; hex, which is how the compiler reads a binary back to check what it wrote. The same slurp as
+;; `io_read_file`; the String allocated is TWICE the length, because a byte is two characters.
+(:wat::core::defn :c::rt-prim-read-hex [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::rt-slurp)
+           (:c::mov-rr (:c::rdx) (:c::rax))
+           (:c::add-rr (:c::rax) (:c::rax))           ;; two characters a byte
+           (:c::rt-cap (:c::rax) (:c::rcx) (:c::rsi))
+           (:c::add-rr (:c::r8) (:c::rsi))
+           (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
+     at-oom (:wat::core::+ (:c::at-rdhex lay)
+              (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
+     to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-oom (:c::call-size)))
+     head (:wat::string::concat
+            pre (:c::jbe-over to-oom) to-oom
+            (:c::mov-rr (:c::rsi) (:c::r15))
+            (:c::mov-mi (:c::r8) 0 (:c::heap-arm))
+            (:c::lea-at (:c::r8) (:c::vec-ptr) (:c::r10))
+            (:c::mov-mr (:c::rax) (:c::r10) 0)
+            (:c::lea-at (:c::r10) (:c::str-data) (:c::rdi))
+            (:c::mov-rr (:c::r12) (:c::rsi)))
+     a-body (:wat::core::+ (:c::at-rdhex lay)
+              (:wat::core::+ (:c::hexlen head)
+                (:wat::core::+ (:c::hexlen (:c::test-rr (:c::rdx) (:c::rdx)))
+                               (:c::rel8-size))))
+     hi (:wat::string::concat
+          (:c::movzb (:c::rsi) (:c::no-reg) 0 (:c::rax))
+          (:c::mov-rr (:c::rax) (:c::rcx))
+          (:c::shr-ri (:c::rax) 4))
+     a-c1 (:wat::core::+ a-body (:c::hexlen hi))
+     mid (:wat::string::concat
+           (:c::mov-mr8 (:c::rax) (:c::rdi) 0)
+           (:c::inc-r (:c::rdi))
+           (:c::mov-rr (:c::rcx) (:c::rax))
+           (:c::and-ri (:c::rax) 15))
+     a-c2 (:wat::core::+ a-c1 (:wat::core::+ (:c::call-size) (:c::hexlen mid)))
+     body (:wat::string::concat
+            hi
+            (:c::rt-call (:c::at-hexchar lay) (:wat::core::+ a-c1 (:c::call-size)))
+            mid
+            (:c::rt-call (:c::at-hexchar lay) (:wat::core::+ a-c2 (:c::call-size)))
+            (:c::mov-mr8 (:c::rax) (:c::rdi) 0)
+            (:c::inc-r (:c::rdi))
+            (:c::inc-r (:c::rsi))
+            (:c::dec-r (:c::rdx)))]
+    (:wat::string::concat
+      head
+      (:c::test-rr (:c::rdx) (:c::rdx))
+      (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+        (:wat::core::+ (:c::hexlen body) (:c::rel8-size)))
+      body
+      (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::reg-pop (:c::r12))
+      (:c::ret))))
+
+;; **reading a whole file, which two routines do identically.** `io_read_file` and
+;; `prim_read_hex` differ only in what they do with the bytes afterwards -- one wraps them in a
+;; String, the other hex-encodes them -- and these hundred and eight bytes were written twice.
+;;
+;; There is no size to ask for in advance, so it reads a chunk at a time onto the heap top until
+;; `read` returns nothing. Nothing is allocated: r15 is scratch, exactly as in `print_str`. On
+;; return rdx is the length, r12 points at the first byte, and r8 is the end rounded UP to a
+;; word -- which is where an allocation can start without disturbing what was just read.
+(:wat::core::defn :c::rt-slurp [] -> :wat::core::String
+  (:wat::core::let
+    [chunk (:wat::string::concat
+             (:c::mov-ri (:c::rax) (:c::sys-read))
+             (:c::mov-rr (:c::r8) (:c::rdi))
+             (:c::mov-rr (:c::r9) (:c::rsi))
+             (:c::mov-ri (:c::rdx) (:c::read-chunk))
+             (:c::syscall)
+             (:c::test-rr (:c::rax) (:c::rax)))
+     step (:c::add-rr (:c::rax) (:c::r9))
+     inner (:wat::string::concat
+             chunk
+             (:c::br-len (:c::jcc-rel8 (:c::cc-le))
+               (:wat::core::+ (:c::hexlen step) (:c::rel8-size)))
+             step)]
+    (:wat::string::concat
+      (:c::reg-push (:c::r12))
+      (:c::rt-cpath (:c::rax))
+      (:c::mov-ri (:c::rax) (:c::sys-open))
+      (:c::mov-rr (:c::r10) (:c::rdi))
+      (:c::xor-rr (:c::rsi) (:c::rsi))            ;; O_RDONLY is zero
+      (:c::xor-rr (:c::rdx) (:c::rdx))
+      (:c::syscall)
+      (:c::mov-rr (:c::rax) (:c::r8))             ;; the fd
+      (:c::mov-rr (:c::r12) (:c::r9))             ;; the cursor
+      inner (:c::jmp-back inner)
+      (:c::mov-ri (:c::rax) (:c::sys-close))
+      (:c::mov-rr (:c::r8) (:c::rdi))
+      (:c::syscall)
+      ;; how far the cursor moved IS the length
+      (:c::mov-rr (:c::r9) (:c::rdx))
+      (:c::sub-rr (:c::r12) (:c::rdx))
+      ;; round the end up to a word: a String header wants alignment
+      (:c::lea-at (:c::r9) 7 (:c::r8))
+      (:c::and-ri (:c::r8) -8))))
 
 ;; `io_read_file(rax = path) -> rax = a String of the bytes`. This is `wat.io/read-file`, and it
 ;; is how the compiler reads its own source.
@@ -1129,50 +1401,15 @@
 (:wat::core::defn :c::rt-io-read-file [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
-           (:c::reg-push (:c::r12))
-           (:c::rt-cpath (:c::rax))
-           (:c::mov-ri (:c::rax) (:c::sys-open))
-           (:c::mov-rr (:c::r10) (:c::rdi))
-           (:c::xor-rr (:c::rsi) (:c::rsi))            ;; O_RDONLY is zero
-           (:c::xor-rr (:c::rdx) (:c::rdx))
-           (:c::syscall)
-           (:c::mov-rr (:c::rax) (:c::r8))             ;; the fd
-           (:c::mov-rr (:c::r12) (:c::r9)))            ;; the cursor
-     chunk (:wat::string::concat
-             (:c::mov-ri (:c::rax) (:c::sys-read))
-             (:c::mov-rr (:c::r8) (:c::rdi))
-             (:c::mov-rr (:c::r9) (:c::rsi))
-             (:c::mov-ri (:c::rdx) (:c::read-chunk))
-             (:c::syscall)
-             (:c::test-rr (:c::rax) (:c::rax)))
-     step (:wat::string::concat (:c::add-rr (:c::rax) (:c::r9)))
-     loop (:wat::string::concat
-            chunk
-            (:c::br-len (:c::jcc-rel8 (:c::cc-le))
-              (:wat::core::+ (:c::hexlen step) (:c::rel8-size)))
-            step)
-     post (:wat::string::concat
-            (:c::mov-ri (:c::rax) (:c::sys-close))
-            (:c::mov-rr (:c::r8) (:c::rdi))
-            (:c::syscall)
-            ;; how far the cursor moved IS the length
-            (:c::mov-rr (:c::r9) (:c::rdx))
-            (:c::sub-rr (:c::r12) (:c::rdx))
-            ;; round the end up to a word: the String header wants alignment
-            (:c::lea-at (:c::r9) 7 (:c::r8))
-            (:c::and-ri (:c::r8) -8)
-            (:c::rt-cap (:c::rdx) (:c::rcx) (:c::rsi))
-            (:c::add-rr (:c::r8) (:c::rsi))
-            (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
+           (:c::rt-slurp)
+           (:c::rt-cap (:c::rdx) (:c::rcx) (:c::rsi))
+           (:c::add-rr (:c::r8) (:c::rsi))
+           (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
      at-oom (:wat::core::+ (:c::at-rdfile lay)
-              (:wat::core::+ (:c::hexlen pre)
-                (:wat::core::+ (:c::hexlen loop)
-                  (:wat::core::+ (:c::rel8-size)
-                    (:wat::core::+ (:c::hexlen post) (:c::rel8-size))))))
+              (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
      to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-oom (:c::call-size)))]
     (:wat::string::concat
-      pre loop (:c::jmp-back loop) post
-      (:c::jbe-over to-oom) to-oom
+      pre (:c::jbe-over to-oom) to-oom
       ;; the bytes are already in place; the allocation only has to reach past them
       (:c::mov-rr (:c::rsi) (:c::r15))
       (:c::mov-mi (:c::r8) 0 (:c::heap-arm))
@@ -1231,15 +1468,15 @@
     ((:wat::core::= i 20) (:c::rt-node-new lay))
     ((:wat::core::= i 21) (:c::rt-node-copy lay))
     ((:wat::core::= i 22) (:c::rt-tree-get))
-    ((:wat::core::= i 23) (:c::rt-tree-push))
+    ((:wat::core::= i 23) (:c::rt-tree-push lay))
     ((:wat::core::= i 24) (:c::rt-tree-from-arr lay))
     ((:wat::core::= i 25) (:c::rt-vec-conj lay))
-    ((:wat::core::= i 26) (:c::rt-vec-conj-own))
+    ((:wat::core::= i 26) (:c::rt-vec-conj-own lay))
     ((:wat::core::= i 27) (:c::rt-slot-set lay))
     ((:wat::core::= i 28) (:c::rt-hexval))
     ((:wat::core::= i 29) (:c::rt-hexchar))
     ((:wat::core::= i 30) (:c::rt-prim-write-hex lay))
-    ((:wat::core::= i 31) (:c::rt-prim-read-hex))
+    ((:wat::core::= i 31) (:c::rt-prim-read-hex lay))
     (:else (:c::rt-io-read-file lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
@@ -1345,6 +1582,7 @@
 (:wat::core::defn :c::at-vconj-own [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 26))
 (:wat::core::defn :c::at-slot [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 27))
 (:wat::core::defn :c::at-hexval [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 28))
+(:wat::core::defn :c::at-hexchar [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 29))
 (:wat::core::defn :c::at-wrhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 30))
 (:wat::core::defn :c::at-rdhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 31))
 (:wat::core::defn :c::at-rdfile [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 32))
@@ -1393,6 +1631,10 @@
 ;; the word every allocation writes at its start, one word BEFORE the pointer it hands out.
 ;; `str_cat_own` tests it to tell an owned String from a borrowed one.
 (:wat::core::defn :c::heap-arm [] -> :wat::core::i64 1)
+;; **the arm `vec_conj_own` writes, and only it.** One in each of two 32-bit halves, distinct
+;; from `:c::heap-arm` so that a Vector built by the COPYING `vec_conj` can never be mistaken
+;; for one this routine made and may extend in place again.
+(:wat::core::defn :c::arm-own [] -> :wat::core::i64 4294967297)
 ;; a tree node: one header word, then a fixed fan-out of child slots
 (:wat::core::defn :c::node-data [] -> :wat::core::i64 8)
 (:wat::core::defn :c::node-arity [] -> :wat::core::i64 32)
