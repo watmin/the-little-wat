@@ -12796,7 +12796,70 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
-### F-155: the currency is UOPS, and with that the whole board becomes one model
+### F-157: F-155's formula is an identity, and F-156's mechanism describes a schedule that does not exist
+
+**Correct, from a peer review (grok, `.pulsare/SCORE-review-f156.md`) that was right on both
+counts.** Verified against this tree before accepting.
+
+**`cycles = uops / (6 x retiring%)` is `slots / 6` rewritten.** `topdown-retiring` is a slot
+count and `slots` is the slot supply, so `retiring% = uops/slots` and the formula reduces to
+`slots/6`. It equals the cycles counter only when `slots = 6 x cycles`, which is not a
+property of the program. Measured here, same binary, three runs:
+
+| slots/cycles | slots/6 per it | cycles per it |
+|---|---|---|
+| 5.949 | 4.828 | 4.869 |
+| 5.981 | 4.903 | 4.918 |
+| 5.998 | 4.810 | 4.812 |
+
+The "predicted 4.67 / measured 4.67" and "predicted 4.80 / measured 4.80" in F-155 and F-156
+are that ratio rounding to 6 at one decimal place. **The one time the formula was used as a
+prediction -- hold retiring% at 71.4%, conclude 3.97 cycles -- it failed**, and it had to:
+retiring% is the fraction of slots that retired on a run you have already done. You cannot
+hold it fixed for a binary you have not run, and once you have run it you have the cycles.
+
+I named this risk in the review brief and then did not run the two-line check that settles it.
+
+**What survives, and it needs no formula.** On `triple` both compilers retire near 70% of
+slots, so the side issuing fewer uops wins. On `loopsum` gcc retires near 30% and is mostly
+backend-bound, so our eight uops beat its five. Both are direct counter reads.
+
+**F-156's mechanism is wrong about which instructions moved.** The kept hot path of
+`elf/out/triple.elf` contains no `mov %rax,%rN` at all:
+
+```
+imul $0x3,%rbx,%r8
+add  %r12,%r8
+jo
+```
+
+C-189's -3 instructions and -3.0 uops are the three taken `jmp`s of the select diamonds.
+There were no `mov`s in the baseline to be load-bearing, so the decoupling story -- `add`
+into rax then `mov` to r12 letting the next iteration start early -- describes a schedule
+that was never measured. Both schedules carry the same loop-carried chain,
+`r12 -> add -> lea -> r12`, latency 2; write-after-write is broken by rename.
+
+The backend-bound rise, 16.5% to 37.6%, is not an independent observation of a longer chain.
+It is what the percentages do when three retiring uops and the front-end bubbles disappear
+and the cycles do not fall: the leftover slots get labelled backend. And 4.67 against 4.80 is
+inside the band **F-154 established the same day** -- a sub-25% cycle difference between two
+builds of one program -- which this entry then interpreted anyway.
+
+**The overflow-check accounting was wrong too.** The `imul`s and the `i - 1` already ship
+with NO `jo`: C-170 proved those ranges and `:c::dst-dead?` deleted the checks. The three
+`jo`s that remain are on the accumulator ADDS, whose interval never converges, and **strength
+reduction does not remove them**. So the transform is worth two uops (the separate induction
+variable), not three, and "17 uops, and the remainder is exactly the trapping" was wrong in
+both halves. What strength reduction actually changes is kind, not count: three `imul` at
+3-cycle latency on port 1 become three `sub` at 1 cycle on any ALU -- which no uop count
+shows.
+
+- **Class:** Correct. F-155 and F-156 stand as records of what was measured; their models and
+  mechanisms are superseded here.
+- **Practice going forward:** report uops, retiring slots, slots and cycles separately, and
+  when `slots/cycles` is not 6, say so -- that ratio is the entire content of the formula.
+
+### F-155 (SUPERSEDED in part by F-157 -- the formula below is an identity, not a model): the currency is UOPS
 
 **Improve, and it is the entry the last five attempts were missing.** Every failed prediction
 today came from counting instructions. The machine does not count instructions.
@@ -12852,7 +12915,7 @@ and only after the transform we have not written yet.
 - **Repro:** `taskset -c 0 perf stat -e '{cpu_core/topdown-retiring/,cpu_core/topdown-fe-bound/,
   cpu_core/topdown-be-bound/,cpu_core/slots/,cpu_core/cycles/}' ./elf/out/triple.elf`
 
-### F-156: uops are one term of two, and a cheap uop can be load-bearing
+### F-156 (SUPERSEDED by F-157 -- the removed instructions were `jmp`s, not `mov`s): uops are one term of two
 
 **Correct to F-155.** F-155 established `cycles = uops / (6 x retiring%)` and fitted it to two
 programs. C-189 tested it with a prediction specific enough to be wrong usefully.
