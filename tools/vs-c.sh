@@ -238,6 +238,27 @@ else
 fi
 
 echo
+echo "== 11. vectors: BUILD 2000000 by conj, then READ every element by nth (F-164) =="
+build4 vec elf/bench/vec.c
+# **Two paths in one program, and they go opposite ways.** `conj` has an in-place path when
+# the accumulator is a last use (C-127) and the vector PROMOTES flat->tree so `conj` is
+# O(log n) (C-145, a 1,580x cliff closed). That won the build. The same tree is what `nth`
+# has to walk, where C indexes an array by arithmetic. The C control's `append` is noinline
+# and checks capacity per element on purpose: a malloc-up-front fill measures the allocator,
+# not the append, which is the F-140/F-143 mistake this repo has made twice.
+a=$(./elf/out/vecsum.elf); b2=$(./$B/out_vec_gcc2)
+if [ "$a" = "$b2" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours, conj + nth"       "$(best 3 ./elf/out/vecsum.elf)" "$a"
+  printf '  %-34s %6s ms   (BUILD only -- we WIN this half)\n' "ours, conj alone" "$(best 3 ./elf/out/grow2000000.elf)"
+  rivals best 3 vec
+  printf '  %-34s %s\n' "" "F-164: conj 6.72 cyc/elem against gcc's 8.85 -- we win the build"
+  printf '  %-34s %s\n' "" "at 74.5%% retiring against its 29.8%%. nth is 37 uops to its 3:"
+  printf '  %-34s %s\n' "" "the tree C-145 promoted to is what C-145 made us pay for."
+else
+  echo "  FAIL: ours '$a', C '$b2'"; fail=1
+fi
+
+echo
 echo "== 7. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?

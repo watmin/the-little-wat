@@ -12853,6 +12853,53 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-164: vectors, measured against C for the first time — `conj` WINS, `nth` is 3.7x behind
+
+**Improve, and the board's first vector section.** Strings and records have been measured
+against C for weeks; vectors never had a section at all, so "vectors are fast now" was a
+statement about our own history (C-127's in-place `conj`, C-145's 1,580x cliff) and not about
+the opponent. `elf/bench/vecsum.wat` builds 2,000,000 by `conj` and reads every element back
+by `nth`; `elf/bench/vec.c` does the same with a `noinline` append that checks capacity per
+element. Both print `1999999000000`.
+
+| build + read, per element | ins | uops | cycles | retiring |
+|---|---|---|---|---|
+| **ours** | 69.00 | 67.0 | **11.7 - 12.3** | **91 - 95%** |
+| `gcc -O2` | 19.12 | 18.7 | 10.1 - 10.2 | 31% |
+| `clang -O2` | 22.87 | 23.2 | 9.39 - 9.41 | 41% |
+| `gcc -O0` | 37.12 | 41.4 | 16.0 - 16.1 | 43% |
+
+**We issue 3.6x the work and take 1.19x the time**, because we retire at 91-95% -- saturating
+the six-wide machine -- while gcc is stalled two cycles in three streaming a 16 MB array. We
+beat `gcc -O0` outright.
+
+**And the aggregate hides that the two paths go opposite ways.** Measured separately,
+`elf/bench/grow2000000.wat` against a build-only C control:
+
+| | ins | uops | cycles | retiring |
+|---|---|---|---|---|
+| **BUILD -- ours `conj`** | 33.00 | 30.0 | **6.717** | 74.5% |
+| BUILD -- `gcc -O2` append | 15.12 | 15.8 | 8.854 | 29.8% |
+| READ -- ours `nth` (by difference) | 36.00 | 37.0 | 5.03 | |
+| READ -- `gcc -O2` `buf[i]` | 4.00 | 2.9 | 1.37 | |
+
+**`conj` beats `gcc -O2` by 1.32x** -- 6.72 cycles against 8.85 -- while issuing twice the
+uops, because C stalls on `realloc` and memory at 29.8% retiring and we do not. C-127's
+in-place path and C-145's promotion won that half outright.
+
+**`nth` costs 37 uops against C's 3.** That is precisely the bill for C-145: promoting
+flat->tree made `conj` O(log n) and closed a 1,580x cliff, and a tree indexes by walking
+levels where an array indexes by arithmetic. **The transform that fixed the build is what
+costs on the read.** It is the classic persistent-structure trade, now measured rather than
+assumed.
+
+- **Class:** Improve. `conj` is closed and winning. `nth` on a promoted vector is the open
+  item -- and unlike `triple`, it is not blocked on the register allocator; it is a data
+  structure question (a flat fast path for un-promoted vectors, or an index cache).
+- **Repro:** `tools/vs-c.sh` section 11; `taskset -c 0 perf stat -e
+  '{cpu_core/instructions/,cpu_core/cycles/,cpu_core/topdown-retiring/,cpu_core/slots/}'`
+  over `elf/out/vecsum.elf` and `elf/out/grow2000000.elf`.
+
 ### F-163: `triple` is closed on the register allocator — not on safety, and not on the count
 
 **Improve, named and not taken. The probe that gated the strike answered it.** F-161

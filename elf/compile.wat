@@ -4682,6 +4682,7 @@
     (:c::compile "elf/bench/deepvec.wat"     "elf/out/deepvec.elf")
     (:c::compile "elf/bench/grow200000.wat"  "elf/out/grow200000.elf")
     (:c::compile "elf/bench/grow2000000.wat" "elf/out/grow2000000.elf")
+    (:c::compile "elf/bench/vecsum.wat"      "elf/out/vecsum.elf")
     (:c::compile "elf/native/fork.wat"     "elf/out/fork.elf")
     (:c::compile "elf/native/thread.wat"   "elf/out/thread.elf")
     (:c::compile "elf/native/threads4.wat" "elf/out/threads4.elf")
