@@ -23,13 +23,55 @@
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
-;; `print_i64(rax)`, 87 bytes: sign handling, a divide-by-ten loop building digits
-;; backwards ON THE STACK (so the segment never needs to be writable), then `buf_put`.
-(:wat::core::defn :c::rt-print-i64 [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
-    "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e865ffffffc9c3"))
+;; `print_i64(rax)` -- the digits come out BACKWARDS, so they are written backwards. rsi starts
+;; at the end of a stack scratch and walks down; the count at the end is how far it walked.
+;;
+;; `div` leaves the remainder in rdx, and adding `'0'` to its LOW BYTE turns it into a character
+;; in place -- which is what the 8-bit forms are for. The newline is planted first, at the top of
+;; the buffer, so it needs no separate write.
+(:wat::core::defn :c::rt-print-i64 [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [top -1
+     ;; one digit: divide by ten, make the remainder a character, step back, store it
+     digit (:wat::string::concat
+             (:c::xor-rr (:c::rdx) (:c::rdx))
+             (:c::div-r (:c::rcx))
+             (:c::add-ri8 (:c::rdx) (:asm::code-of "0"))
+             (:c::dec-r (:c::rsi))
+             (:c::mov-mr8 (:c::rdx) (:c::rsi) 0)
+             (:c::test-rr (:c::rax) (:c::rax)))
+     loop (:wat::string::concat digit
+            (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) digit))
+     ;; a negative was negated for the division, and r8 remembers it
+     sign (:wat::string::concat (:c::neg-r (:c::rax)) (:c::mov-ri (:c::r8) 1))
+     minus (:wat::string::concat
+             (:c::dec-r (:c::rsi))
+             (:c::mov-mi8 (:c::rsi) 0 (:asm::code-of "-")))
+     tail (:wat::string::concat
+            (:c::lea-at (:c::rbp) top (:c::rdx))
+            (:c::sub-rr (:c::rsi) (:c::rdx))
+            (:c::inc-r (:c::rdx)))
+     head (:wat::string::concat
+            (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
+            (:c::sub-ri (:c::rsp) (:c::scratch-frame))
+            (:c::lea-at (:c::rbp) top (:c::rsi))
+            (:c::mov-mi8 (:c::rsi) 0 (:c::nl))
+            (:c::xor-rr (:c::r8) (:c::r8))
+            (:c::test-rr (:c::rax) (:c::rax))
+            (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-sign))) sign)
+            sign
+            (:c::mov-ri (:c::rcx) 10)
+            loop
+            (:c::test-rr (:c::r8) (:c::r8))
+            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) minus)
+            minus
+            tail)]
+    (:wat::string::concat
+      head
+      (:c::rt-call (:c::at-put lay)
+        (:wat::core::+ (:c::at-i64 lay)
+          (:wat::core::+ (:c::hexlen head) (:c::call-size))))
+      (:c::leave) (:c::ret))))
 
 ;; `str_cat_own(rax = left, rcx = right) -> rax` -- `concat` where the compiler has proved the
 ;; left operand is a last use, so its buffer may be written into rather than copied (F-127).
@@ -42,7 +84,7 @@
   (:wat::core::let
     [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::vec-ptr)) (:c::heap-arm))
      ;; the copying concat, which both failures hand off to
-     to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat)))
+     to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat lay)))
      fit (:wat::string::concat
            (:c::mov-mr (:c::r11) (:c::rax) 0)
            (:c::rm "8d" (:c::rdi) (:c::rax) (:c::r8) 1 (:c::str-data))
@@ -73,15 +115,37 @@
       body
       (:c::jmp-rel32 (:wat::core::- to-cat (:wat::core::+ at-jmp 5))))))
 
-;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
-;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
-;; r10 carries the result because rax is the copy loops' scratch byte.
-(:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b004c8b094c8d50084c8d59084c89c04c01c8488d500f480fbdca48c7"
-    "c20200000048d3e24c89f94801d1493b4e087605e8f2fdffff49c7070100"
-    "0000498d57084889024989cf488d7a084c89d64c89c1f3a44c89de4c89c9"
-    "f3a44889d0c3"))
+;; `str_cat(rax = a, rcx = b) -> rax` -- the copying concat. Both source pointers are taken
+;; BEFORE the allocation, because allocating writes rcx and rdx.
+(:wat::core::defn :c::rt-str-cat [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::mov-rm (:c::rax) 0 (:c::r8))
+           (:c::mov-rm (:c::rcx) 0 (:c::r9))
+           (:c::lea-at (:c::rax) (:c::str-data) (:c::r10))
+           (:c::lea-at (:c::rcx) (:c::str-data) (:c::r11))
+           (:c::mov-rr (:c::r8) (:c::rax))
+           (:c::add-rr (:c::r9) (:c::rax))
+           (:c::rt-cap (:c::rax) (:c::rdx)))]
+    (:wat::string::concat
+      pre
+      ;; rcx carries the new top here, not r11 -- r10 and r11 are holding the two sources
+      (:c::rt-bump (:wat::core::+ (:c::at-cat lay) (:c::hexlen pre)) lay
+        (:c::add-rr (:c::rdx) (:c::rcx)) (:c::rcx))
+      (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
+      (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::rdx))
+      (:c::mov-mr (:c::rax) (:c::rdx) 0)
+      (:c::mov-rr (:c::rcx) (:c::r15))
+      (:c::lea-at (:c::rdx) (:c::str-data) (:c::rdi))
+      ;; the left, then the right, both landing where rdi was left pointing
+      (:c::mov-rr (:c::r10) (:c::rsi))
+      (:c::mov-rr (:c::r8) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::mov-rr (:c::r11) (:c::rsi))
+      (:c::mov-rr (:c::r9) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::mov-rr (:c::rdx) (:c::rax))
+      (:c::ret))))
 
 ;; `divzero()` -- reached only from inside `i64_quot` and `i64_rem`, which is why it has no entry
 ;; point of its own. `idiv` FAULTS rather than flagging (F-126), so the divisor is tested first.
@@ -270,7 +334,11 @@
 ;; `"\n"` in a wat literal is one byte to the interpreter and two to this compiler (F-120), and
 ;; the message's LENGTH depends on the answer. `:wat::string::byte-at` gives the same byte to
 ;; both, which is the portable family earning its keep the day after it was added (F-139).
-(:wat::core::defn :c::abort-frame [] -> :wat::core::i64 32)
+;; **a small stack scratch, big enough for the longest thing built in it.** Two routines want
+;; one: an abort message (22 bytes at most) and `print_i64`'s digits (an i64 is at most 20 of
+;; them, plus a sign and a newline). 32 covers both with room, and it is one fact rather than the
+;; same number written twice for different reasons.
+(:wat::core::defn :c::scratch-frame [] -> :wat::core::i64 32)
 (:wat::core::defn :c::abort-byte [msg <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::>= i (:wat::string::byte-length msg)) (:c::nl)
     (:wat::string::byte-at msg i)))
@@ -307,7 +375,7 @@
   (:wat::core::let [n (:wat::core::+ (:wat::string::byte-length msg) 1)]
     (:wat::string::concat
       (:c::rt-call (:c::at-flush lay) (:wat::core::+ at (:c::call-size)))
-      (:c::sub-ri (:c::rsp) (:c::abort-frame))
+      (:c::sub-ri (:c::rsp) (:c::scratch-frame))
       (:c::abort-chunks n msg 0 "")
       (:c::mov-ri (:c::rdi) (:c::fd-stderr))
       (:c::mov-rr (:c::rsp) (:c::rsi))
@@ -332,12 +400,13 @@
 ;; or `add $imm,%r11` when it is a constant. That is the ONLY difference between the three
 ;; allocators, and it was the reason each carried its own copy of the check.
 (:wat::core::defn :c::rt-bump [here <- :wat::core::i64 lay <- :c::Layout
-                               grow <- :wat::core::String] -> :wat::core::String
+                               grow <- :wat::core::String
+                               top <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
     [chk (:wat::string::concat
-           (:c::mov-rr (:c::r15) (:c::r11))
+           (:c::mov-rr (:c::r15) top)
            grow
-           (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::r11)))
+           (:c::cmp-rm (:c::r14) (:c::hdr-limit) top))
      at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
      to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
     (:wat::string::concat chk (:c::jbe-over to-oom) to-oom)))
@@ -351,7 +420,7 @@
     (:wat::string::concat
       size
       (:c::rt-bump (:wat::core::+ (:c::at-vnew lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)))
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11))
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::rax) (:c::r10) 0)
@@ -362,7 +431,7 @@
 ;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
 ;; the end. `rep movsq` moves the old slots in three bytes of code. This is `conj`, and it is
 ;; O(n) every time, which is the same thing the interpreter's Vector does (F-023).
-;; `vec_conj_own`, 52 bytes -- `conj` where the compiler has PROVED the container is a last use.
+;; `vec_conj_own` -- `conj` where the compiler has PROVED the container is a last use.
 ;; That plus a reference count of 1 (never stored anywhere durable) plus being the top of the
 ;; heap is enough to extend in place, which turns an accumulator loop from O(n^2) into O(n). It
 ;; is Rust's `Vec::push` and Clojure's transient, assembled from the two halves neither wat nor
@@ -387,7 +456,7 @@
     (:wat::string::concat
       size
       (:c::rt-bump (:wat::core::+ (:c::at-varr lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)))
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11))
       (:c::mov-mi (:c::r15) 0 0)
       (:c::mov-mi (:c::r15) (:c::word) 1)
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
@@ -403,7 +472,7 @@
   (:wat::core::let
     [slots (:wat::core::* (:c::node-arity) (:c::word))
      bump (:c::rt-bump (:c::at-nnew lay) lay
-            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)))]
+            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)) (:c::r11))]
     (:wat::string::concat
       bump
       (:c::mov-mi (:c::r15) 0 1)
@@ -509,7 +578,7 @@
             (:c::add-rr (:c::rdx) (:c::r11)))]
     (:wat::string::concat
       pre
-      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow)
+      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow (:c::r11))
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r9))
       (:c::mov-mr (:c::r8) (:c::r9) 0)
@@ -541,7 +610,7 @@
     (:wat::string::concat
       pre
       (:c::rt-bump (:wat::core::+ (:c::at-subs lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::r9) (:c::r11)))
+        (:c::add-rr (:c::r9) (:c::r11)) (:c::r11))
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::r8) (:c::r10) 0)
@@ -637,7 +706,7 @@
         (:wat::string::concat setup loop yes))
       setup loop yes fail)))
 
-;; `i64_to_str(rax = n) -> rax`, 128 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
+;; `i64_to_str(rax = n) -> rax`: `print_i64`'s divide-by-ten loop, landing in the heap
 ;; instead of the output buffer.
 (:wat::core::defn :c::rt-i64-to-str [] -> :wat::core::String
   (:wat::string::concat
@@ -805,7 +874,7 @@
     ((:wat::core::= i 0) (:c::rt-flush))
     ((:wat::core::= i 1) (:c::rt-ovf lay))
     ((:wat::core::= i 2) (:c::rt-buf-put lay))
-    ((:wat::core::= i 3) (:c::rt-print-i64))
+    ((:wat::core::= i 3) (:c::rt-print-i64 lay))
     ((:wat::core::= i 4) (:c::rt-print-bool lay))
     ((:wat::core::= i 5) (:c::rt-oom lay))
     ((:wat::core::= i 6) (:c::rt-die lay))
@@ -813,7 +882,7 @@
     ((:wat::core::= i 8) (:c::rt-i64-quot lay))
     ((:wat::core::= i 9) (:c::rt-i64-rem lay))
     ((:wat::core::= i 10) (:c::rt-print-str))
-    ((:wat::core::= i 11) (:c::rt-str-cat))
+    ((:wat::core::= i 11) (:c::rt-str-cat lay))
     ((:wat::core::= i 12) (:c::rt-str-cat-own lay))
     ((:wat::core::= i 13) (:c::rt-str-subs lay))
     ((:wat::core::= i 14) (:c::rt-i64-to-str))

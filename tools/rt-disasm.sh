@@ -13,6 +13,12 @@
 # inside a mnemonic). The routines are now built by evaluating `(:c::rt-nth i lay)`, which is the
 # same list `:c::runtime` lays down, so this reads what actually ships and cannot drift from it.
 #
+# **A byte count belongs in this tool's output, never in a comment.** When the claims were
+# audited against the real bytes the first time, two of the four that stated a size were wrong --
+# `i64_to_str` by ten and `vec_conj_own` by 188, a routine that had grown 4.6x while its comment
+# stood still. Nothing could have caught that while the tool read hex literals out of the source.
+# The counts are gone from the comments; this prints them.
+#
 #   tools/rt-disasm.sh                 every routine
 #   tools/rt-disasm.sh str-cat         one of them (substring match)
 set -uo pipefail

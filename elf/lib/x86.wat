@@ -398,9 +398,11 @@
 ;; The forward case (`:c::br-over`) skips a piece that follows it, so the distance is that piece's
 ;; length. A loop jumps back over a piece that PRECEDES it and over itself, so the distance is
 ;; that length plus two, negated -- which is the whole of what a label table would have told us.
-(:wat::core::defn :c::jmp-back [body <- :wat::core::String] -> :wat::core::String
-  (:wat::string::concat "eb"
+(:wat::core::defn :c::br-back [cc <- :wat::core::String body <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat cc
     (:asm::le (:wat::core::- 0 (:wat::core::+ (:c::hexlen body) (:c::rel8-size))) 1)))
+(:wat::core::defn :c::jmp-back [body <- :wat::core::String] -> :wat::core::String
+  (:c::br-back "eb" body))
 (:wat::core::defn :c::jb-over [body <- :wat::core::String] -> :wat::core::String
   (:c::br-over (:c::jcc-rel8 (:c::cc-below)) body))
 (:wat::core::defn :c::jbe-over [body <- :wat::core::String] -> :wat::core::String
@@ -500,7 +502,16 @@
 (:wat::core::defn :c::mov-mr32 [src <- :wat::core::i64 base <- :wat::core::i64
                                 disp <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rex-n src base) "89"
-                        (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))                                   ;; 0x41 = REX.B, and no W
+                        (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))
+;; **and the 8-bit pair, which name a register's LOW BYTE.** `%dl` is rdx's, and a digit built by
+;; `div` arrives there -- so turning it into a character and storing it are both byte-wide. Only
+;; rax/rcx/rdx/rbx reach their low byte without a REX prefix, which is why these take none; the
+;; four that would need one (`spl`/`bpl`/`sil`/`dil`) are not used this way.
+(:wat::core::defn :c::add-ri8 [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "80" (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 1)))
+(:wat::core::defn :c::mov-mr8 [src <- :wat::core::i64 base <- :wat::core::i64
+                               disp <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "88" (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))                                   ;; 0x41 = REX.B, and no W
 (:wat::core::defn :c::mov-mi32 [base <- :wat::core::i64 disp <- :wat::core::i64
                                 n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rex-narrow base) "c7"

@@ -81,13 +81,19 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-two done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-four done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
-`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`); **11 left**, biggest
-last (`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175,
-`prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size: `print-i64` 87,
-`str-cat` 96, `tree-from-arr` 107, `vec-conj` 110.
+`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`);
+**9 left**, biggest last (`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199,
+`io-read-file` 175, `prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size:
+`tree-from-arr` 107, `vec-conj` 110.
+
+**A byte count does not belong in a comment.** The first audit of the claims against the real
+bytes -- possible only once `tools/rt-disasm.sh` stopped grepping hex out of the source -- found
+two of the four that stated a size were WRONG: `i64_to_str` by ten, and `vec_conj_own` by 188,
+a routine that had grown 4.6x while its comment stood still. `str_cat` claimed 97 for 96. The
+counts are out of the comments; the disassembler prints them.
 
 **A routine must not derive its own address by arithmetic.** `divzero` computed its start as
 `at-quot - hexlen(rt-divzero)`, which was fine while it was a hex literal and is an infinite
