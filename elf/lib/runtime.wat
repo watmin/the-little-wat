@@ -31,15 +31,47 @@
     "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
     "85c0740648ffcec6062d488d55ff4829f248ffc2e865ffffffc9c3"))
 
-;; `str_cat_own`, 86 bytes -- `concat` where the compiler has proved the left operand is a last
-;; use. The same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
-;; A String is `[rc:8][len:8][bytes, padded to 8]`, so appending in place costs NOTHING while the
-;; padding has room and one bump when it does not.
-(:wat::core::defn :c::rt-str-cat-own [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f8010f8595ffffff4989c94c8b004d8b114d89c34d01d3498d500f"
-    "480fbdca48c7c70200000048d3e7498d53104839fa77124c89184a8d7c00"
-    "08498d71084c89d1f3a4c34c89c9e951ffffff"))
+;; `str_cat_own(rax = left, rcx = right) -> rax` -- `concat` where the compiler has proved the
+;; left operand is a last use, so its buffer may be written into rather than copied (F-127).
+;;
+;; **Two things have to hold and both are checked here.** The left must be one of OUR
+;; allocations -- the word before its pointer is the arm -- and the result must still fit the
+;; power-of-two block that was allocated for it. Either failing, it falls through to the copying
+;; `str_cat`, which is the routine immediately before this one.
+(:wat::core::defn :c::rt-str-cat-own [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::vec-ptr)) (:c::heap-arm))
+     ;; the copying concat, which both failures hand off to
+     to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat)))
+     fit (:wat::string::concat
+           (:c::mov-mr (:c::r11) (:c::rax) 0)
+           (:c::rm "8d" (:c::rdi) (:c::rax) (:c::r8) 1 (:c::str-data))
+           (:c::lea-at (:c::r9) (:c::str-data) (:c::rsi))
+           (:c::mov-rr (:c::r10) (:c::rcx))
+           (:c::rep-movsb)
+           (:c::ret))
+     body (:wat::string::concat
+            (:c::mov-rr (:c::rcx) (:c::r9))
+            (:c::mov-rm (:c::rax) 0 (:c::r8))
+            (:c::mov-rm (:c::r9) 0 (:c::r10))
+            (:c::mov-rr (:c::r8) (:c::r11))
+            (:c::add-rr (:c::r10) (:c::r11))
+            (:c::rt-cap (:c::r8) (:c::rdi))
+            (:c::lea-at (:c::r11) (:c::vec-hdr) (:c::rdx))
+            (:c::cmp-rr (:c::rdi) (:c::rdx))
+            (:c::br-over (:c::jcc-rel8 (:c::cc-above)) fit)
+            fit
+            (:c::mov-rr (:c::r9) (:c::rcx)))
+     at-jmp (:wat::core::+ (:c::at-cat-own lay)
+              (:wat::core::+ (:c::hexlen head)
+                (:wat::core::+ (:c::rel32-size) (:c::hexlen body))))]
+    (:wat::string::concat
+      head
+      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) to-cat
+        (:wat::core::+ (:c::at-cat-own lay)
+          (:wat::core::+ (:c::hexlen head) (:c::rel32-size))))
+      body
+      (:c::jmp-rel32 (:wat::core::- to-cat (:wat::core::+ at-jmp 5))))))
 
 ;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
 ;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
@@ -235,6 +267,16 @@
 ;; The call to `oom` is a real call and not a jump: it never returns, but a `call` leaves a
 ;; return address, and that address is what a stack trace would need. It is also five bytes
 ;; whose displacement is now computed from the layout rather than counted by hand.
+;; **the allocation a String of `len` bytes needs: the next power of two at or above len+16.**
+;; `bsr` gives the index of the highest set bit -- a base-2 logarithm for free -- and shifting 2
+;; by it rounds up. `str_subs` and `str_cat_own` computed this identically and separately.
+(:wat::core::defn :c::rt-cap [len <- :wat::core::i64 out <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::lea-at len 15 (:c::rdx))
+    (:c::bsr-rr (:c::rdx) (:c::rcx))
+    (:c::mov-ri out 2)
+    (:c::shl-cl out)))
+
 ;; `grow` is how r11 reaches the new top: `add %rcx,%r11` when the size was computed into rcx,
 ;; or `add $imm,%r11` when it is a constant. That is the ONLY difference between the three
 ;; allocators, and it was the reason each carried its own copy of the check.
@@ -441,13 +483,29 @@
     "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
     "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
-;; `str_subs(rax = s, rcx = from, rdx = to) -> rax`, 66 bytes: a new String of the bytes in
-;; between. Sixteen of the 117 occurrences the census counts are this one verb.
-(:wat::core::defn :c::rt-str-subs [] -> :wat::core::String
-  (:wat::string::concat
-    "4989d04929c8488d7c0808498d500f480fbdca49c7c10200000049d3e14d"
-    "89fb4d01cb4d3b5e087605e84cfdffff49c707010000004d8d57084d8902"
-    "4889fe498d7a084d89df4c89c1f3a44c89d0c3"))
+;; `str_subs(rax = s, rcx = from, rdx = to) -> rax` -- a new String of the bytes in `[from, to)`.
+;; The source pointer is computed BEFORE the allocation, because allocating clobbers rcx.
+(:wat::core::defn :c::rt-str-subs [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::mov-rr (:c::rdx) (:c::r8))
+           (:c::sub-rr (:c::rcx) (:c::r8))
+           (:c::rm "8d" (:c::rdi) (:c::rax) (:c::rcx) 1 (:c::str-data))
+           (:c::rt-cap (:c::r8) (:c::r9)))]
+    (:wat::string::concat
+      pre
+      (:c::rt-bump (:wat::core::+ (:c::at-subs lay) (:c::hexlen pre)) lay
+        (:c::add-rr (:c::r9) (:c::r11)))
+      (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
+      (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
+      (:c::mov-mr (:c::r8) (:c::r10) 0)
+      (:c::mov-rr (:c::rdi) (:c::rsi))
+      (:c::lea-at (:c::r10) (:c::str-data) (:c::rdi))
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::r8) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::ret))))
 
 ;; `str_starts(rax = s, rcx = prefix) -> 0 or 1`, 40 bytes, `repe cmpsb`.
 ;; ---------------------------------------------------------------- the two string comparisons
@@ -558,15 +616,41 @@
     (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) (:c::rt-str-body))
     (:c::rt-str-tail)))
 
-;; `die(rax = String)`, 81 bytes: flush whatever stdout had, put the string on stderr with a
-;; newline, exit 70. This is what `assertion-failed!` and a failed `assert-eq` compile to. The
-;; interpreter raises a structured error with a span; a compiled program has neither, so the two
-;; agree on every successful run and differ only on the path that stops the program.
-(:wat::core::defn :c::rt-die [] -> :wat::core::String
-  (:wat::string::concat
-    "4989c2e845feffff498b12498d720848c7c70200000048c7c0010000000f"
-    "054883ec08c604240a48c7c7020000004889e648c7c20100000048c7c001"
-    "0000000f0548c7c74600000048c7c03c0000000f05"))
+;; `write(fd)` with rsi and rdx already set -- the three instructions every direct write shares.
+;; A local `fn` would say this better, but this compiler takes `defn` at the top level and
+;; nothing else, so a helper it is.
+(:wat::core::defn :c::rt-write [fd <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::mov-ri (:c::rdi) fd)
+                        (:c::mov-ri (:c::rax) (:c::sys-write))
+                        (:c::syscall)))
+
+;; `die(rax = String)` -- put the message on STDERR and stop. The pending stdout is flushed
+;; first, so the two streams come out in the order they were written rather than whichever the
+;; kernel buffered last. The newline is a second write of one byte off the stack, because there
+;; is nowhere to append it to.
+(:wat::core::defn :c::rt-die [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:c::mov-rr (:c::rax) (:c::r10))
+]
+    (:wat::string::concat
+      pre
+      (:c::rt-call (:c::at-flush lay)
+        (:wat::core::+ (:c::at-die lay)
+          (:wat::core::+ (:c::hexlen pre) (:c::call-size))))
+      (:c::mov-rm (:c::r10) 0 (:c::rdx))
+      (:c::lea-at (:c::r10) (:c::str-data) (:c::rsi))
+      (:c::rt-write (:c::fd-stderr))
+      ;; one byte of stack to put the newline in
+      (:c::sub-ri (:c::rsp) (:c::word))
+      (:c::mov-mi8 (:c::rsp) 0 (:c::nl))
+      (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+      (:c::mov-rr (:c::rsp) (:c::rsi))
+      (:c::mov-ri (:c::rdx) 1)
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::syscall)
+      (:c::mov-ri (:c::rdi) (:c::exit-fail))
+      (:c::mov-ri (:c::rax) (:c::sys-exit))
+      (:c::syscall))))
 
 ;; **The last mile: a file, as bytes.** Five routines.
 ;;
@@ -678,14 +762,14 @@
     ((:wat::core::= i 3) (:c::rt-print-i64))
     ((:wat::core::= i 4) (:c::rt-print-bool lay))
     ((:wat::core::= i 5) (:c::rt-oom))
-    ((:wat::core::= i 6) (:c::rt-die))
+    ((:wat::core::= i 6) (:c::rt-die lay))
     ((:wat::core::= i 7) (:c::rt-divzero))
     ((:wat::core::= i 8) (:c::rt-i64-quot lay))
     ((:wat::core::= i 9) (:c::rt-i64-rem lay))
     ((:wat::core::= i 10) (:c::rt-print-str))
     ((:wat::core::= i 11) (:c::rt-str-cat))
-    ((:wat::core::= i 12) (:c::rt-str-cat-own))
-    ((:wat::core::= i 13) (:c::rt-str-subs))
+    ((:wat::core::= i 12) (:c::rt-str-cat-own lay))
+    ((:wat::core::= i 13) (:c::rt-str-subs lay))
     ((:wat::core::= i 14) (:c::rt-i64-to-str))
     ((:wat::core::= i 15) (:c::rt-str-starts))
     ((:wat::core::= i 16) (:c::rt-str-contains))
@@ -803,6 +887,13 @@
 (:wat::core::defn :c::sys-write [] -> :wat::core::i64 1)
 (:wat::core::defn :c::sys-exit [] -> :wat::core::i64 60)
 (:wat::core::defn :c::fd-stdout [] -> :wat::core::i64 1)
+(:wat::core::defn :c::fd-stderr [] -> :wat::core::i64 2)
+;; what a program exits with when the runtime stops it -- an overflow, a division by zero, a
+;; `die`. Distinct from anything a correct program returns; `tools/elf-run.sh` asserts on it.
+(:wat::core::defn :c::exit-fail [] -> :wat::core::i64 70)
+;; the word every allocation writes at its start, one word BEFORE the pointer it hands out.
+;; `str_cat_own` tests it to tell an owned String from a borrowed one.
+(:wat::core::defn :c::heap-arm [] -> :wat::core::i64 1)
 ;; a tree node: one header word, then a fixed fan-out of child slots
 (:wat::core::defn :c::node-data [] -> :wat::core::i64 8)
 (:wat::core::defn :c::node-arity [] -> :wat::core::i64 32)

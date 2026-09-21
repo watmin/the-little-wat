@@ -326,7 +326,10 @@
 ;; **a `jmp` whose displacement is not known yet.** Every one of these is emitted with a zero and
 ;; patched once the target address exists, which is why the placeholder is part of the name: a
 ;; bare `(:c::jmp-unpatched)` at a call site says nothing about the four bytes being a promise.
-(:wat::core::defn :c::jmp-unpatched [] -> :wat::core::String "e900000000")
+;; `jmp rel32` -- the long jump, for a target too far for the one-byte form or in another routine
+(:wat::core::defn :c::jmp-rel32 [rel <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "e9" (:asm::le rel 4)))
+(:wat::core::defn :c::jmp-unpatched [] -> :wat::core::String (:c::jmp-rel32 0))
 
 (:wat::core::defn :c::add-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
   (:c::rr "01" src dst))
@@ -448,6 +451,12 @@
 (:wat::core::defn :c::cmp-rm [base <- :wat::core::i64 disp <- :wat::core::i64
                               reg <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "3b" reg base disp))
+;; `cmpq $imm, disp(BASE)` -- test a word in memory without loading it
+(:wat::core::defn :c::cmp-mi [base <- :wat::core::i64 disp <- :wat::core::i64
+                              n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)]
+    (:wat::string::concat (:c::dm-at (:wat::core::if short? "83" "81") 7 base disp)
+                          (:asm::le n (:wat::core::if short? 1 4)))))
 (:wat::core::defn :c::add-rm [base <- :wat::core::i64 disp <- :wat::core::i64
                               reg <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "03" reg base disp))
@@ -598,6 +607,9 @@
 (:wat::core::defn :c::cc-below [] -> :wat::core::i64 2)
 (:wat::core::defn :c::cc-zero [] -> :wat::core::i64 4)
 (:wat::core::defn :c::cc-below-eq [] -> :wat::core::i64 6)
+;; `js` -- the sign flag, so a subtraction that went negative is tested without a second compare
+;; `ja` -- unsigned strictly-greater, the pair of `jbe`
+(:wat::core::defn :c::cc-above [] -> :wat::core::i64 7)
 ;; `js` -- the sign flag, so a subtraction that went negative is tested without a second compare
 (:wat::core::defn :c::cc-sign [] -> :wat::core::i64 8)
 (:wat::core::defn :c::cc-greater [] -> :wat::core::i64 15)

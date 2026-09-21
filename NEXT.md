@@ -81,12 +81,13 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Sixteen done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Nineteen done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
-`slot-set`); **17 left**, biggest last (`vec-conj-own` 240 bytes, `prim-read-hex` 227,
-`tree-push` 199, `io-read-file` 175, `prim-write-hex` 163, `print-str` 147, `i64-to-str` 138).
-Next by size: `str-cat-own` 79, `str-subs` 79, `die` 81, `print-i64` 87.
+`slot-set`, `die`, `str-subs`, `str-cat-own`); **14 left**, biggest last (`vec-conj-own` 240
+bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175, `prim-write-hex` 163,
+`print-str` 147, `i64-to-str` 138). Next by size: `print-i64` 87, `oom` 89, `ovf` 89,
+`divzero` 95, `str-cat` 96.
 
 The encoder carries a full 16-register file, a general memory-operand layer (ModRM+SIB, all four
 addressing shapes), forward and backward jumps, operand sizes (32/16/8-bit stores, which needed
@@ -101,14 +102,65 @@ And `def` cannot memoize: the source is explicit that it binds an UNEVALUATED ex
 at registration, so the expensive things here -- a routine's hex, the runtime block -- which
 depend on arguments, are out of its reach entirely. Worth doing for legibility, not for speed.
 
-**TIME EACH BATCH, do not trust green.** F-137 is exactly this change regressing 5x while all 68
-binaries stayed byte-identical and the fixpoint held. `tools/bootstrap.sh --fast` prints the
-compiled compiler's own time; it was 613-643 ms across this batch.
-**The oracle is exact**: a pure encoder change must leave all 68 binaries byte-identical, and
-`tools/bootstrap.sh` checks that. Every step so far has held.
-Next after the conversion: **breadth on records and memory vs C** — strings were measured in
-F-135; records and memory are still completely unmeasured, and they are what an XDP driver is
-made of.
+**TIME EACH BATCH, do not trust green** -- F-137 is exactly this change regressing 5x while all
+68 binaries stayed byte-identical and the fixpoint held.
+
+**BUT COMPARE LIKE WITH LIKE.** `--fast` and a full bootstrap measure stage 1 under different
+conditions and give systematically different numbers -- full: 509/518/562/613 ms today;
+`--fast`: 643 through 890. Comparing across the two manufactured a phantom 36% regression on
+2026-09-20 and cost an hour chasing it. **The guard is the FULL bootstrap's stage-1 time.**
+
+### The next objective is a REPL, not an XDP driver (2026-09-20, the builder's call)
+
+**"getting an actual repl (after all the hex clean up) is the better proof of competence"** --
+and wat-rs's own REPL is judged poor, so this is a chance to do it properly rather than port one.
+
+**`mal/` is the ladder and the oracle, not the goal.** Eleven steps, 909 of mal's own tests green
+under the interpreter. But `mal/step0_repl.wat` says in its own header that it is NOT a terminal:
+*"A wat program can't print raw text or a prompt, and can't read an unbalanced line alone
+(F-049, F-050), so the shim is the terminal"* -- it is driven by `tools/mal-shim.py`.
+
+**The compiler accepts none of mal's vocabulary.** Measured against `stepA_mal.wat`:
+`match` (117 uses), `defenum`, `fn`, `rest`/`first`/`second`/`third`, `empty?`, `concat`, `into`,
+`mapv`, `hashmap/assoc` -- zero compile today. So the target is `step0`, then `step1`, each with
+mal's own tests as the check; `stepA` is far off.
+
+**What a native REPL actually needs, and all of it is ours:**
+
+| piece | state |
+|---|---|
+| **read** — text to AST | **DONE.** `elf/lib/reader.wat` already compiles; it is part of the compiler |
+| **input** — a line from stdin | missing: `read(0, ...)`, one syscall. The runtime has `read-file` only |
+| **print** — raw text | missing: `print_str` QUOTES and ESCAPES (EDN rendering), so it cannot emit a prompt |
+| **eval** | the work |
+
+`eval` has two shapes: an AST interpreter in wat (sane, incremental, mal steps 2+ over the
+reader we already have), or -- since the stub already `mmap`s and we already emit machine code --
+compiling each form into an exec page and jumping to it. The second is the better stunt and the
+same compiler either way.
+
+**Do it after the hex conversion**, because `print_str` and `buf_put` are exactly the routines
+being converted and should change once, in expression form.
+
+### Anonymous `fn` — needed soon, and the cheap version is the wrong one
+
+The builder's call (2026-09-20): *"we'll need anon fn as we mature the lang... its acceptable to
+skip it now.. but we'll need it soon"*. The demand is named: `mal/stepA_mal.wat` uses `fn` twelve
+times, and a REPL's `eval` is closures by nature.
+
+**When it is built, build CLOSURES, not lambda lifting.** The four questions on the cheap version
+(lift a `fn` with no free variables to a top-level `defn`, refuse the rest) came out
+Obvious YES / Simple YES / Honest YES / **UX NO** -- a form that compiles until you happen to
+reference an outer binding is F-129's inline cliff again: behaviour turning on a property that is
+invisible in the source. There is no cheap version worth shipping.
+
+What the real one needs: a closure VALUE (code pointer plus captured environment -- `vec_new`
+already allocates), an INDIRECT call (`call *%rax`; the compiler emits direct `rel32` only),
+`:fn(A,B)->R` as a value type in the type pass, and a decision about how last-use ownership
+(C-151/F-127) interacts with a captured binding.
+
+Small and separate: the refusal says `cannot compile call: (wat.core/fn ...)`. A `fn` is not a
+call. The compiler has a good named refusal for top-level forms and wants one here (F-128's family).
 
 ### Open — correctness
 
