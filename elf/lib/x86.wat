@@ -484,9 +484,23 @@
 ;; 8-bit store changes `c7` to `c6`; a 32-bit store is the same opcode with no REX at all.
 ;;
 ;; A REX byte appears only when a register needs extending -- `-0x8(%rbp)` needs none.
+(:wat::core::defn :c::rex-n [reg <- :wat::core::i64 base <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [r (:wat::core::and (:c::reg? reg) (:c::rext? reg))
+                    b (:wat::core::and (:c::reg? base) (:c::rext? base))]
+    (:wat::core::if (:wat::core::or r b)
+      (:asm::u8 (:wat::core::+ 64 (:wat::core::+ (:wat::core::if r 4 0)
+                                                 (:wat::core::if b 1 0)))) "")))
 (:wat::core::defn :c::rex-narrow [base <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if (:wat::core::and (:c::reg? base) (:c::rext? base))
-    (:asm::u8 65) ""))                                   ;; 0x41 = REX.B, and no W
+  (:c::rex-n (:c::no-reg) base))
+;; the 32-bit halves of `movabs` and of a store -- same opcodes, no REX.W, so they move four
+;; bytes instead of eight. A message tail of four characters or fewer wants these.
+(:wat::core::defn :c::mov-ri32 [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex-n (:c::no-reg) dst)
+                        (:asm::u8 (:wat::core::+ 184 (:c::rcode dst))) (:asm::le n 4)))
+(:wat::core::defn :c::mov-mr32 [src <- :wat::core::i64 base <- :wat::core::i64
+                                disp <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex-n src base) "89"
+                        (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))                                   ;; 0x41 = REX.B, and no W
 (:wat::core::defn :c::mov-mi32 [base <- :wat::core::i64 disp <- :wat::core::i64
                                 n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rex-narrow base) "c7"

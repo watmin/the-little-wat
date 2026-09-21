@@ -81,13 +81,20 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Nineteen done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-two done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
-`slot-set`, `die`, `str-subs`, `str-cat-own`); **14 left**, biggest last (`vec-conj-own` 240
-bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175, `prim-write-hex` 163,
-`print-str` 147, `i64-to-str` 138). Next by size: `print-i64` 87, `oom` 89, `ovf` 89,
-`divzero` 95, `str-cat` 96.
+`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`); **11 left**, biggest
+last (`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175,
+`prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size: `print-i64` 87,
+`str-cat` 96, `tree-from-arr` 107, `vec-conj` 110.
+
+**A routine must not derive its own address by arithmetic.** `divzero` computed its start as
+`at-quot - hexlen(rt-divzero)`, which was fine while it was a hex literal and is an infinite
+recursion once it is an expression: measuring it requires building it. The layout holds an offset
+for EVERY routine including the ones nothing calls, so `:c::at-divzero` is `(nth lay 7)` and the
+cycle is gone. **Check for this in each remaining conversion** -- it presents as stage 1 hanging,
+not crashing, and it poisons the seed so the next `--fast` fails on an already-fixed source.
 
 The encoder carries a full 16-register file, a general memory-operand layer (ModRM+SIB, all four
 addressing shapes), forward and backward jumps, operand sizes (32/16/8-bit stores, which needed

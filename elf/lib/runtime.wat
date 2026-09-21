@@ -83,17 +83,10 @@
     "0000498d57084889024989cf488d7a084c89d64c89c1f3a44c89de4c89c9"
     "f3a44889d0c3"))
 
-;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
-;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
-;; copy is built at the heap top WITHOUT bumping r15, because nothing allocates while a string is
-;; being printed. Every escape in it was found by asking the interpreter what it printed, because
-;; nothing says so: that is F-120.
-(:wat::core::defn :c::rt-divzero [] -> :wat::core::String
-  (:wat::string::concat
-    "e8f7fdffff4883ec2048b87761743a206469764889042448b86973696f6e"
-    "206279488944240848b8207a65726f0a0000488944241048c7c702000000"
-    "4889e648c7c21600000048c7c0010000000f0548c7c74600000048c7c03c"
-    "0000000f05"))
+;; `divzero()` -- reached only from inside `i64_quot` and `i64_rem`, which is why it has no entry
+;; point of its own. `idiv` FAULTS rather than flagging (F-126), so the divisor is tested first.
+(:wat::core::defn :c::rt-divzero [lay <- :c::Layout] -> :wat::core::String
+  (:c::rt-abort "wat: division by zero" lay (:c::at-divzero lay)))
 
 ;; `i64_quot(rax / rcx) -> rax`, guarded. **`idiv` FAULTS rather than flagging** (F-126), so the
 ;; divisor is tested before the instruction runs, and `MIN / -1` is `neg`+`jo` because `a / -1`
@@ -115,7 +108,7 @@
      at-jo     (:wat::core::+ at-jne (:wat::core::+ (:c::rel8-size) (:c::hexlen negate)))
      ;; `divzero` sits immediately before this routine, so its start is ours less its length
      to-divzero (:c::rt-branch (:c::cc-zero)
-                  (:wat::core::- here (:c::hexlen (:c::rt-divzero)))
+                  (:c::at-divzero lay)
                   (:wat::core::+ at-je (:c::rel32-size)))
      ;; the `MIN / -1` arm: `a / -1` is `-a`, and it overflows in exactly the same place
      neg-arm   (:wat::string::concat negate
@@ -137,7 +130,7 @@
      here      (:c::at-rem lay)
      at-je     (:wat::core::+ here (:c::hexlen guard))
      to-divzero (:c::rt-branch (:c::cc-zero)
-                  (:wat::core::- (:c::at-quot lay) (:c::hexlen (:c::rt-divzero)))
+                  (:c::at-divzero lay)
                   (:wat::core::+ at-je (:c::rel32-size)))
      zero-arm  (:wat::string::concat (:c::xor-rr (:c::rax) (:c::rax)) (:c::ret))]
     (:wat::string::concat
@@ -189,15 +182,10 @@
         (:wat::core::+ tail-at (:wat::core::+ (:c::hexlen lea) (:c::call-size))))
       (:c::leave) (:c::ret))))
 
-;; `buf_put(rsi = bytes, rdx = count)`, 70 bytes -- **the thing libc calls stdio.** Bytes go
-;; into a 4 KiB buffer at r14, and the syscall happens once per buffer rather than once per
-;; `println`. If the run would overflow, flush first; if it is bigger than the whole buffer even
-;; when empty, write it straight out. `rep movsb` does the copy in two bytes of code.
-(:wat::core::defn :c::rt-ovf [] -> :wat::core::String
-  (:wat::string::concat
-    "e8d7ffffff4883ec2048b87761743a206936344889042448b8206f766572"
-    "666c6f4889442408b8770a00008944241048c7c7020000004889e648c7c2"
-    "1200000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
+;; `ovf()` -- what a `jo` lands on. i64 arithmetic TRAPS rather than wrapping (the builder's
+;; ruling, arc 300), so this is reached by design and not by accident.
+(:wat::core::defn :c::rt-ovf [lay <- :c::Layout] -> :wat::core::String
+  (:c::rt-abort "wat: i64 overflow" lay (:c::at-ovf lay)))
 
 ;; `buf_put(rsi = bytes, rdx = length)` -- append to the output buffer, flushing first if this
 ;; put would cross the high-water mark. **A put larger than the buffer goes straight to the
@@ -267,6 +255,69 @@
 ;; The call to `oom` is a real call and not a jump: it never returns, but a `call` leaves a
 ;; return address, and that address is what a stack trace would need. It is also five bytes
 ;; whose displacement is now computed from the layout rather than counted by hand.
+;; ---------------------------------------------------------------- stopping, with a reason
+;;
+;; **`ovf`, `oom` and `divzero` were three copies of one routine.** Each flushes what stdout had,
+;; builds a message on the stack, writes it to stderr and exits 70; they differ in the message and
+;; in nothing else. That was invisible as three hex blobs of 89, 89 and 95 bytes.
+;;
+;; The message is built by STORES rather than read from a data section, so the binary needs no
+;; relocation and no .rodata: eight characters at a time as a `movabs` and a store, and a tail of
+;; four or fewer as their 32-bit halves. The immediates ARE the text -- `0x343669203a746177` is
+;; "wat: i64" read little-endian -- and they are computed from it here, never transcribed.
+;;
+;; The newline is appended by `:c::abort-byte` rather than written into the literal, because a
+;; `"\n"` in a wat literal is one byte to the interpreter and two to this compiler (F-120), and
+;; the message's LENGTH depends on the answer. `:wat::string::byte-at` gives the same byte to
+;; both, which is the portable family earning its keep the day after it was added (F-139).
+(:wat::core::defn :c::abort-frame [] -> :wat::core::i64 32)
+(:wat::core::defn :c::abort-byte [msg <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::string::byte-length msg)) (:c::nl)
+    (:wat::string::byte-at msg i)))
+(:wat::core::defn :c::abort-pack [msg <- :wat::core::String from <- :wat::core::i64
+                                  i <- :wat::core::i64 acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< i from) acc
+    (:c::abort-pack msg from (:wat::core::- i 1)
+      (:wat::core::+ (:wat::core::* acc 256) (:c::abort-byte msg i)))))
+(:wat::core::defn :c::abort-chunks [n <- :wat::core::i64 msg <- :wat::core::String
+                                    i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i n) acc
+    (:wat::core::let [left (:wat::core::- n i)
+                      last (:wat::core::- n 1)]
+      (:wat::core::cond
+        ;; four bytes or fewer: the 32-bit halves
+        ((:wat::core::<= left 4)
+          (:wat::string::concat acc
+            (:c::mov-ri32 (:c::rax) (:c::abort-pack msg i last 0))
+            (:c::mov-mr32 (:c::rax) (:c::rsp) i)))
+        ;; five to seven: one 64-bit store whose high bytes are zero and simply not written
+        ((:wat::core::< left 8)
+          (:wat::string::concat acc
+            (:c::movabs (:c::rax) (:c::abort-pack msg i last 0))
+            (:c::mov-mr (:c::rax) (:c::rsp) i)))
+        (:else
+          (:c::abort-chunks n msg (:wat::core::+ i 8)
+            (:wat::string::concat acc
+              (:c::movabs (:c::rax) (:c::abort-pack msg i (:wat::core::+ i 7) 0))
+              (:c::mov-mr (:c::rax) (:c::rsp) i))))))))
+
+;; `abort(msg)` -- the body all three error exits share. `at` is where this routine starts.
+(:wat::core::defn :c::rt-abort [msg <- :wat::core::String lay <- :c::Layout
+                                at <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [n (:wat::core::+ (:wat::string::byte-length msg) 1)]
+    (:wat::string::concat
+      (:c::rt-call (:c::at-flush lay) (:wat::core::+ at (:c::call-size)))
+      (:c::sub-ri (:c::rsp) (:c::abort-frame))
+      (:c::abort-chunks n msg 0 "")
+      (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+      (:c::mov-rr (:c::rsp) (:c::rsi))
+      (:c::mov-ri (:c::rdx) n)
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::syscall)
+      (:c::mov-ri (:c::rdi) (:c::exit-fail))
+      (:c::mov-ri (:c::rax) (:c::sys-exit))
+      (:c::syscall))))
+
 ;; **the allocation a String of `len` bytes needs: the next power of two at or above len+16.**
 ;; `bsr` gives the index of the highest set bit -- a base-2 logarithm for free -- and shifting 2
 ;; by it rounds up. `str_subs` and `str_cat_own` computed this identically and separately.
@@ -473,15 +524,10 @@
       (:c::reg-pop (:c::rbx))
       (:c::ret))))
 
-;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
-;; `[r14+8]` BEFORE it writes anything, and jumps here when it will not fit: flush whatever
-;; stdout had buffered, put "wat: heap exhausted" on stderr, exit 70. That is the difference
-;; between a compiler and a demo -- running out of memory should be a sentence, not a signal.
-(:wat::core::defn :c::rt-oom [] -> :wat::core::String
-  (:wat::string::concat
-    "e8a1feffff4883ec2048b87761743a206865614889042448b87020657868"
-    "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
-    "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
+;; `oom()` -- every allocator compares `r15 + need` against the limit at `r14+8` and calls this
+;; when it would cross. There is no second chance: the heap is one mmap and it does not grow.
+(:wat::core::defn :c::rt-oom [lay <- :c::Layout] -> :wat::core::String
+  (:c::rt-abort "wat: heap exhausted" lay (:c::at-oom lay)))
 
 ;; `str_subs(rax = s, rcx = from, rdx = to) -> rax` -- a new String of the bytes in `[from, to)`.
 ;; The source pointer is computed BEFORE the allocation, because allocating clobbers rcx.
@@ -757,13 +803,13 @@
 (:wat::core::defn :c::rt-nth [i <- :wat::core::i64 lay <- :c::Layout] -> :wat::core::String
   (:wat::core::cond
     ((:wat::core::= i 0) (:c::rt-flush))
-    ((:wat::core::= i 1) (:c::rt-ovf))
+    ((:wat::core::= i 1) (:c::rt-ovf lay))
     ((:wat::core::= i 2) (:c::rt-buf-put lay))
     ((:wat::core::= i 3) (:c::rt-print-i64))
     ((:wat::core::= i 4) (:c::rt-print-bool lay))
-    ((:wat::core::= i 5) (:c::rt-oom))
+    ((:wat::core::= i 5) (:c::rt-oom lay))
     ((:wat::core::= i 6) (:c::rt-die lay))
-    ((:wat::core::= i 7) (:c::rt-divzero))
+    ((:wat::core::= i 7) (:c::rt-divzero lay))
     ((:wat::core::= i 8) (:c::rt-i64-quot lay))
     ((:wat::core::= i 9) (:c::rt-i64-rem lay))
     ((:wat::core::= i 10) (:c::rt-print-str))
@@ -843,6 +889,12 @@
 (:wat::core::defn :c::at-bool [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 4))
 (:wat::core::defn :c::at-oom [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 5))
 (:wat::core::defn :c::at-die [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 6))
+;; `divzero` is reached only from inside the two division routines, so it needs no entry point in
+;; the sense of being CALLED -- but it has an offset like everything else, and asking the layout
+;; for it is the only non-recursive way to know where it starts. Computing it as "quot's start
+;; less divzero's length" was fine while divzero was a hex literal and is a loop now that it is
+;; an expression: measuring it requires building it, and building it requires measuring it.
+(:wat::core::defn :c::at-divzero [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 7))
 (:wat::core::defn :c::at-quot [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 8))
 (:wat::core::defn :c::at-rem [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 9))
 (:wat::core::defn :c::at-str [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 10))
