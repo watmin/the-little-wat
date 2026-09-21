@@ -12487,7 +12487,51 @@ ours 5.88 / 6.69 / 7.61 against C's 8.16 / 8.26 / 8.79.
 - **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/
   ./elf/out/strbuild.elf` against `gcc -O2 -static elf/bench/strbuild.c`.
 
-### F-148 / C-181, C-183: the record loop is store-to-load bound, and the instruction work is spent
+### F-158: the record gap is real, the five cycles were not (supersedes F-148's arithmetic)
+
+**Correct, from the second peer strike (grok, `.pulsare/SCORE-records.md`), verified here.**
+This was the one claim the review brief deliberately withheld as "measured, not inferred."
+It was inferred.
+
+Re-measured on this tree, `taskset -c 0`, three runs, 2,000,000 iterations:
+
+| | published in F-148 | measured now |
+|---|---|---|
+| `rec` | 17 ins, 6.20 cyc | **16.00 ins, 6.04-6.41** |
+| `rec1` | 15 ins, 2.67 cyc | **14.00 ins, 2.34-2.37** |
+| `recflat` | 9 ins, 1.91 cyc | **8.00 ins, 1.50** |
+
+The instruction counts are stale by one each: C-188 removed an instruction from every counted
+loop and the record trio was never re-measured. **The gap is 3.9 cycles**, and the pair F-148
+quotes -- 6.20 minus 2.67 -- is **3.53**. It was reported as "about five."
+
+**And "store-to-load forward" names an event that did not happen.**
+`cpu_core/ld_blocks.store_forward` reads **0**. Nothing was blocked. A latency figure was
+attached to a microarchitectural mechanism that was never measured, derived from a
+subtraction that was never performed.
+
+**The split repeated F-157's error.** F-148 priced the two extra instructions at `rec1`'s IPC
+(~0.8 cycles) and called the remainder (~2.25) the forward. That IPC belongs to a loop whose
+carried chain does not contain the load. The load is the thing that changes the chain; it
+cannot be costed at the rate of the schedule that lacked it.
+
+**What survives, without a number attached.** `rec` carries a loop-carried store and reload
+of one qword: `slot_set_own` writes `[rax+8]` one instruction before `ret`, and the next
+iteration loads `[rbx+8]` and feeds it to the following call's argument. `rec1` performs the
+store and never reloads it. That dependence is visible in the instruction stream and needs no
+latency claim. Both loops also contain a `call`/`ret` forward every iteration that costs
+nothing measurable -- because it is not on the value chain, which is the whole distinction.
+
+`rec` and `rec1` are also not the same program with a load deleted: they compute different
+answers (F-146), and the instruction gap is two, not "the field read."
+
+**The prize for scalar replacement**, stated as measurements rather than a derivation: `rec`
+is at 6.0-6.4 cycles and `recflat` -- the same loop with the accumulator in a register -- is
+at 1.50. Those are the two ends, measured in one sitting. Nothing in between is claimed.
+
+- **Class:** Correct. C-181 and C-183 stand; F-148's numbers and its mechanism do not.
+
+### F-148 (numbers SUPERSEDED by F-158): the record loop is store-to-load bound, and the instruction work is spent
 
 The same decomposition F-147 did for strings, for `elf/bench/rec.wat`. Three of our own
 programs and the C control, pinned, `taskset -c 0`:
