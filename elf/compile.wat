@@ -1,3 +1,4 @@
+
 ;; elf/compile.wat — a compiler from wat source to a native x86-64 Linux executable, in wat.
 ;;
 ;; `elf/hello.wat` emits a binary this file's author chose. This one is given a wat PROGRAM and
@@ -159,570 +160,11 @@
 (:wat::load-file! "lib/prim.wat")
 (:wat::load-file! "lib/asm.wat")
 (:wat::load-file! "lib/reader.wat")
-
-;; ---------------------------------------------------------------- the runtime
-;;
-;; Twenty-three routines, 1958 bytes, assembled as ONE block so they can call each other -- which is why
-;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
-;; for, and `buf_put` is the part libc calls stdio.
-
-;; `print_i64(rax)`, 87 bytes: sign handling, a divide-by-ten loop building digits
-;; backwards ON THE STACK (so the segment never needs to be writable), then `buf_put`.
-(:wat::core::defn :c::rt-print-i64 [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec20488d75ffc6060a4d31c04885c0790a48f7d849c7c001"
-    "00000048c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d"
-    "85c0740648ffcec6062d488d55ff4829f248ffc2e865ffffffc9c3"))
-
-;; `str_cat_own`, 86 bytes -- `concat` where the compiler has proved the left operand is a last
-;; use. The same two proofs `vec_conj_own` needs, for the accumulator `:c::emit` is built out of.
-;; A String is `[rc:8][len:8][bytes, padded to 8]`, so appending in place costs NOTHING while the
-;; padding has room and one bump when it does not.
-(:wat::core::defn :c::rt-str-cat-own [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f8010f8595ffffff4989c94c8b004d8b114d89c34d01d3498d500f"
-    "480fbdca48c7c70200000048d3e7498d53104839fa77124c89184a8d7c00"
-    "08498d71084c89d1f3a4c34c89c9e951ffffff"))
-
-;; `str_cat(rax = a, rcx = b) -> rax`, 97 bytes: the two lengths added, a header written at
-;; the heap top, two byte-at-a-time copy loops, r15 bumped past the result rounded up to eight.
-;; r10 carries the result because rax is the copy loops' scratch byte.
-(:wat::core::defn :c::rt-str-cat [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b004c8b094c8d50084c8d59084c89c04c01c8488d500f480fbdca48c7"
-    "c20200000048d3e24c89f94801d1493b4e087605e8f2fdffff49c7070100"
-    "0000498d57084889024989cf488d7a084c89d64c89c1f3a44c89de4c89c9"
-    "f3a44889d0c3"))
-
-;; `print_str(rax = s)`, 147 bytes. **This routine is wat's EDN escaping, in machine code.**
-;; A quote, a byte loop emitting one byte or two, a quote, a newline, then `buf_put`. The escaped
-;; copy is built at the heap top WITHOUT bumping r15, because nothing allocates while a string is
-;; being printed. Every escape in it was found by asking the interpreter what it printed, because
-;; nothing says so: that is F-120.
-(:wat::core::defn :c::rt-divzero [] -> :wat::core::String
-  (:wat::string::concat
-    "e8f7fdffff4883ec2048b87761743a206469764889042448b86973696f6e"
-    "206279488944240848b8207a65726f0a0000488944241048c7c702000000"
-    "4889e648c7c21600000048c7c0010000000f0548c7c74600000048c7c03c"
-    "0000000f05"))
-
-;; `i64_quot(rax / rcx) -> rax`, guarded. **`idiv` FAULTS rather than flagging** (F-126), so the
-;; divisor is tested before the instruction runs, and `MIN / -1` is `neg`+`jo` because `a / -1`
-;; is `-a` and overflows in exactly the same place.
-;;
-;; Both guards branch OUT of this routine -- to `divzero` and to `ovf` -- and those displacements
-;; used to be hand-counted hex. They are computed now: every routine's address already comes from
-;; the length of what precedes it, so asking the layout at zero gives the distance. Change
-;; `:c::rt-divzero`'s length and this jump follows it.
-(:wat::core::defn :c::rt-i64-quot [] -> :wat::core::String
-  (:wat::core::let
-    [guard     (:c::test-rr (:c::rcx) (:c::rcx))
-     minus-one (:c::cmp-ri (:c::rcx) -1)
-     negate    (:c::neg-r (:c::rax))
-     ;; where each piece lands, as a running sum of the pieces before it
-     here      (:c::at-quot 0)
-     at-je     (:wat::core::+ here (:c::hexlen guard))
-     at-jne    (:wat::core::+ at-je (:wat::core::+ (:c::rel32-size) (:c::hexlen minus-one)))
-     at-jo     (:wat::core::+ at-jne (:wat::core::+ (:c::rel8-size) (:c::hexlen negate)))
-     ;; `divzero` sits immediately before this routine, so its start is ours less its length
-     to-divzero (:c::rt-branch (:c::cc-zero)
-                  (:wat::core::- here (:c::hexlen (:c::rt-divzero)))
-                  (:wat::core::+ at-je (:c::rel32-size)))
-     ;; the `MIN / -1` arm: `a / -1` is `-a`, and it overflows in exactly the same place
-     neg-arm   (:wat::string::concat negate
-                 (:c::rt-branch (:c::cc-overflow) (:c::at-ovf 0)
-                   (:wat::core::+ at-jo (:c::rel32-size)))
-                 (:c::ret))]
-    (:wat::string::concat
-      guard to-divzero minus-one
-      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) neg-arm)
-      neg-arm
-      (:c::cqto) (:c::idiv-r (:c::rcx)) (:c::ret))))
-
-;; `i64_rem(rax %% rcx) -> rax`, guarded the same way. `rem` by -1 is zero for every dividend --
-;; including the one `quot` cannot do -- so this arm needs no overflow check at all.
-(:wat::core::defn :c::rt-i64-rem [] -> :wat::core::String
-  (:wat::core::let
-    [guard     (:c::test-rr (:c::rcx) (:c::rcx))
-     minus-one (:c::cmp-ri (:c::rcx) -1)
-     here      (:c::at-rem 0)
-     at-je     (:wat::core::+ here (:c::hexlen guard))
-     to-divzero (:c::rt-branch (:c::cc-zero)
-                  (:wat::core::- (:c::at-quot 0) (:c::hexlen (:c::rt-divzero)))
-                  (:wat::core::+ at-je (:c::rel32-size)))
-     zero-arm  (:wat::string::concat (:c::xor-rr (:c::rax) (:c::rax)) (:c::ret))]
-    (:wat::string::concat
-      guard to-divzero minus-one
-      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) zero-arm)
-      zero-arm
-      (:c::cqto) (:c::idiv-r (:c::rcx)) (:c::mov-rr (:c::rdx) (:c::rax)) (:c::ret))))
-
-(:wat::core::defn :c::rt-print-str [] -> :wat::core::String
-  (:wat::string::concat
-    "4989c04d8b08498d70084c89ff4d89fac6072248ffc74d31db4d39cb7d5a"
-    "8a063c2274173c5c74133c0a741c3c0974263c0d7430880748ffc7eb35c6"
-    "075c48ffc7880748ffc7eb28c6075c48ffc7c6076e48ffc7eb1ac6075c48"
-    "ffc7c6077448ffc7eb0cc6075c48ffc7c6077248ffc748ffc649ffc3eba1"
-    "c6072248ffc7c6070a48ffc74889fa4c29d24c89d6e84dfdffffc3"))
-
-;; `print_bool(rax)`, 64 bytes: `true` and `false` built on the stack a word at a time, so the
-;; routine needs no data section and no relocation.
-(:wat::core::defn :c::rt-print-bool [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec104885c07414c745f874727565c645fc0a48c7c2050000"
-    "00eb14c745f866616c7366c745fc650a48c7c206000000488d75f8e825ff"
-    "ffffc9c3"))
-
-;; `buf_put(rsi = bytes, rdx = count)`, 70 bytes -- **the thing libc calls stdio.** Bytes go
-;; into a 4 KiB buffer at r14, and the syscall happens once per buffer rather than once per
-;; `println`. If the run would overflow, flush first; if it is bigger than the whole buffer even
-;; when empty, write it straight out. `rep movsb` does the copy in two bytes of code.
-(:wat::core::defn :c::rt-ovf [] -> :wat::core::String
-  (:wat::string::concat
-    "e8d7ffffff4883ec2048b87761743a206936344889042448b8206f766572"
-    "666c6f4889442408b8770a00008944241048c7c7020000004889e648c7c2"
-    "1200000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
-
-(:wat::core::defn :c::rt-buf-put [] -> :wat::core::String
-  (:wat::string::concat
-    "498b06488d0c104881f90010000076265652e86cffffff5a5e4881fa0010"
-    "0000761148c7c70100000048c7c0010000000f05c34831c0498d7e104801"
-    "c74901164889d1f3a4c3"))
-
-;; `flush()`, 36 bytes: write whatever is buffered and empty it. Called before `exit`, before
-;; `fork` and before `clone`, and at the end of the entry stub -- see each for why.
-(:wat::core::defn :c::rt-flush [] -> :wat::core::String
-  (:wat::string::concat
-    "498b164885d2741b498d761048c7c70100000048c7c0010000000f0549c7"
-    "0600000000c3"))
-
-;; `vec_new(rax = count) -> rax`, 21 bytes: bump r15 past a header and count slots, leaving
-;; them uninitialised because the caller is about to fill every one.
-(:wat::core::defn :c::rt-vec-new [] -> :wat::core::String
-  (:wat::string::concat
-    "488d0cc5100000004d89fb4901cb4d3b5e087605e8f4fbffff49c7070100"
-    "00004d8d57084989024d89df4c89d0c3"))
-
-;; `vec_conj(rax = vector, rcx = element) -> rax`, 48 bytes: a longer copy with the element on
-;; the end. `rep movsq` moves the old slots in three bytes of code. This is `conj`, and it is
-;; O(n) every time, which is the same thing the interpreter's Vector does (F-023).
-;; `vec_conj_own`, 52 bytes -- `conj` where the compiler has PROVED the container is a last use.
-;; That plus a reference count of 1 (never stored anywhere durable) plus being the top of the
-;; heap is enough to extend in place, which turns an accumulator loop from O(n^2) into O(n). It
-;; is Rust's `Vec::push` and Clojure's transient, assembled from the two halves neither wat nor
-;; this compiler had alone: the count rules out aliases, last-use rules out later reads. Any of
-;; the three tests failing falls through to the copying `vec_conj` below.
-(:wat::core::defn :c::rt-vec-conj-own [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f0000f8587ffffff49b901000000010000004c3948f8743d488378"
-    "f8010f856cffffff4c8b004a8d54c0084c39fa74054989c9eb564d89fb49"
-    "83c3084d3b5e087605e828f9ffff49890f4d89df498d5001488910c34c8b"
-    "004989c94a8d14c517000000480fbdca48c7c20200000048d3e24e8d1cc5"
-    "200000004939d3770d4e894cc008498d5001488910c34c8b004a8d14c51f"
-    "000000480fbdca48c7c20200000048d3e24d89fb4901d34d3b5e087605e8"
-    "baf8ffff49c7070000000048ba0100000001000000498957084d8d571049"
-    "8d5001498912498d7a08488d70084c89c1f348a54c890f4d89df4c89d0c3"))
-
-(:wat::core::defn :c::rt-varr-new [] -> :wat::core::String
-  (:wat::string::concat
-    "488d0cc5180000004d89fb4901cb4d3b5e087605e8c6fbffff49c7070000"
-    "000049c74708010000004d8d57104989024d89df4c89d0c3"))
-
-(:wat::core::defn :c::rt-node-new [] -> :wat::core::String
-  (:wat::string::concat
-    "4d89fb4981c3100100004d3b5e087605e894fbffff49c707010000004d8d"
-    "570849c70220000000498d7a0848c7c1200000004831c0f348ab4d89df4c"
-    "89d0c3"))
-
-(:wat::core::defn :c::rt-node-copy [] -> :wat::core::String
-  (:wat::string::concat
-    "534889c3e8b8ffffff488d7808488d730848c7c120000000f348a55bc3"))
-
-(:wat::core::defn :c::rt-tree-get [] -> :wat::core::String
-  (:wat::string::concat
-    "5256574889ca488b7008488b78104885f674184889d04889f148d3e84883"
-    "e01f488b7cc7084883ee05ebe34889d04883e01f488b44c7085f5e5ac3"))
-
-(:wat::core::defn :c::rt-tree-push [] -> :wat::core::String
-  (:wat::string::concat
-    "53415441554989cc4c8b28488b50084c8b481049c7c2200000004889d149"
-    "d3e24d39ea7510e83fffffff4c8948084989c14883c205524c89c8e86aff"
-    "ffff4989c04889c34885d274344c89e84889d148d3e84883e01f4989c14a"
-    "8b44cb084885c07407e840ffffffeb05e8fafeffff4a8944cb084889c348"
-    "83ea05ebc74c89e84883e01f4c8964c3085a4d89fb4983c3284d3b5e0876"
-    "05e876faffff49c7070100000049c7470801000000498d4710498d4d0148"
-    "8908488950084c8940104d89df415d415c5bc3"))
-
-(:wat::core::defn :c::rt-tree-from-arr [] -> :wat::core::String
-  (:wat::string::concat
-    "53415441554889c34c8b2b4d31e4e88ffeffff4989c14d89fb4983c3284d"
-    "3b5e087605e823faffff49c7070100000049c7470801000000498d471048"
-    "c7000000000048c74008000000004c8948104d89df4d39ec730f4a8b4ce3"
-    "08e8d9feffff49ffc4ebec415d415c5bc3"))
-
-(:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f0000f85c3feffff4c8b004983f808720c51e87bffffff59e9aefe"
-    "ffff4989ca4a8d14c5200000004d89fb4901d34d3b5e087605e8a4f9ffff"
-    "49c7070000000049c74708010000004d8d4f10498d5001498911498d7908"
-    "488d70084c89c1f348a54c89174d89df4c89c8c3"))
-
-;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax`, 49 bytes: a copy with one slot
-;; replaced. This is `assoc`, for a record field and a vector index alike, since they are the
-;; same layout -- and it is the answer to F-104 in machine code: no positional update, so make
-;; a new one.
-(:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
-  (:wat::string::concat
-    "534c8b004989ca4889d34d89fb4a8d14c5100000004901d34d3b5e087605"
-    "e85ff8ffff49c707010000004d8d4f084d8901498d7908488d70084c89c1"
-    "f348a54d89df4c89c84a895cd0085bc3"))
-
-;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
-;; `[r14+8]` BEFORE it writes anything, and jumps here when it will not fit: flush whatever
-;; stdout had buffered, put "wat: heap exhausted" on stderr, exit 70. That is the difference
-;; between a compiler and a demo -- running out of memory should be a sentence, not a signal.
-(:wat::core::defn :c::rt-oom [] -> :wat::core::String
-  (:wat::string::concat
-    "e8a1feffff4883ec2048b87761743a206865614889042448b87020657868"
-    "6175734889442408b87465640a8944241048c7c7020000004889e648c7c2"
-    "1400000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
-
-;; `str_subs(rax = s, rcx = from, rdx = to) -> rax`, 66 bytes: a new String of the bytes in
-;; between. Sixteen of the 117 occurrences the census counts are this one verb.
-(:wat::core::defn :c::rt-str-subs [] -> :wat::core::String
-  (:wat::string::concat
-    "4989d04929c8488d7c0808498d500f480fbdca49c7c10200000049d3e14d"
-    "89fb4d01cb4d3b5e087605e84cfdffff49c707010000004d8d57084d8902"
-    "4889fe498d7a084d89df4c89c1f3a44c89d0c3"))
-
-;; `str_starts(rax = s, rcx = prefix) -> 0 or 1`, 40 bytes, `repe cmpsb`.
-(:wat::core::defn :c::rt-str-starts [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b014c3b007f1c488d7008488d79084c89c14885c97404f3a6750848c7"
-    "c001000000c34831c0c3"))
-
-;; `str_contains(rax = s, rcx = needle) -> 0 or 1`, 68 bytes: the naive search, which is what
-;; the interpreter's is too at this size.
-(:wat::core::defn :c::rt-str-contains [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b004c8b094d89c24d29ca78324c8d5808488d51084831c04c39d07f22"
-    "4c89de4801c64889d74c89c94885c97409f3a6740548ffc0ebe148c7c001"
-    "000000c34831c0c3"))
-
-;; `i64_to_str(rax = n) -> rax`, 128 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
-;; instead of the output buffer.
-(:wat::core::defn :c::rt-i64-to-str [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec204889ee4d31c04885c0790a48f7d849c7c00100000048"
-    "c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d85c07406"
-    "48ffcec6062d4989e94929f14d8d510f490fbdca49c7c20200000049d3e2"
-    "4d89fb4d01d34d3b5e087605e8c0fcffff49c707010000004d8d57084d89"
-    "0a498d7a084d89df4c89c9f3a44c89d0c9c3"))
-
-;; `str_eq(rax = a, rcx = b) -> 0 or 1`, 40 bytes. **This one closes a silent divergence.**
-;; `(wat.core/= a b)` on two Strings compiled to a machine-word compare, which compares
-;; POINTERS: `(= (concat "ab" "c") (concat "a" "bc"))` answered false where the interpreter
-;; answers true. The type pass knows both operand types, so `=` on two `str` operands now calls
-;; this instead. Nothing had noticed because no program in elf/src compared two strings -- a
-;; reader is the first thing that must.
-(:wat::core::defn :c::rt-str-eq [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b004c3b01751c488d7008488d79084c89c14885c97404f3a6750848c7"
-    "c001000000c34831c0c3"))
-
-;; `die(rax = String)`, 81 bytes: flush whatever stdout had, put the string on stderr with a
-;; newline, exit 70. This is what `assertion-failed!` and a failed `assert-eq` compile to. The
-;; interpreter raises a structured error with a span; a compiled program has neither, so the two
-;; agree on every successful run and differ only on the path that stops the program.
-(:wat::core::defn :c::rt-die [] -> :wat::core::String
-  (:wat::string::concat
-    "4989c2e845feffff498b12498d720848c7c70200000048c7c0010000000f"
-    "054883ec08c604240a48c7c7020000004889e648c7c20100000048c7c001"
-    "0000000f0548c7c74600000048c7c03c0000000f05"))
-
-;; **The last mile: a file, as bytes.** Five routines.
-;;
-;; A compiled program can open and write a file in three syscalls. What it cannot do is call
-;; wat's `:wat::io::` verbs, because those are Rust inside the evaluator -- and it cannot route
-;; around them through a String, because a String is UTF-8 there and a byte array here, so the
-;; two disagree on the first byte above 0x7f, which an ELF header has in its second byte.
-;;
-;; So these are **F-119's contract made concrete**: `prim/read-hex` and `prim/write-hex` have a
-;; wat definition for the interpreter (`elf/lib/prim.wat`) and this implementation for the
-;; compiler, and a program using them still runs both ways. Hex is the carrier for the same
-;; reason the rest of `elf/` uses it: it is the only byte representation a wat String can hold
-;; (F-118).
-;;
-;; They are separate defns so that their ADDRESSES come from their own lengths. They used to be
-;; one blob with `+ 30`, `+ 163` and `+ 220` written into the offset chain by hand -- the same
-;; shape as the `base + 11` that broke every tail call in C-135.
-
-;; `hexval(rax = one ascii hex digit) -> rax = 0..15`, 15 bytes -- `:c::rt-hexchar` run backwards,
-;; and composed the same way. Take off `'0'`; if what is left is still above nine it was a letter,
-;; so take off the seven-character gap as well.
-(:wat::core::defn :c::rt-hexval [] -> :wat::core::String
-  (:wat::core::let [gap (:c::sub-ri (:c::rax) (:c::hex-gap))
-                    max-digit (:wat::core::- (:asm::code-of "9") (:asm::code-of "0"))]
-    (:wat::string::concat
-      (:c::sub-ri (:c::rax) (:asm::code-of "0"))
-      (:c::cmp-ri (:c::rax) max-digit)
-      (:c::jbe-over gap)                                  ;; it was a digit: done
-      gap
-      (:c::ret))))
-
-;; `hexchar(rax = 0..15) -> al`, 15 bytes -- **and the first routine that is INSTRUCTIONS rather
-;; than a hex blob.** A digit is `'0' + n`; a letter is seven further on, because seven ASCII
-;; characters sit between `'9'` and `'a'`. So: below ten, skip the extra; otherwise take both.
-;;
-;; The forward branch needs no label table. Its displacement is the length of the piece it jumps
-;; over, and that piece is the very expression bound to `gap` -- which is how C-169's `:c::sel`
-;; already emits a diamond. Byte-identical to the blob it replaces; `tools/bootstrap.sh` is what
-;; says so, since the old hex is an exact oracle for the new form.
-(:wat::core::defn :c::rt-hexchar [] -> :wat::core::String
-  (:wat::core::let [gap (:c::add-ri (:c::rax) (:c::hex-gap))
-                    ndigits (:wat::string::length "0123456789")]
-    (:wat::string::concat
-      (:c::cmp-ri (:c::rax) ndigits)
-      (:c::jb-over gap)                                   ;; a digit: skip the gap
-      gap
-      (:c::add-ri (:c::rax) (:asm::code-of "0"))
-      (:c::ret))))
-
-;; `prim_write_hex(rax = path, rcx = hex) -> rax = bytes written`. Decodes the hex into a
-;; buffer above the heap top and writes it with open/write/close. **Parks its pointers in r12,
-;; not r11: `syscall` destroys rcx and r11.**
-(:wat::core::defn :c::rt-prim-write-hex [] -> :wat::core::String
-  (:wat::string::concat
-    "5341544989c04989c94d89fa498d70084c89d7498b08f3a4c6070048ffc7"
-    "4989fc498b1148d1ea4889d3498d71084885d2742b480fb606e8a6ffffff"
-    "48c1e0044889c1480fb64601e895ffffff4809c888074883c60248ffc748"
-    "ffca75d548c7c0020000004c89d748c7c64102000048c7c2ed0100000f05"
-    "4989c148c7c0010000004c89cf4c89e64889da0f054989c248c7c0030000"
-    "004c89cf0f054c89d0415c5bc3"))
-
-;; `prim_read_hex(rax = path) -> rax = a String of hex`.
-(:wat::core::defn :c::rt-prim-read-hex [] -> :wat::core::String
-  (:wat::string::concat
-    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
-    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
-    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f84889d04801c0488d480f480f"
-    "bdc948c7c60200000048d3e64c01c6493b76087605e8e3f6ffff4989f749"
-    "c700010000004d8d5008498902498d7a084c89e64885d2742e480fb60648"
-    "89c148c1e804e88ffeffff880748ffc74889c84883e00fe87efeffff8807"
-    "48ffc748ffc648ffca75d24c89d0415cc3"))
-
-;; `io_read_file(rax = path) -> rax = a String of the file bytes`. This is `wat.io/read-file`.
-(:wat::core::defn :c::rt-io-read-file [] -> :wat::core::String
-  (:wat::string::concat
-    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
-    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
-    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f8488d4a0f480fbdc948c7c602"
-    "00000048d3e64c01c6493b76087605e806f6ffff4989f749c70001000000"
-    "4d8d5008498912498d7a084c89e64889d1f3a44c89d0415cc3"))
-
-(:wat::core::defn :c::rt-at [lvl <- :wat::core::i64 n <- :wat::core::i64
-                             hex <- :wat::core::String] -> :wat::core::String
-  (:wat::core::if (:wat::core::>= lvl n) hex ""))
-
-;; **elf/runtime.s is ordered so that every internal call points BACKWARD** -- `buf_put` calls
-;; `flush`, `str_cat` calls `oom`, `vec_conj_own` calls `vec_conj`, and nothing calls anything
-;; defined after it. That makes any PREFIX of the blob a complete runtime, so a program carries
-;; only as much of it as it can reach and every routine's address is still the sum of the
-;; lengths before it. `tools/rt-embed.sh` checks the order on every regeneration.
-(:wat::core::defn :c::runtime [lvl <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat
-    (:c::rt-flush)
-    (:c::rt-at lvl 1 (:c::rt-ovf))
-    (:c::rt-at lvl 2 (:c::rt-buf-put))
-    (:c::rt-at lvl 3 (:c::rt-print-i64))
-    (:c::rt-at lvl 4 (:c::rt-print-bool))
-    (:c::rt-at lvl 5 (:c::rt-oom))
-    (:c::rt-at lvl 6 (:c::rt-die))
-    (:c::rt-at lvl 7 (:c::rt-divzero))
-    (:c::rt-at lvl 8 (:c::rt-i64-quot))
-    (:c::rt-at lvl 9 (:c::rt-i64-rem))
-    (:c::rt-at lvl 10 (:c::rt-print-str))
-    (:c::rt-at lvl 11 (:c::rt-str-cat))
-    (:c::rt-at lvl 12 (:c::rt-str-cat-own))
-    (:c::rt-at lvl 13 (:c::rt-str-subs))
-    (:c::rt-at lvl 14 (:c::rt-i64-to-str))
-    (:c::rt-at lvl 15 (:c::rt-str-starts))
-    (:c::rt-at lvl 16 (:c::rt-str-contains))
-    (:c::rt-at lvl 17 (:c::rt-str-eq))
-    (:c::rt-at lvl 18 (:c::rt-vec-new))
-    (:c::rt-at lvl 19 (:c::rt-varr-new))
-    (:c::rt-at lvl 20 (:c::rt-node-new))
-    (:c::rt-at lvl 21 (:c::rt-node-copy))
-    (:c::rt-at lvl 22 (:c::rt-tree-get))
-    (:c::rt-at lvl 23 (:c::rt-tree-push))
-    (:c::rt-at lvl 24 (:c::rt-tree-from-arr))
-    (:c::rt-at lvl 25 (:c::rt-vec-conj))
-    (:c::rt-at lvl 26 (:c::rt-vec-conj-own))
-    (:c::rt-at lvl 27 (:c::rt-slot-set))
-    (:c::rt-at lvl 28 (:c::rt-hexval))
-    (:c::rt-at lvl 29 (:c::rt-hexchar))
-    (:c::rt-at lvl 30 (:c::rt-prim-write-hex))
-    (:c::rt-at lvl 31 (:c::rt-prim-read-hex))
-    (:c::rt-at lvl 32 (:c::rt-io-read-file))))
-
-;; hex is two characters a byte
-(:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
-  (:wat::core::/ (:wat::string::length h) 2))
-
-;; every entry point from the length of what precedes it, and nothing written in by hand
-(:wat::core::defn :c::at-flush [rt <- :wat::core::i64] -> :wat::core::i64 rt)
-(:wat::core::defn :c::at-ovf [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-flush rt) (:c::hexlen (:c::rt-flush))))
-(:wat::core::defn :c::at-put [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-ovf rt) (:c::hexlen (:c::rt-ovf))))
-(:wat::core::defn :c::at-i64 [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-put rt) (:c::hexlen (:c::rt-buf-put))))
-(:wat::core::defn :c::at-bool [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-i64 rt) (:c::hexlen (:c::rt-print-i64))))
-(:wat::core::defn :c::at-oom [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-bool rt) (:c::hexlen (:c::rt-print-bool))))
-(:wat::core::defn :c::at-die [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-oom rt) (:c::hexlen (:c::rt-oom))))
-(:wat::core::defn :c::at-str [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-rem rt) (:c::hexlen (:c::rt-i64-rem))))
-(:wat::core::defn :c::at-cat [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-str rt) (:c::hexlen (:c::rt-print-str))))
-;; `divzero` is reached only from inside the two division routines, so it needs no entry point
-;; of its own -- only its length, so that what follows it lands where it should
-(:wat::core::defn :c::at-quot [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-die rt)
-    (:wat::core::+ (:c::hexlen (:c::rt-die)) (:c::hexlen (:c::rt-divzero)))))
-(:wat::core::defn :c::at-rem [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-quot rt) (:c::hexlen (:c::rt-i64-quot))))
-(:wat::core::defn :c::at-cat-own [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-cat rt) (:c::hexlen (:c::rt-str-cat))))
-(:wat::core::defn :c::at-subs [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-cat-own rt) (:c::hexlen (:c::rt-str-cat-own))))
-(:wat::core::defn :c::at-tostr [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-subs rt) (:c::hexlen (:c::rt-str-subs))))
-(:wat::core::defn :c::at-starts [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-tostr rt) (:c::hexlen (:c::rt-i64-to-str))))
-(:wat::core::defn :c::at-contains [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-starts rt) (:c::hexlen (:c::rt-str-starts))))
-(:wat::core::defn :c::at-streq [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-contains rt) (:c::hexlen (:c::rt-str-contains))))
-(:wat::core::defn :c::at-vnew [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-streq rt) (:c::hexlen (:c::rt-str-eq))))
-;; a record is built by `vec_new` and a Vector by `varr_new`; the difference is the arm word,
-;; and the compiler knows statically which it is constructing
-(:wat::core::defn :c::at-varr [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-vnew rt) (:c::hexlen (:c::rt-vec-new))))
-;; node_new and node_copy are reached only from inside the tree routines, so they need no entry
-;; point of their own -- only their lengths, so that what follows them lands where it should
-(:wat::core::defn :c::at-tget [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-varr rt)
-    (:wat::core::+ (:c::hexlen (:c::rt-varr-new))
-      (:wat::core::+ (:c::hexlen (:c::rt-node-new)) (:c::hexlen (:c::rt-node-copy))))))
-(:wat::core::defn :c::at-vconj [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-tget rt)
-    (:wat::core::+ (:c::hexlen (:c::rt-tree-get))
-      (:wat::core::+ (:c::hexlen (:c::rt-tree-push)) (:c::hexlen (:c::rt-tree-from-arr))))))
-(:wat::core::defn :c::at-vconj-own [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-vconj rt) (:c::hexlen (:c::rt-vec-conj))))
-(:wat::core::defn :c::at-slot [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-vconj-own rt) (:c::hexlen (:c::rt-vec-conj-own))))
-(:wat::core::defn :c::at-hexval [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-slot rt) (:c::hexlen (:c::rt-slot-set))))
-(:wat::core::defn :c::at-wrhex [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-hexval rt)
-    (:wat::core::+ (:c::hexlen (:c::rt-hexval)) (:c::hexlen (:c::rt-hexchar)))))
-(:wat::core::defn :c::at-rdhex [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-wrhex rt) (:c::hexlen (:c::rt-prim-write-hex))))
-(:wat::core::defn :c::at-rdfile [rt <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::+ (:c::at-rdhex rt) (:c::hexlen (:c::rt-prim-read-hex))))
-
-;; ---------------------------------------------------------------- instructions
-
-(:wat::core::defn :c::mov-rax [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "48b8" (:asm::le n 8)))
-(:wat::core::defn :c::mov-rdi [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "48bf" (:asm::le n 8)))
-(:wat::core::defn :c::mov-rsi [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "48be" (:asm::le n 8)))
-(:wat::core::defn :c::mov-rdx [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "48ba" (:asm::le n 8)))
-;; mov [rbp+disp32], rax   and   mov rax, [rbp+disp32]
-;; ---------------------------------------------------------------- short forms
-;;
-;; x86 encodes a small displacement in one byte and a large one in four, and the same for an
-;; immediate. Every frame access here was four bytes of displacement where one would do, and
-;; every literal was a ten-byte `movabs`.
-;;
-;; **The two-pass technique is why this needed thinking about rather than just doing.** Pass one
-;; compiles with every address zero purely to measure, and pass two must come out the same
-;; length -- so anything whose value CHANGES between the passes has to stay fixed-width. Frame
-;; displacements and source literals do not change: the frame layout and the program text are
-;; the same both times. Addresses do, so `mov-rax` keeps its `movabs` and every call and jump
-;; keeps its rel32.
-(:wat::core::defn :c::disp8? [d <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::and (:wat::core::>= d -128) (:wat::core::<= d 127)))
-
-;; **Every frame access is measured from rsp, not rbp.** The displacement arrives already
-;; adjusted by `:c::fp` -- the caller is the only thing that knows how deep the stack is right
-;; here -- and the opcodes carry a SIB byte, because rsp cannot be a ModRM base without one.
-;; That byte is the price of the frame pointer's register: one more byte per frame access.
-(:wat::core::defn :c::rbp-at [op1 <- :wat::core::String op4 <- :wat::core::String
-                              d <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if (:c::disp8? d)
-    (:wat::string::concat op1 (:asm::le d 1))
-    (:wat::string::concat op4 (:asm::le d 4))))
-
-;; the same, choosing between a frame-pointer form and an rsp form. The rsp opcodes carry a SIB
-;; byte, because rsp cannot be a ModRM base without one -- one byte per frame access, which is
-;; what the register costs.
-(:wat::core::defn :c::at-frame [fp? <- :wat::core::bool
-                                b1 <- :wat::core::String b4 <- :wat::core::String
-                                s1 <- :wat::core::String s4 <- :wat::core::String
-                                d <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if fp? (:c::rbp-at b1 b4 d) (:c::rbp-at s1 s4 d)))
-
-(:wat::core::defn :c::store [d <- :wat::core::i64 fp? <- :wat::core::bool] -> :wat::core::String
-  (:c::at-frame fp? "488945" "488985" "48894424" "48898424" d))
-(:wat::core::defn :c::load [d <- :wat::core::i64 fp? <- :wat::core::bool] -> :wat::core::String
-  (:c::at-frame fp? "488b45" "488b85" "488b4424" "488b8424" d))
-
-;; a source literal into rax: seven bytes when it fits in a sign-extended 32, ten when it does
-;; not. Addresses keep `:c::mov-rax`, which is always ten.
-(:wat::core::defn :c::mov-rax-lit [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if (:c::imm32? n)
-    (:wat::string::concat "48c7c0" (:asm::le n 4))
-    (:c::mov-rax n)))
-;; the registers a Linux syscall takes its arguments in
-(:wat::core::defn :c::mov-r10 [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "49ba" (:asm::le n 8)))
-(:wat::core::defn :c::mov-r8 [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "49b8" (:asm::le n 8)))
-(:wat::core::defn :c::mov-r9 [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "49b9" (:asm::le n 8)))
-(:wat::core::defn :c::mov-rcx [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "48b9" (:asm::le n 8)))
-;; mov rax, [rax+d] -- a field read and an `nth` at a constant index are the same instruction
-(:wat::core::defn :c::load-at [d <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "488b80" (:asm::le d 4)))
-;; mov [rax+d], rcx -- filling a slot of a freshly allocated vector or record
-(:wat::core::defn :c::store-slot [d <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "488988" (:asm::le d 4)))
-(:wat::core::defn :c::mov-rdi-rax [] -> :wat::core::String "4889c7")
-(:wat::core::defn :c::mov-rsi-rax [] -> :wat::core::String "4889c6")
-
-;; and nothing at all when the frame is empty, which is most leaf functions
-(:wat::core::defn :c::sub-rsp [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond
-    ((:wat::core::= n 0) "")
-    ((:c::disp8? n) (:wat::string::concat "4883ec" (:asm::le n 1)))
-    (:else (:wat::string::concat "4881ec" (:asm::le n 4)))))
-(:wat::core::defn :c::add-rsp [n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::cond
-    ((:wat::core::= n 0) "")
-    ((:c::disp8? n) (:wat::string::concat "4883c4" (:asm::le n 1)))
-    (:else (:wat::string::concat "4881c4" (:asm::le n 4)))))
+;; the x86-64 encoder and the support routines every compiled program carries. Neither knows
+;; anything about wat -- no AST, no types, no scopes -- which is why they are separable at all
+;; (C-174). `runtime` depends on `x86`; nothing below depends on anything above.
+(:wat::load-file! "lib/x86.wat")
+(:wat::load-file! "lib/runtime.wat")
 
 ;; `+` and `*` do not care which side an operand came from; `-`, `quot` and `rem` do
 (:wat::core::defn :c::comm-op? [op <- :wat::core::String] -> :wat::core::bool
@@ -940,23 +382,6 @@
 ;; `bit-not` is the one unary member, so it is not a `:c::binop` -- it sits with `not`
 (:wat::core::defn :c::bit-not? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.i64/bit-not" ":wat::i64::bit-not"))
-
-;; **the one string verb that does not allocate** (F-135). A String is `[len:8][bytes...]` and a
-;; non-ASCII literal is refused (F-120), so a character index IS a byte offset here and the whole
-;; verb is one `movzbq`. Reading a character used to mean `(subs s i (+ i 1))`, which allocates a
-;; one-character String and then needs `str_eq` to look at it: 71 instructions a byte.
-;; `movzbq 8(BASE,INDEX,1), %rax` -- the whole verb when both operands are already in
-;; registers, which in a scanning loop they always are. **x86 addresses base-plus-index
-;; directly**, so the five instructions that shuffle them through rax and rcx are not work, they
-;; are ceremony. Index code 4 means "no index" only when REX.X is clear, so r12 is a legal index
-;; here; base code 5 is legal because mod=01 always carries the displacement.
-(:wat::core::defn :c::movzb-sib [base <- :wat::core::i64 index <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat
-    (:c::rex false (:c::rext? index) (:c::rext? base))
-    "0fb6"
-    (:c::modrm 1 0 4)
-    (:asm::u8 (:wat::core::+ (:wat::core::* (:c::rcode index) 8) (:c::rcode base)))
-    "08"))
 
 (:wat::core::defn :c::codeat? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/code-point-at" ":wat::string::code-point-at"))
@@ -1235,221 +660,6 @@
 ;; what keeps rbp available as its frame pointer.
 (:wat::core::defn :c::nregs [] -> :wat::core::i64 4)
 
-;; **0-3 are the callee-saved registers and 4-7 are r8-r11.** The second group is only ever
-;; handed out to a function that makes no returning call (`:c::callfree?`), because nothing else
-;; preserves them -- and for exactly that reason they need no saving in the prologue either.
-;; ---------------------------------------------------------------- registers, by number
-;;
-;; **Everything above this point is a hand-written hex table, and there is a reason it stops
-;; here.** A table has one entry per (operand, register) pair and the tables above are already
-;; eight entries wide; what comes next needs a value moved between ANY two of ten registers, plus
-;; `lea`, plus `cmov`, which is three more tables of a hundred entries. So these two functions
-;; say what a register IS -- its three-bit code and whether it needs the REX extension bit -- and
-;; the encodings are computed from that, which is what `:asm::u8` was for.
-;;
-;; The numbering extends the allocator's: 0-3 are the callee-saved four, 4-7 are r8-r11 (C-165),
-;; and 8 and 9 are rax and rcx, which nothing allocates and everything scribbles on.
-(:wat::core::defn :c::rcode [r <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::cond
-    ((:wat::core::= r 0) 3) ((:wat::core::= r 1) 4) ((:wat::core::= r 2) 5) ((:wat::core::= r 3) 5)
-    ((:wat::core::= r 4) 0) ((:wat::core::= r 5) 1) ((:wat::core::= r 6) 2) ((:wat::core::= r 7) 3)
-    ((:wat::core::= r 8) 0) ((:wat::core::= r 9) 1) (:else 2)))
-(:wat::core::defn :c::rext? [r <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::or (:wat::core::= r 1) (:wat::core::or (:wat::core::= r 2)
-    (:wat::core::and (:wat::core::>= r 4) (:wat::core::<= r 7)))))
-;; **REX names the three operand fields it extends, because that is what it is.** It used to take
-;; two bools called `w` and `b`, where `w` was really REX.R and REX.X had to be computed by hand
-;; at the one site that needed it. `r` extends the ModRM reg field, `x` the SIB index, `b` the
-;; ModRM rm or SIB base. REX.W is always set: everything this compiler emits is 64-bit.
-(:wat::core::defn :c::rex [r <- :wat::core::bool x <- :wat::core::bool
-                           b <- :wat::core::bool] -> :wat::core::String
-  (:asm::u8 (:wat::core::+ 72 (:wat::core::+ (:wat::core::if r 4 0)
-              (:wat::core::+ (:wat::core::if x 2 0) (:wat::core::if b 1 0))))))
-(:wat::core::defn :c::modrm [mod <- :wat::core::i64 reg <- :wat::core::i64
-                             rm <- :wat::core::i64] -> :wat::core::String
-  (:asm::u8 (:wat::core::+ (:wat::core::* mod 64) (:wat::core::+ (:wat::core::* reg 8) rm))))
-
-;; ---------------------------------------------------------------- two operand shapes
-;;
-;; **Every hand-written table below this line is one of these two.** An instruction on two
-;; registers is an opcode plus a ModRM naming them; WHICH operand lands in the `reg` field and
-;; which in `rm` is the opcode's business, not the caller's, so these name the FIELDS rather than
-;; "source" and "destination" -- `add` puts its source in `reg` and `imul` puts its destination
-;; there, and a table that pretends otherwise has to be read twice to be believed.
-(:wat::core::defn :c::rr [opc <- :wat::core::String reg <- :wat::core::i64
-                          rm <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:c::rex (:c::rext? reg) false (:c::rext? rm)) opc
-                        (:c::modrm 3 (:c::rcode reg) (:c::rcode rm))))
-
-;; the other shape: the `reg` field is not a register at all but an opcode EXTENSION -- the
-;; `/0`..`/7` an Intel manual writes after the opcode. `shl` and `sar` are the same byte `d3`
-;; and differ only in this digit.
-(:wat::core::defn :c::rd [opc <- :wat::core::String digit <- :wat::core::i64
-                          rm <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:c::rex false false (:c::rext? rm)) opc
-                        (:c::modrm 3 digit (:c::rcode rm))))
-
-;; rax and rcx by name, so a call site reads as the instruction it is
-(:wat::core::defn :c::rax [] -> :wat::core::i64 8)
-(:wat::core::defn :c::rcx [] -> :wat::core::i64 9)
-(:wat::core::defn :c::rdx [] -> :wat::core::i64 10)
-
-;; ---------------------------------------------------------------- the instructions
-;;
-;; **One function per instruction, each carrying its opcode exactly once.** A bare `"39"` at a
-;; call site is a silent wrong byte when it is mistyped as `"93"` -- it assembles, it links, and
-;; it is only caught if some test happens to execute it. A mistyped NAME is an unresolved
-;; reference before anything runs, which is the same failure moved from runtime to build time.
-;;
-;; Arguments are in the order `objdump` prints, so a call site reads as the line you check it
-;; against. `imul` is the one whose destination rides in the ModRM `reg` field rather than `rm`;
-;; that is hidden here rather than at twenty call sites.
-;; ---------------------------------------------------------------- the stack, and control flow
-;;
-;; The bytes that were bare literals at forty sites. `50`/`58` are `push`/`pop` with the register
-;; in the low three bits of the opcode, same shape as `:c::stack-op` above -- spelled out here
-;; because rax and rcx are not allocator registers and do not have an index to hand it.
-(:wat::core::defn :c::push-rax [] -> :wat::core::String "50")
-(:wat::core::defn :c::pop-rax [] -> :wat::core::String "58")
-(:wat::core::defn :c::pop-rcx [] -> :wat::core::String "59")
-(:wat::core::defn :c::ret [] -> :wat::core::String "c3")
-
-;; **a `jmp` whose displacement is not known yet.** Every one of these is emitted with a zero and
-;; patched once the target address exists, which is why the placeholder is part of the name: a
-;; bare `(:c::jmp-unpatched)` at a call site says nothing about the four bytes being a promise.
-(:wat::core::defn :c::jmp-unpatched [] -> :wat::core::String "e900000000")
-
-(:wat::core::defn :c::add-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "01" src dst))
-(:wat::core::defn :c::sub-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "29" src dst))
-(:wat::core::defn :c::cmp-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "39" src dst))
-(:wat::core::defn :c::and-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "21" src dst))
-(:wat::core::defn :c::or-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "09" src dst))
-(:wat::core::defn :c::xor-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "31" src dst))
-;; `imul %src, %dst` -- the destination is the `reg` field, which is why the arguments swap here
-(:wat::core::defn :c::imul-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "0faf" dst src))
-
-;; the shifts: one opcode, three digits -- /4 shl, /7 sar (sign-filling), /5 shr (zero-filling)
-(:wat::core::defn :c::shl-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 4 dst))
-(:wat::core::defn :c::sar-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 7 dst))
-(:wat::core::defn :c::shr-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 5 dst))
-
-;; `cmp $imm, %dst` and `imul $imm, %src, %rax` -- both pick a short opcode when the immediate
-;; fits in a byte, which is the only thing that varies between their two forms
-(:wat::core::defn :c::cmp-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [short? (:c::disp8? n)]
-    (:wat::string::concat (:c::rd (:wat::core::if short? "83" "81") 7 dst)
-                          (:asm::le n (:wat::core::if short? 1 4)))))
-;; the one-operand forms: a `/digit` and nothing else
-(:wat::core::defn :c::neg-r [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "f7" 3 dst))
-(:wat::core::defn :c::idiv-r [src <- :wat::core::i64] -> :wat::core::String (:c::rd "f7" 7 src))
-(:wat::core::defn :c::test-rr [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::String
-  (:c::rr "85" a b))
-;; sign-extend rax into rdx:rax, which is what `idiv` wants of its dividend
-(:wat::core::defn :c::cqto [] -> :wat::core::String "4899")
-
-;; **a branch to somewhere else in the runtime block.** Both ends are offsets from the same
-;; base, so evaluating the layout at zero gives the distance and the base cancels. `here` is
-;; where the branch ENDS, which is what a relative displacement is measured from.
-(:wat::core::defn :c::rt-branch [cc <- :wat::core::i64 target <- :wat::core::i64
-                                 here <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:c::jcc-rel32 cc) (:asm::le (:wat::core::- target here) 4)))
-(:wat::core::defn :c::cc-zero [] -> :wat::core::i64 4)
-(:wat::core::defn :c::cc-overflow [] -> :wat::core::i64 0)
-;; how much room a branch takes, so an offset can be written as a sum of pieces rather than a
-;; sum of remembered numbers
-(:wat::core::defn :c::rel32-size [] -> :wat::core::i64 6)
-(:wat::core::defn :c::rel8-size [] -> :wat::core::i64 2)
-
-(:wat::core::defn :c::add-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [short? (:c::disp8? n)]
-    (:wat::string::concat (:c::rd (:wat::core::if short? "83" "81") 0 dst)
-                          (:asm::le n (:wat::core::if short? 1 4)))))
-(:wat::core::defn :c::sub-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [short? (:c::disp8? n)]
-    (:wat::string::concat (:c::rd (:wat::core::if short? "83" "81") 5 dst)
-                          (:asm::le n (:wat::core::if short? 1 4)))))
-
-;; **the gap between the digits and the letters, derived rather than written.** `'a'` does not
-;; follow `'9'` in ASCII -- seven punctuation characters sit between them -- and every hex routine
-;; has to step over exactly that distance. Writing `39` means trusting whoever counted; asking
-;; `:asm::code-of` means the number cannot be wrong, because it is computed from the two
-;; characters it is the distance between.
-(:wat::core::defn :c::hex-gap [] -> :wat::core::i64
-  (:wat::core::- (:wat::core::- (:asm::code-of "a") (:asm::code-of "9")) 1))
-
-;; **a forward branch over a piece, where the displacement IS that piece's length.** No label
-;; table is needed when the thing being skipped is an expression: it is right there, so
-;; `:c::hexlen` of it is the displacement. C-169's `:c::sel` already builds its diamond this way.
-(:wat::core::defn :c::br-over [cc <- :wat::core::String body <- :wat::core::String] -> :wat::core::String
-  (:wat::string::concat cc (:asm::le (:c::hexlen body) 1)))
-(:wat::core::defn :c::jb-over [body <- :wat::core::String] -> :wat::core::String
-  (:c::br-over (:c::jcc-rel8 (:c::cc-below)) body))
-(:wat::core::defn :c::jbe-over [body <- :wat::core::String] -> :wat::core::String
-  (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) body))
-
-(:wat::core::defn :c::imul-rri [src <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [short? (:c::disp8? n)]
-    (:wat::string::concat (:c::rr (:wat::core::if short? "6b" "69") (:c::rax) src)
-                          (:asm::le n (:wat::core::if short? 1 4)))))
-
-;; `mov SRC, DST` for any two of them
-(:wat::core::defn :c::mov-rr [src <- :wat::core::i64 dst <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:c::rex (:c::rext? src) false (:c::rext? dst)) "89"
-                        (:c::modrm 3 (:c::rcode src) (:c::rcode dst))))
-
-;; `mov $imm32, DST`
-(:wat::core::defn :c::mov-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:c::rex false false (:c::rext? dst)) "c7"
-                        (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 4)))
-
-;; `lea disp(BASE), DST` -- the arithmetic that sets no flags. `rsp` and `r12` share a code that
-;; means "a SIB byte follows", so those two need one; `rbp` and `r13` share one that means "no
-;; base" only when there is no displacement, and there is always one here.
-(:wat::core::defn :c::lea [base <- :wat::core::i64 dst <- :wat::core::i64
-                           d <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [short? (:c::disp8? d)
-                    c (:c::rcode base)]
-    (:wat::string::concat (:c::rex (:c::rext? dst) false (:c::rext? base)) "8d"
-      (:c::modrm (:wat::core::if short? 1 2) (:c::rcode dst) c)
-      (:wat::core::if (:wat::core::= c 4) "24" "")
-      (:asm::le d (:wat::core::if short? 1 4)))))
-
-;; these two WERE `:c::mov-rr` all along, written out sixteen times
-(:wat::core::defn :c::reg-mov-to [r <- :wat::core::i64] -> :wat::core::String
-  (:c::mov-rr r (:c::rax)))
-(:wat::core::defn :c::reg-mov-from [r <- :wat::core::i64] -> :wat::core::String
-  (:c::mov-rr (:c::rax) r))
-
-;; `push`/`pop` have no ModRM at all: the register rides in the low three bits of the opcode,
-;; and REX.B is the only prefix an extended one needs.
-(:wat::core::defn :c::stack-op [base <- :wat::core::i64 r <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat (:wat::core::if (:c::rext? r) "41" "")
-                        (:asm::u8 (:wat::core::+ base (:c::rcode r)))))
-(:wat::core::defn :c::reg-push [r <- :wat::core::i64] -> :wat::core::String (:c::stack-op 80 r))
-(:wat::core::defn :c::reg-pop [r <- :wat::core::i64] -> :wat::core::String (:c::stack-op 88 r))
-
-;; `cmp $imm, REG` -- the comparison with a register on the LEFT. C-133 taught the right operand
-;; of a binop to come straight from an immediate or the frame; the left one always went through
-;; rax, so every `(if (= i 0) ...)` on a parameter in a register cost a `mov` before the `cmp`
-;; it did not need. C-153 counted three of them in one loop body.
-(:wat::core::defn :c::reg-cmp-imm [r <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:c::cmp-ri r n))
-
-;; which register this operand already lives in, or -1
-;; **`imul` is the one arithmetic instruction with a three-operand form**: `imul $3,%rbx,%rax`
-;; multiplies a register by a literal into a DIFFERENT register, so the `mov` that every other
-;; binop needs to get its left operand into rax is not needed here. `add` and `sub` have no such
-;; form -- `lea` does the arithmetic but sets no flags, and every one of these carries a `jo`.
-(:wat::core::defn :c::imul3 [r <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:c::imul-rri r n))
-
 (:wat::core::defn :c::reg-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "symbol") -1
     (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))))
@@ -1457,13 +667,6 @@
 (:wat::core::defn :c::imm-cmp? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
                    (:c::imm32? (:c::to-int (:c::text pg a) pg))))
-(:wat::core::defn :c::reg-load [r <- :wat::core::i64 d <- :wat::core::i64
-                                fp? <- :wat::core::bool] -> :wat::core::String
-  (:wat::core::cond
-    ((:wat::core::= r 0) (:c::at-frame fp? "488b5d" "488b9d" "488b5c24" "488b9c24" d))
-    ((:wat::core::= r 1) (:c::at-frame fp? "4c8b65" "4c8ba5" "4c8b6424" "4c8ba424" d))
-    ((:wat::core::= r 2) (:c::at-frame fp? "4c8b6d" "4c8bad" "4c8b6c24" "4c8bac24" d))
-    (:else (:c::at-frame fp? "488b6d" "488bad" "488b6c24" "488bac24" d))))
 
 ;; the operand forms, when the right-hand side is one of those registers
 ;; **`OP REG, rax` -- thirty-two hand-written encodings, now four rows.** `add`, `sub` and `cmp`
@@ -1885,7 +1088,7 @@
 ;; every argument but the last pushed; the last computed into rax and LEFT there, because the
 ;; only thing that reads it is `:c::tail-store`'s first store
 (:wat::core::defn :c::push-but-last [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                     pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                     pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                      slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::if (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
@@ -1899,7 +1102,7 @@
 ;; ---------------------------------------------------------------- expressions
 
 (:wat::core::defn :c::expr [a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+                            rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [k (:c::kind a pg)]
     (:wat::core::cond
       ((:wat::core::= k "int") (:c::emit o (:c::mov-rax-lit (:c::to-int (:c::text pg a) pg))))
@@ -1930,7 +1133,7 @@
       (:else (:c::fail "expression" a pg)))))
 
 (:wat::core::defn :c::form [a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+                            rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [ks (:c::kidsof pg a)]
     (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::fail "empty form" a pg)
       (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
@@ -2420,10 +1623,6 @@
     (:wat::core::if (:wat::core::= c "") ""
       (:wat::core::if (:c::cmp? op) (:wat::string::concat c (:c::setcc op) "480fb6c0") c))))
 
-;; an int literal small enough to be an immediate
-(:wat::core::defn :c::imm32? [n <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::and (:wat::core::>= n -2147483648) (:wat::core::<= n 2147483647)))
-
 ;; the one instruction this operand collapses to, or "" if it does not
 (:wat::core::defn :c::direct [op <- :wat::core::String a <- :wat::core::i64 env <- :c::Env
                               pg <- :c::Prog adj <- :wat::core::i64
@@ -2462,14 +1661,14 @@
 ;; poor trade for something this rare. `:c::op-hex` still carries the bare `cqo; idiv` forms and
 ;; nothing reaches them -- the only other caller passes "=".
 (:wat::core::defn :c::arith-emit [op <- :wat::core::String o <- :c::Out
-                                  rt <- :wat::core::i64 dead? <- :wat::core::bool] -> :c::Out
+                                  rt <- :c::Layout dead? <- :wat::core::bool] -> :c::Out
   (:wat::core::cond
     ((:wat::core::= op "quot") (:c::call o (:c::at-quot rt)))
     ((:wat::core::= op "rem") (:c::call o (:c::at-rem rt)))
     (:else (:c::ovf-check op (:c::emit o (:c::op-hex op)) rt dead?))))
 
 (:wat::core::defn :c::ovf-check [op <- :wat::core::String o <- :c::Out
-                                 rt <- :wat::core::i64 dead? <- :wat::core::bool] -> :c::Out
+                                 rt <- :c::Layout dead? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::or dead? (:wat::core::not (:c::ovf? op))) o
     (:c::emit o (:wat::string::concat "0f80"
       (:asm::le (:wat::core::- (:c::at-ovf rt)
@@ -2485,7 +1684,7 @@
 ;; is -1 forever after.
 (:wat::core::defn :c::fold [op <- :wat::core::String ks <- :c::Kids i <- :wat::core::i64
                             o <- :c::Out env <- :c::Env pg <- :c::Prog
-                            rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64
+                            rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64
                             ar <- :wat::core::i64 ab <- :c::Bnd] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
     ;; a one-operand fold never ran a step, so the value is still where it started
@@ -2576,7 +1775,7 @@
 ;; the same shape, with a call where the arithmetic fold has an instruction
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64
+                                rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64
                                 own? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
@@ -2673,24 +1872,6 @@
     ((:wat::core::= op "<") 12) ((:wat::core::= op ">=") 13)
     ((:wat::core::= op "<=") 14) (:else 15)))
 
-;; **negating a condition flips bit zero**, which is not a coincidence -- it is why the ISA pairs
-;; them the way it does: je(4)/jne(5), jb(2)/jae(3), jl(12)/jge(13), jle(14)/jg(15). So the four
-;; jump tables this replaced were one table read four ways.
-(:wat::core::defn :c::negate-cc [cc <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::if (:wat::core::= (:wat::core::rem cc 2) 0)
-    (:wat::core::+ cc 1) (:wat::core::- cc 1)))
-
-;; and the two encodings that carry one: a short displacement rides in the opcode itself, a long
-;; one behind a `0f` escape
-(:wat::core::defn :c::jcc-rel8 [cc <- :wat::core::i64] -> :wat::core::String
-  (:asm::u8 (:wat::core::+ 112 cc)))
-(:wat::core::defn :c::jcc-rel32 [cc <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "0f" (:asm::u8 (:wat::core::+ 128 cc))))
-
-;; the unsigned pair the hex routines need: `below` is 2, and negating it gives `above-or-equal`
-(:wat::core::defn :c::cc-below [] -> :wat::core::i64 2)
-(:wat::core::defn :c::cc-below-eq [] -> :wat::core::i64 6)
-
 (:wat::core::defn :c::jcc [op <- :wat::core::String] -> :wat::core::String
   (:c::jcc-rel32 (:c::cond-code op)))
 
@@ -2709,7 +1890,7 @@
                      (:wat::core::= (:c::text pg a) kept))))
 
 (:wat::core::defn :c::if-cmp [ks <- :c::Kids op <- :wat::core::String o <- :c::Out env <- :c::Env
-                              pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                              pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                               slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let
     [cks (:c::kidsof pg (:wat::core::nth ks 1))
@@ -2783,7 +1964,7 @@
       (:c::patch o8 jmp-at (:asm::le (:wat::core::- (:c::codelen o8) (:wat::core::+ jmp-at 4)) 4)))))
 
 (:wat::core::defn :c::if-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                               rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+                               rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "if arity" a pg)
     (:wat::core::let [cop (:c::cmp-cond (:wat::core::nth ks 1) env pg)]
      (:wat::core::if (:wat::core::not= cop "")
@@ -2933,7 +2114,7 @@
 ;; each element computed and pushed, left to right, BEFORE anything is allocated -- an element
 ;; may itself allocate, and the vector's own bump has to come after all of them
 (:wat::core::defn :c::push-elems [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                   slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-elems ks (:wat::core::+ i 1)
@@ -2964,7 +2145,7 @@
 ;; `(assoc R :field V)` on a record, `(assoc V I X)` on a vector -- the same runtime routine,
 ;; and the only difference is whether the index is a compile-time keyword or an expression
 (:wat::core::defn :c::assoc-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                  pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                   slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "assoc arity" a pg)
     (:wat::core::if (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "keyword")
@@ -2995,7 +2176,7 @@
 ;; is the assertion's own SOURCE TEXT, which the compiler has and the interpreter's error does
 ;; not put anywhere as legible.
 (:wat::core::defn :c::asserteq-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out
-                                     env <- :c::Env pg <- :c::Prog rt <- :wat::core::i64
+                                     env <- :c::Env pg <- :c::Prog rt <- :c::Layout
                                      tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::let
     [str? (:wat::core::and (:wat::core::= (:c::type-of (:wat::core::nth ks 1) env pg) "str")
@@ -3012,7 +2193,7 @@
     (:c::emit o8 (:c::mov-rax 0))))
 
 (:wat::core::defn :c::vec-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "Vector form" a pg)
     (:wat::core::let
@@ -3036,7 +2217,7 @@
             (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 fi)))) 8) a pg)))))
 
 (:wat::core::defn :c::rec-form [ks <- :c::Kids a <- :wat::core::i64 r <- :c::Rec o <- :c::Out
-                                env <- :c::Env pg <- :c::Prog rt <- :wat::core::i64
+                                env <- :c::Env pg <- :c::Prog rt <- :c::Layout
                                 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::rem (:wat::core::length ks) 2) 1)
     (:c::fail "record constructor" a pg)
@@ -3048,7 +2229,7 @@
 
 ;; the values sit at odd indices after the keywords: 2, 4, 6...
 (:wat::core::defn :c::rec-vals [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::rec-vals ks (:wat::core::+ i 2)
@@ -3063,7 +2244,7 @@
 ;; A `cond` that falls off the end answers zero, which is what `nil` compiles to.
 
 (:wat::core::defn :c::cond-form [ks <- :c::Kids i <- :wat::core::i64 a <- :wat::core::i64 o <- :c::Out
-                                 env <- :c::Env pg <- :c::Prog rt <- :wat::core::i64
+                                 env <- :c::Env pg <- :c::Prog rt <- :c::Layout
                                  tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::emit o (:c::mov-rax 0))
     (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
@@ -3087,7 +2268,7 @@
 ;; wat's rule and also the cheapest: the deciding value is already in rax, so the short circuit
 ;; is one conditional jump to the end and nothing to load.
 (:wat::core::defn :c::and-form [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::- (:wat::core::length ks) 1))
     (:c::expr (:wat::core::nth ks i) o env pg rt tb slot tc)
@@ -3099,7 +2280,7 @@
       (:c::patch o3 at (:asm::le (:wat::core::- (:c::codelen o3) (:wat::core::+ at 4)) 4)))))
 
 (:wat::core::defn :c::or-form [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                               pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                               pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::- (:wat::core::length ks) 1))
     (:c::expr (:wat::core::nth ks i) o env pg rt tb slot tc)
@@ -3115,7 +2296,7 @@
 (:wat::core::defrecord :c::BindR [o <- :c::Out  env <- :c::Env  slot <- :wat::core::i64])
 
 (:wat::core::defn :c::bind-each [bs <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                 pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                 pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64] -> :c::BindR
   (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) (:c::BindR :o o :env env :slot slot)
     (:wat::core::let
@@ -3149,7 +2330,7 @@
                      (:c::Bnd/lo b) (:c::Bnd/hi b))))))
 
 (:wat::core::defn :c::let-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+                                rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::fail "let arity" a pg)
     (:wat::core::let [bs (:c::kidsof pg (:wat::core::nth ks 1))]
       (:wat::core::if (:wat::core::not= (:wat::core::rem (:wat::core::length bs) 2) 0) (:c::fail "let bindings" a pg)
@@ -3304,7 +2485,7 @@
 ;; a sequence of forms; the last one's value is the value of the whole, and every form before it
 ;; gives its allocations back
 (:wat::core::defn :c::seq [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                           rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+                           rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [a (:wat::core::nth ks i)
@@ -3319,7 +2500,7 @@
 ;; ---------------------------------------------------------------- println
 
 (:wat::core::defn :c::print-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                  rt <- :wat::core::i64 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+                                  rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "println arity" a pg)
     (:wat::core::let [arg (:wat::core::nth ks 1)
                       ty (:c::type-of arg env pg)]
@@ -3342,7 +2523,7 @@
 
 ;; nil renders as four bytes and never varies, so it is written straight out of the stack rather
 ;; than costing the output a runtime routine: `mov dword [rsp], "nil\n"` and one write.
-(:wat::core::defn :c::print-nil [o <- :c::Out rt <- :wat::core::i64] -> :c::Out
+(:wat::core::defn :c::print-nil [o <- :c::Out rt <- :c::Layout] -> :c::Out
   (:wat::core::let
     [o1 (:c::emit o (:wat::string::concat
           (:c::sub-rsp 16)
@@ -3356,7 +2537,7 @@
 ;; literal is its SOURCE TEXT, verbatim. The first version stripped the quotes and unescaped,
 ;; and the differential test against the interpreter caught it on the first run.
 (:wat::core::defn :c::print-string [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64
-                                    rt <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+                                    rt <- :c::Layout pg <- :c::Prog] -> :c::Out
   (:wat::core::let
     [text (:wat::string::concat (:c::text pg a) "\n")
      addr (:wat::core::+ tb (:wat::core::/ (:c::buf-len (:c::Out/tail o)) 2))
@@ -3374,7 +2555,7 @@
 ;; sits at [rbp + 16 + 8*(n-1-i)]. The caller pops them after the call.
 
 (:wat::core::defn :c::push-args [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                 pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                 pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-args ks (:wat::core::+ i 1)
@@ -3456,8 +2637,8 @@
         (:wat::core::if (:wat::core::= r dst) "" (:c::mov-rr r dst))))
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
-        (:c::lea (:c::reg-of (:wat::core::nth ks 1) env pg) dst
-          (:wat::core::- 0 (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)))))))
+        (:c::lea-at (:c::reg-of (:wat::core::nth ks 1) env pg)
+          (:wat::core::- 0 (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)) dst)))))
 
 (:wat::core::defn :c::sel-ok? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
@@ -3513,7 +2694,7 @@
 ;; each argument computed into rax and written straight to its parameter, left to right
 (:wat::core::defn :c::tail-direct [ks <- :c::Kids j <- :wat::core::i64 n <- :wat::core::i64
                                    o <- :c::Out env <- :c::Env pg <- :c::Prog
-                                   rt <- :wat::core::i64 tb <- :wat::core::i64
+                                   rt <- :c::Layout tb <- :wat::core::i64
                                    slot <- :wat::core::i64 nr <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= j n) o
     (:wat::core::if
@@ -3535,7 +2716,7 @@
         (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr)))))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
-                                 pg <- :c::Prog rt <- :wat::core::i64 tb <- :wat::core::i64
+                                 pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)]
     (:wat::core::if (:c::tail-call? tc head n)
@@ -4007,7 +3188,7 @@
 ;; the test and the early return, emitted before there is a frame: compare, branch over, compute
 ;; the value into rax, `ret`. rsp is untouched, so the `ret` needs no epilogue at all.
 (:wat::core::defn :c::wrap-head [bs <- :c::Kids o <- :c::Out env0 <- :c::Env pg <- :c::Prog
-                                 rt <- :wat::core::i64 tb <- :wat::core::i64] -> :c::Out
+                                 rt <- :c::Layout tb <- :wat::core::i64] -> :c::Out
   (:wat::core::let
     [op (:c::cmp-cond (:wat::core::nth bs 1) env0 pg)
      cks (:c::kidsof pg (:wat::core::nth bs 1))
@@ -4032,7 +3213,7 @@
     (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 1)) 1))))
 
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
-                                  rt <- :wat::core::i64 tb <- :wat::core::i64
+                                  rt <- :c::Layout tb <- :wat::core::i64
                                   tail-in <- :c::Buf] -> :c::Out
   (:wat::core::let
     [ks (:c::kidsof pg node)
@@ -4271,7 +3452,7 @@
   [code <- :c::Buf  tail <- :c::Buf
    lens <- (:wat::core::Vector :- [:wat::core::i64])])
 
-(:wat::core::defn :c::pass [pg <- :c::Prog i <- :wat::core::i64 rt <- :wat::core::i64 tb <- :wat::core::i64
+(:wat::core::defn :c::pass [pg <- :c::Prog i <- :wat::core::i64 rt <- :c::Layout tb <- :wat::core::i64
                             acc <- :c::PassR] -> :c::PassR
   (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) acc
     (:wat::core::let
@@ -4313,9 +3494,15 @@
 
 ;; measured, not asserted: every form in the stub is fixed-width, so its length does not depend
 ;; on the addresses it is given. This was written in by hand as 117.
-(:wat::core::defn :c::stub-len [] -> :wat::core::i64 (:c::hexlen (:c::stub 0 0)))
+;; **the stub's length, measured with placeholder addresses** -- every address in it is a fixed
+;; width, so what they point at cannot change the size. The layout handed in is a real one built
+;; at base 0 rather than a vector of the one index the stub happens to read today: this is called
+;; twice per compile, so the cost is nothing, and it cannot go wrong when the stub grows a second
+;; runtime call.
+(:wat::core::defn :c::stub-len [] -> :wat::core::i64
+  (:c::hexlen (:c::stub 0 (:c::layout 0))))
 
-(:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
                 :fpr false)
@@ -4777,8 +3964,9 @@
      ;; the calls that become `let`s, before either pass sees a node
      pg0 (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
 
-     ;; PASS ONE: nothing has an address yet, and nothing needs one
-     p1 (:c::pass pg0 0 0 0 (:c::empty-pass))
+     ;; PASS ONE: nothing has an address yet, and nothing needs one -- but every instruction
+     ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0
+     p1 (:c::pass pg0 0 (:c::layout 0) 0 (:c::empty-pass))
      code-total (:c::total (:c::PassR/lens p1) 0 0)
 
      ;; now every address follows from the lengths
@@ -4786,7 +3974,9 @@
             (:wat::core::+ (:asm::entry) (:c::stub-len)) (:wat::core::Vector :- [:c::Fn]))
      rt-addr (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len)) code-total)
      lvl (:c::rt-level pg0)
-     tail-base (:wat::core::+ rt-addr (:c::hexlen (:c::runtime lvl)))
+     ;; **once, here** -- every `(:c::at-X rt)` downstream is now an index into this (F-137)
+     rt (:c::layout rt-addr)
+     tail-base (:wat::core::+ rt-addr (:c::hexlen (:c::runtime lvl rt)))
      ;; either spelling of the entry point, because a program is allowed to be written in
      ;; either -- and this compiler's own source happens to use the keyword one
      main-clj (:c::fn-addr pg1 "user/main" 0)
@@ -4794,9 +3984,9 @@
                  (:c::fn-addr pg1 ":user::main" 0))
 
      ;; PASS TWO: now they do
-     p2 (:c::pass pg1 0 rt-addr tail-base (:c::empty-pass))
-     text (:wat::string::concat (:c::stub main-addr rt-addr) (:c::buf-str (:c::PassR/code p2))
-            (:c::runtime lvl))
+     p2 (:c::pass pg1 0 rt tail-base (:c::empty-pass))
+     text (:wat::string::concat (:c::stub main-addr rt) (:c::buf-str (:c::PassR/code p2))
+            (:c::runtime lvl rt))
      written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)

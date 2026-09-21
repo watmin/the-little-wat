@@ -7,13 +7,15 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-20, HEAD 6d82b4b+)
+## elf/ — the live queue (2026-09-20, HEAD 819be1c)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** this was written against **HEAD `6d82b4b`** plus F-132/F-133/F-134/C-171.
+**Freshness probe:** written against **HEAD `819be1c`**. `git log --oneline -1` must print that
+sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
+line below, and read the newest entries before you move.
 
 **THE TOOLCHAIN MOVED.** `elf/` now measures against wat-rs branch **`the-little-wat`** (commit
 `7dee55858`), not `main` — it carries clj's seven bitwise ops, which C-171 needed and which do not
@@ -56,7 +58,36 @@ where `a+(b+c)` does not.
    forbids it outright. **When a C compiler is ahead, check what semantics bought it** before
    treating the gap as our defect.
 
+### The compiler is three files now (C-174)
+
+`elf/compile.wat` 4,055 · `elf/lib/x86.wat` 498 · `elf/lib/runtime.wat` 637. Cut where `partire`
+found the seams, not by size. **Read the module you need, not the file**: an instruction or an
+addressing mode is `lib/x86.wat`; a support routine or a heap layout is `lib/runtime.wat`;
+everything about the wat dialect is `compile.wat`. Neither lower module names `:c::Prog`,
+`:c::Env`, `:c::Out`, `:c::Kids` or `:c::Bnd` — that grep returning 0 is what makes the seam real,
+so keep it at 0.
+
+### In flight (2026-09-20)
+
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Ten done
+(`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
+`vec-new`, `varr-new`); 23 left, biggest last (`vec-conj-own` 240 bytes, `tree-push` 199,
+`print-str` 147, `i64-to-str` 138). The encoder carries a full 16-register file, a general
+memory-operand layer (ModRM+SIB, all four addressing shapes) and `rep movsq`/`repz cmpsb`/
+`syscall`.
+**The oracle is exact**: a pure encoder change must leave all 68 binaries byte-identical, and
+`tools/bootstrap.sh` checks that. Every step so far has held.
+Next after the conversion: **breadth on records and memory vs C** — strings were measured in
+F-135; records and memory are still completely unmeasured, and they are what an XDP driver is
+made of.
+
 ### Open — correctness
+
+* **Two `defn`s may share a name.** `:c::buf-len` was defined twice (the compiler's own output
+  buffer, and a new runtime header offset) and nothing objected until a CALL SITE tripped on the
+  arity: `cannot compile wrong number of arguments: (:c::buf-len)`. Whether wat-rs's checker
+  catches a duplicate top-level `defn` at all is **unprobed** — worth a probe, because the failure
+  currently surfaces arbitrarily far from the cause.
 
 * **`999999` as "name not found"** and the **`"vec:"`/`"rec:"` string-tagged type encoding**
   (C-139). A magic number where an `Option` belongs, and a record wearing a string. C-170 declined
@@ -129,7 +160,10 @@ calling convention and a spill slot, both measured and reverted · `C-164` the t
 · `C-165` eight registers, cycle-neutral · `C-166` the dominating comparison · `C-167` the branch
 that was two branches · `F-129`/`C-168` the inline cliff and the double-stored binding · `C-169`
 `cmov` measured and rejected · `F-130`/`F-131` the price of trapping arithmetic and the refutation
-of strength reduction · `C-170`/`R-006` bounds, and the crash that timed fast.
+of strength reduction · `C-170`/`R-006` bounds, and the crash that timed fast · `F-132`/`F-133`
+`fib` closed, floor computed · `F-134`/`C-171` the bitwise gate, packets 11.63x -> 2.35x ·
+`F-135`/`C-172` the string gate, scanning 34.83x -> 3.41x · `C-173` the instruction DSL ·
+`F-136`/`C-174` duplicate `defn` names, and the three-module split.
 
 ---
 

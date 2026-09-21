@@ -11755,6 +11755,202 @@ two can be compared in seconds:
 - **Repro:** `tools/rt-disasm.sh` for any routine; `tools/bootstrap.sh` for the byte-identical
   claim.
 
+### F-136: two `defn`s may share a name, and only a call site objects
+
+Adding a runtime header offset called `:c::buf-len` to `elf/compile.wat` — which already had a
+`:c::buf-len` for the compiler's own output buffer, 400 lines away — produced no complaint from
+the definition site. The build failed later, and elsewhere:
+
+```
+compile: cannot compile wrong number of arguments: (:c::buf-len)
+```
+
+**The arity is what caught it, not the duplication.** The old one takes a `:c::Buf`, the new one
+takes nothing; had they taken the same arguments, one would simply have shadowed the other and
+the program would have compiled and run with the wrong function called. Which one wins is not
+stated anywhere.
+
+- **Class:** Fix (wat-rs) — a duplicate top-level `defn` should be refused at the definition, by
+  name, before anything downstream is reached. The failure currently surfaces at an arbitrary
+  distance from its cause, and only when the arities happen to differ.
+- **Unprobed:** whether wat-rs's checker catches this at all, or whether the ELF compiler's own
+  resolver is the only thing that noticed. That probe is owed before the class is called.
+- **Repro:** define `(:wat::core::defn :x::f [] -> :wat::core::i64 1)` twice in one file with
+  different arities; call it.
+
+### C-174: `partire` — the compiler was three modules wearing one name
+
+`elf/compile.wat` had reached 5,193 lines. The question "should this be split, and where?" has a
+ward — `partire` — so it was **cast rather than argued**: a subagent carrying the spell verbatim,
+returning a verdict weighed afterwards against an independent read of the same disk.
+
+**Verdict: SPLIT, three modules, Level 1.** Not because the file was long — partire refuses size
+as an input — but because it held **three different reasons to change**, and two of them were
+scattered across regions up to 1,200 lines apart:
+
+| module | lines | the one decision it hides | tested alone by |
+|---|---|---|---|
+| `elf/lib/x86.wat` | 498 | the x86-64 **encoding** — an instruction, an addressing mode, a REX/ModRM/SIB rule | encode, disassemble, compare |
+| `elf/lib/runtime.wat` | 637 | the **machine code of the support routines** and the **layout of a heap object** | `tools/rt-disasm.sh` |
+| `elf/compile.wat` | 4,055 | **the wat dialect accepted, and how it lowers** | `tools/bootstrap.sh`, `./run.sh elf` |
+
+**The seam is checkable by grep, which is why it is a seam and not a preference.** Neither lower
+module names `:c::Prog`, `:c::Env`, `:c::Out`, `:c::Kids` or `:c::Bnd` — not once — and neither
+calls anything defined above it. The encoder takes registers and numbers and returns hex; the
+runtime takes nothing at all and returns 2 KB of machine code. A layered dependency, not a braid.
+
+**The x86 encoder was in three disjoint stretches**, one of them — `negate-cc`, `jcc-rel8`,
+`jcc-rel32`, `cc-below`, `cc-below-eq` — buried at line 2996, inside `if` codegen, 1,200 lines
+downstream of the rest and reached backwards by both other modules. A maintainer adding an
+instruction had to find all three.
+
+**Refused cuts, recorded so they are not re-proposed:**
+- **the runtime blobs from their `at-*` offset chain.** Each offset is literally
+  `(+ at-prev (hexlen (rt-prev)))` — the chain is *computed from* the blobs. One secret, and the
+  textbook `encode.rs`/`decode.rs` accidental seam.
+- **the vocabulary tables as their own module.** `:c::binop` produces exactly the key `:c::op-hex`
+  dispatches on; one decision cut in two.
+- **the optimisation passes as a module.** Every one walks `:c::Kids`, and the only oracle for any
+  of them is "the binary still matches the interpreter" — testing one drags in all of module 3.
+
+**Weighing the kill.** Two of the three boundaries had been derived independently before the ward
+returned (the runtime region's zero compiler-type references; the encoder's contamination
+beginning at exactly line 1770) and matched. The ward's test evidence cited `elf/runtime.s` and
+`tools/rt-embed.sh` — **checked, both real.** And weighing turned up two things the verdict had
+not:
+- **`:c::vec-data` was dead** — one occurrence in the file, its own definition. It had been added
+  speculatively hours earlier in the same session. Deleted rather than moved; a ward that says
+  "move this" is not asking whether it should exist.
+- **`:c::imm32?` leaked.** "Does this fit a 32-bit immediate" is a fact about the instruction set,
+  not about the program, and it was left behind in the compiler. Moved, and the grep that proves
+  the seam is what found it.
+
+**And the split defeated an existing guard, which had to be fixed in the same motion.**
+`tools/bootstrap.sh` hashes the compiler source and refuses to report on a moving tree (C-173).
+It hashed `elf/compile.wat`. After the split, an edit to `lib/x86.wat` or `lib/runtime.wat`
+between stage 0 and stage 1 would have passed the check silently — the very failure the check
+exists to catch, reintroduced by the refactor meant to make the file easier to edit. It now
+hashes all three.
+
+- **Class:** CLEAN — no behaviour change, and the oracle is exact: `(:wat::load-file! …)` is a
+  compile-time include, so a pure move must leave all 68 binaries byte-identical. It did.
+- **Still open, stated rather than picked:** `:c::hexlen` is hex arithmetic used by all three
+  modules and belongs in `elf/lib/asm.wat` as `:asm::hexlen`. That is a rename across ~15 call
+  sites and was not bundled into a byte-identical move.
+- **Repro:** `tools/bootstrap.sh`; `grep -cE ':c::Prog|:c::Env|:c::Out|:c::Kids|:c::Bnd'
+  elf/lib/x86.wat elf/lib/runtime.wat` → 0, 0.
+
+### F-137: the runtime's address table rebuilt every routine to measure one, and the bootstrap could not see it
+
+C-173 turned the `:c::rt-*` runtime routines from hex string literals into composed
+expressions. Every one of the 68 binaries stayed byte-identical at every step, the fixpoint
+held, and the compiler got **5.19x slower**.
+
+- **Where:** `elf/lib/runtime.wat`, the `:c::at-*` chain. Each entry was
+  `(+ (:c::at-prev rt) (:c::hexlen (:c::rt-prev)))`, so asking ONE routine's address built
+  every routine before it — ~33 of them — and nine of those routines call `at-*` themselves,
+  which re-enters the chain.
+- **Measured** (interleaved, n=6, same program, both exit 0):
+
+  | compiling `elf/src/pvec.wat` (115 lines) | ms |
+  |---|---|
+  | pre-C-173 (`f052888`) | 3,711 |
+  | after C-173 | **19,274** |
+
+  and the per-lookup cost directly: 1 call 1,296 ms, 8 calls 3,277, 16 calls 5,154 — linear at
+  **~250 ms per address lookup**. `pvec`'s extra 15.6 s / 250 ms = ~62 lookups, which is what a
+  vector-heavy 115-line program emits.
+- **It was free before and nobody noticed the shape.** While a routine was a literal string,
+  walking the chain was ~33 string-length operations. Making the routines *computed* turned the
+  same walk into a few hundred encoder calls, and the walk happens once per emitted call site.
+- **The fix — build the offsets once, hand them out by index.** `rt` was an i64 base threaded
+  to 35 call sites and, verified, **never used arithmetically** — only handed to `at-*`. So it
+  became a `:c::Layout` (a Vector of offsets) built in one forward pass; every `at-X` is now
+  `(:wat::core::nth lay N)` and **all 35 call sites are unchanged**.
+  Compiled compiler **1,716 ms -> 562 ms**; fixpoint holds at 183,341 bytes.
+- **And the pass made a convention structural.** Every internal call in the runtime block points
+  backward — the prefix property C-141 needs, which `tools/rt-embed.sh` checked on regeneration.
+  The layout is *accumulated*, so when routine `i` is built the vector holds exactly `0..i`: a
+  reference to a routine defined after it has no value to read. The check became a shape.
+
+**THE ORACLE GAP, which is the real finding.** `tools/bootstrap.sh` compares 68 binaries byte for
+byte and verifies a self-hosting fixpoint. **A 5.19x slowdown passed all of it, green, at every
+intermediate step.** An exact oracle for *bytes* says nothing about *cost*, and C-173's whole
+method — "a pure encoder change must emit byte-identical output" — is blind by construction to
+the thing that regressed. Nothing in this repository would have caught it; the builder noticed
+the wall-clock.
+
+- **Class:** Fix (ours, done) + Extend — the bootstrap should carry a timing floor, or the
+  fixpoint's own compile time should be recorded and compared.
+- **Mistake worth recording.** The retype was a text replace of `rt <- :wat::core::i64`, asserted
+  to match 38 times, and it matched 38 times. Seven of them were **`start`**, which ends in `rt`.
+  The assert checked HOW MANY matched, not WHICH — so a correct count was no evidence at all.
+  The compiler segfaulted; wat's type checker then named all 13 consequences at once, with callee,
+  parameter position, expected type and line. **When the pattern is an identifier, anchor it at a
+  word boundary.**
+- **Also:** a failed `--fast` bootstrap **poisons the seed** — it leaves a broken `compiler.elf`
+  behind, so the next `--fast` fails on a source that is already fixed. Recovery is a full run.
+
+### F-138: `defrecord` field reads built an error message they threw away — and it is not what was slowing US down
+
+F-096 measured a `defrecord` accessor at 6,130 ns against `defstruct`'s 1,219 and called it a
+property of the two aggregates. It is not. **The cost is an error message computed on the success
+path**, and the fix is committed on wat-rs branch `the-little-wat` (`b65d80d14`).
+
+- **Mechanism** (read in `src/declare/register.rs:1089`): a non-generic record's accessor is
+  generated as `Record/field-at (Option/expect (if (= (type self) "<class>") (Some self) None)
+  (string/concat "<prefix>" (type self))) <idx>`. `Option/expect` is `#[wat_intrinsic]`, not
+  `#[wat_special_form]`, so **both** arguments are evaluated — a second `type` call and a string
+  concatenation, built and discarded on every successful read.
+- **Decomposed, ns per read** (min of 3, 20k x 10, empty-loop control of the same shape):
+
+  | | ns |
+  |---|---|
+  | `struct-field` alone | 1,761 |
+  | + the class check | 2,146 |
+  | + the eager message | 8,650 |
+  | the shipped accessor (control) | 9,238 |
+  | **the message made lazy** | **2,211** |
+
+  The check is ~0.4 us; the discarded message is ~6.5 us. `:wat::core::if` IS a special form, so
+  moving the failure expression into the else arm makes it lazy. **4.2x, diagnostic unchanged.**
+- **The EDN constraint costs nothing, and a generic record proves it.** A generic record carries
+  the identical EDN constraint but its accessor parameter is the specific parametric type, so
+  `register.rs` gives it a bare `struct-field`. Measured on the same one-field shape:
+  defstruct 1,969 / **generic record 2,086** / plain record 9,859. **Adding `:- [T]` to a record
+  makes its field reads 5x faster and changes nothing else about it.**
+- **The check should not exist at all.** It is there only because the accessor's parameter is
+  typed `:wat::core::Record` "for backward compat", so the checker admits any record and the
+  runtime re-proves a static fact. Giving it the specific type deletes the branch and the last
+  ~450 ns.
+
+**AND IT DID NOT HELP THIS COMPILER — which is the part worth remembering.** The prediction was
+that the reader's ~1.5 ms per node was accessor-bound: `elf/lib/reader.wat` passes an `:rd::St`
+record through every recursive call, and `elf/compile.wat` has 21 `defrecord`s and 0 `defstruct`s.
+After the fix the reader was **unchanged** (3,547 / 9,194 / 28,850 ms at 40/80/160 KB against
+3,638 / 9,115 / 29,193 before). One `perf` run then answered in thirty seconds what two rounds of
+inference got wrong:
+
+```
+19-31%  core::str::count::do_count_chars
+13-16%  <core::str::iter::Chars>::advance_by
+ 4-10%  Value::clone
+ 2- 4%  Vec<Value>::clone          <- F-023's conj quadratic, near the noise
+```
+
+**35-44% of the time is counting characters and walking to a character index**, and record
+accessors do not appear in the top sixteen. wat measures strings in CHARACTERS and Rust stores
+UTF-8, so `length` is O(n) and any char index is a walk — and `elf/lib/reader.wat` asks
+`(wat.core/>= i (wat.string/length src))` at **seven sites inside scanning loops**, plus
+`(wat.string/subs src i (+ i 1))` as its char-at. Scanning n characters costs n x O(n), twice.
+**The O(n^2) is ours, not the substrate's.** It also explains the scaling that was misread as
+linear earlier: 4x source is 8x time.
+
+- **Class:** Fix (wat-rs, done) + Fix (ours, the reader's hoisted length).
+- **Repro:** `bench/records.wat` for the aggregate gap; the three-arm decomposition and the
+  `perf` invocation are in this entry.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

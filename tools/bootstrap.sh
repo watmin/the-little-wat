@@ -61,10 +61,16 @@ else
 fi
 
 # **the source must not move while this runs.** Stage 0 compiles what is on disk and stage 1
-# compiles it again; edit elf/compile.wat in between and the two stages build DIFFERENT compilers,
+# compiles it again; edit the compiler in between and the two stages build DIFFERENT compilers,
 # which surfaces as a baffling "DIFFER: compiler.elf" with the fixpoint still green. That has now
 # happened twice in one session to someone who knew the rule, so it is a check rather than a rule.
-SRC_SUM=$(sha256sum elf/compile.wat | cut -c1-16)
+#
+# C-174 split the compiler into three files, so this hashes ALL of them -- hashing only
+# compile.wat would let an edit to lib/x86.wat or lib/runtime.wat through, which is this very
+# check defeated by the refactor that was supposed to make the file easier to edit.
+sources () { echo elf/compile.wat elf/lib/*.wat; }
+srcsum () { sha256sum $(sources) | sha256sum | cut -c1-16; }
+SRC_SUM=$(srcsum)
 
 cp elf/out/compiler.elf elf/out/stage1.elf
 chmod +x elf/out/stage1.elf
@@ -93,9 +99,9 @@ for f in "$SNAP"/*.elf; do
 done
 if [ $d -eq 0 ]; then echo "   $n binaries, all byte-identical"; else echo "   $d of $n differ"; fail=1; fi
 
-if [ "$(sha256sum elf/compile.wat | cut -c1-16)" != "$SRC_SUM" ]; then
+if [ "$(srcsum)" != "$SRC_SUM" ]; then
   echo
-  echo "FAIL: elf/compile.wat changed WHILE this ran -- stage 0 and stage 1 compiled different"
+  echo "FAIL: the compiler source changed WHILE this ran -- stage 0 and stage 1 compiled different"
   echo "      sources, so any DIFFER below is that, not a regression. Re-run without editing."
   exit 1
 fi

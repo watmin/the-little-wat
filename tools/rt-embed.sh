@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/rt-embed.sh: assemble elf/runtime.s and write the bytes into elf/compile.wat.
+# tools/rt-embed.sh: assemble elf/runtime.s and write the bytes into elf/lib/runtime.wat.
 #
 # The compiler embeds its runtime as hex string constants (`:c::rt-*`), because a compiled wat
 # program has no assembler and no linker -- the bytes have to be IN the compiler. elf/runtime.s
@@ -7,7 +7,7 @@
 # `nm -n`, slice the binary, paste. That is a step where a typo is a fault at runtime, and the
 # scale-factor error in C-140 was found only because the pipeline happened to print it.
 #
-# Every symbol in runtime.s must have a `:c::rt-<name>` defn in compile.wat, spelled with
+# Every symbol in runtime.s must have a `:c::rt-<name>` defn in runtime.wat, spelled with
 # hyphens; the order in the file must match the order of `:c::runtime`'s concat, because the
 # offsets are derived from the lengths of what precedes each routine.
 set -uo pipefail
@@ -27,7 +27,7 @@ fi
 objcopy -O binary --only-section=.text "$O/rt.o" "$O/rt.bin" || exit 1
 nm -n "$O/rt.o" | awk '$2=="t"{print $1, $3}' > "$O/syms"
 
-python3 - "$O/rt.bin" "$O/syms" elf/compile.wat <<'PY'
+python3 - "$O/rt.bin" "$O/syms" elf/lib/runtime.wat <<'PY'
 import sys, re
 blob = open(sys.argv[1], 'rb').read()
 syms = [(int(a, 16), n) for a, n in (l.split() for l in open(sys.argv[2]))]
@@ -49,13 +49,13 @@ for name, body in pieces:
                      r' \[\] -> :wat::core::String\n(?:.*\n)*?.*?\)\)', re.M)
     m = pat.search(src)
     if not m:
-        sys.exit('rt-embed: no %s in compile.wat for symbol %s' % (defn, name))
+        sys.exit('rt-embed: no %s in runtime.wat for symbol %s' % (defn, name))
     if m.group(0) != new:
         src = src[:m.start()] + new + src[m.end():]
         changed += 1
 
 open(sys.argv[3], 'w').write(src)
-# The prefix property the compiler relies on: elf/compile.wat carries only as much of this blob
+# The prefix property the compiler relies on: elf/lib/runtime.wat carries only as much of this blob
 # as a program can reach, which is sound ONLY while every cross-routine reference points
 # backward and :c::runtime concatenates the routines in the assembled order.
 order = [n for _, n in syms]
