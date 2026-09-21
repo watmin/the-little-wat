@@ -2067,6 +2067,95 @@
         (:c::imax best (:c::occ-sum cks 1 name 0 pg)) pg))))
 
 ;; the parameters of this function that are read at most once on every path
+
+;; ---------------------------------------------------------------- liveness, not mention-counting
+;;
+;; **The question ownership actually asks is "is anything going to READ this after I write it",
+;; and counting mentions is not that question.** `(assoc s :a (+ (:St/a s) i))` names `s` twice,
+;; but the field read is an ARGUMENT to the update: it finishes before the write begins and `s`
+;; is dead afterwards. F-141 measured what the difference costs -- a String builder that is
+;; linear with one mention cannot finish a problem a sixteenth the size with two.
+;;
+;; So: find the one place a name is written, and ask whether anything after it reads the name.
+;; "After" is the subtlety -- the two arms of an `if` are ALTERNATIVES, not successors, and in
+;; both measured cases the extra mentions live in an arm the write does not run with.
+;;
+;; Everything that is not an `if` is treated as sequential, which OVER-estimates liveness and so
+;; is safe: it costs an optimisation, never a correctness.
+
+;; is the node `u` somewhere inside the subtree `n`?
+(:wat::core::defn :c::holds? [pg <- :c::Prog n <- :wat::core::i64 u <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::if (:wat::core::= n u) true
+    (:wat::core::if (:wat::core::not= (:c::kind n pg) "list") false
+      (:c::holds-any? pg (:c::kidsof pg n) 0 u))))
+(:wat::core::defn :c::holds-any? [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                  u <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
+    (:wat::core::if (:c::holds? pg (:wat::core::nth ks i) u) true
+      (:c::holds-any? pg ks (:wat::core::+ i 1) u))))
+
+;; does `name` get read anywhere that runs AFTER `u`, within the subtree `n`?
+(:wat::core::defn :c::live-after [pg <- :c::Prog n <- :wat::core::i64 u <- :wat::core::i64
+                                  name <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= n u) false)
+    ((:wat::core::not= (:c::kind n pg) "list") false)
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg n)]
+        (:wat::core::if (:wat::core::< (:wat::core::length ks) 4) (:c::live-seq pg ks 1 u name)
+          (:wat::core::if (:wat::core::not (:c::if? (:c::text pg (:wat::core::nth ks 0))))
+            (:c::live-seq pg ks 1 u name)
+            ;; `(if cond then else)` -- from the CONDITION either arm may still run; from inside
+            ;; an arm, the other one never does
+            (:wat::core::cond
+              ((:c::holds? pg (:wat::core::nth ks 1) u)
+                (:wat::core::or (:c::live-after pg (:wat::core::nth ks 1) u name)
+                  (:wat::core::> (:wat::core::+ (:c::occ (:wat::core::nth ks 2) name pg)
+                                                (:c::occ (:wat::core::nth ks 3) name pg)) 0)))
+              ((:c::holds? pg (:wat::core::nth ks 2) u)
+                (:c::live-after pg (:wat::core::nth ks 2) u name))
+              ((:c::holds? pg (:wat::core::nth ks 3) u)
+                (:c::live-after pg (:wat::core::nth ks 3) u name))
+              (:else false))))))))
+
+;; children run left to right: whichever one holds `u`, everything to its right follows
+(:wat::core::defn :c::live-seq [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                u <- :wat::core::i64 name <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length ks)) false)
+    ((:c::holds? pg (:wat::core::nth ks i) u)
+      (:wat::core::or (:c::live-after pg (:wat::core::nth ks i) u name)
+        (:wat::core::> (:c::occ-sum ks (:wat::core::+ i 1) name 0 pg) 0)))
+    (:else (:c::live-seq pg ks (:wat::core::+ i 1) u name))))
+
+;; where `name` is WRITTEN -- the receiver of an `assoc`, `conj` or `concat`. -1 for none, -2 for
+;; more than one, because two writes to one name is a shape this does not reason about.
+(:wat::core::defn :c::write-head? [h <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:c::assoc? h) (:wat::core::or (:c::conj? h) (:c::concat? h))))
+(:wat::core::defn :c::mut-site [pg <- :c::Prog n <- :wat::core::i64 name <- :wat::core::String
+                                acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::not= (:c::kind n pg) "list") acc
+    (:wat::core::let
+      [ks (:c::kidsof pg n)
+       hit? (:wat::core::and (:wat::core::>= (:wat::core::length ks) 2)
+              (:wat::core::and (:c::write-head? (:c::text pg (:wat::core::nth ks 0)))
+                (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                  (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))))
+       acc1 (:wat::core::if hit?
+              (:wat::core::if (:wat::core::= acc -1) n -2) acc)]
+      (:c::mut-sites pg ks 0 name acc1))))
+(:wat::core::defn :c::mut-sites [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                 name <- :wat::core::String acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::mut-sites pg ks (:wat::core::+ i 1) name (:c::mut-site pg (:wat::core::nth ks i) name acc))))
+
+;; the whole question: exactly one write, and nothing reads it afterwards
+(:wat::core::defn :c::dead-after-write? [pg <- :c::Prog ks <- :c::Kids start <- :wat::core::i64
+                                         name <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::let [u (:c::mut-sites pg ks start name -1)]
+    (:wat::core::and (:wat::core::>= u 0)
+      (:wat::core::not (:c::live-seq pg ks start u name)))))
+
 (:wat::core::defn :c::linear-of [pv <- :c::Kids i <- :wat::core::i64 ks <- :c::Kids
                                  start <- :wat::core::i64
                                  acc <- (:wat::core::Vector :- [:wat::core::String]) pg <- :c::Prog]
@@ -2074,7 +2163,10 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) acc
     (:wat::core::let [nm (:c::text pg (:wat::core::nth pv i))]
       (:c::linear-of pv (:wat::core::+ i 3) ks start
-        (:wat::core::if (:wat::core::<= (:c::occ-sum ks start nm 0 pg) 1)
+        ;; the cheap case first -- one mention needs no analysis at all -- then the real
+        ;; question, which is whether anything reads the name after it is written (F-141)
+        (:wat::core::if (:wat::core::or (:wat::core::<= (:c::occ-sum ks start nm 0 pg) 1)
+                                        (:c::dead-after-write? pg ks start nm))
           (:wat::core::conj acc nm) acc) pg))))
 
 (:wat::core::defn :c::linear? [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool

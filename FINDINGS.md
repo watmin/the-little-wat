@@ -12200,6 +12200,56 @@ of two checks rather than the only one.
   differential that cleared it.
 
 
+### C-176: ownership asks liveness now, not how many times a name is written down
+
+F-141 measured what mention-counting costs: a String builder that is linear with one mention of
+the accumulator could not finish a problem a sixteenth the size with two. C-176 replaces the test.
+
+**The question is "does anything READ this after I write it".** Three pieces, all in
+`elf/compile.wat`:
+
+  * `:c::mut-site` finds the one place a parameter is the receiver of an `assoc`, `conj` or
+    `concat` -- and answers `-2` for more than one, because two writes to one name is a shape
+    this does not reason about;
+  * `:c::live-after` walks outward from that site asking what runs next;
+  * `:c::live-seq` handles the ordinary case -- children evaluate left to right, so whatever
+    holds the write, everything to its right follows it.
+
+**The whole thing turns on `if` arms being ALTERNATIVES rather than successors.** Both measured
+cases hinge on exactly that:
+
+```clojure
+(if (= i n) (:b::St/a s)                           ;; an arm the write never runs with
+  (:b::step (assoc s :a (+ (:b::St/a s) i)) ...))  ;; and a read that PRECEDES the write
+```
+
+Two mentions, so the old test refused. Under liveness the base-case mention is unreachable from
+the write and the inner read finishes before it: `s` is dead after, and the update is in place.
+
+**Everything that is not an `if` is treated as sequential**, which over-estimates liveness and is
+therefore safe -- it costs an optimisation, never a correctness. After F-142 that direction is
+the default rather than something argued case by case. The cheap path is still tried first, so a
+name mentioned once pays nothing for the analysis.
+
+- **Measured** (`tools/vs-c.sh` sections 9 and 10):
+
+  | | before | after |
+  |---|---|---|
+  | `rec.wat` — accumulating record | 129 ms | **11 ms** |
+  | `strbuild2.wat` — builder, one extra read | **heap exhausted** | **7 ms** |
+  | `strbuild.wat` — builder, one mention | 19 ms | 7 ms |
+
+  `strbuild` and `strbuild2` now agree to the millisecond, which is the regression test: if they
+  ever diverge again, liveness has stopped working.
+
+- **Against C**: records 11 ms against 4, strings 7 against 3. Both were 18.4x and
+  un-finishable this morning.
+- **Verified by the differential, not by byte-identity** -- this changes emitted code, so
+  `tools/elf-run.sh`'s 30 programs agreeing with the interpreter is the oracle, the same one that
+  caught F-142.
+- **Class:** Improve, done.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

@@ -129,8 +129,9 @@ echo "== 9. strings: BUILDING one, 200000 appends (F-141) =="
 gcc -O2 -static -o $B/out_strbuild elf/bench/strbuild.c || fail=1
 # **The load-bearing comparison here has no C compiler in it.** strbuild2 is a copy of strbuild
 # with one extra read of the accumulator -- a read that happens BEFORE the append and cannot
-# observe it. `:c::linear?` decides ownership by counting MENTIONS, so the copy never reaches
-# `str_cat_own` and goes quadratic. A within-language control cannot be optimised away.
+# observe it. Until C-176 that second mention disqualified the name and the copy went quadratic,
+# exhausting the heap where this one finished in 19 ms (F-141). The two now agree, which is the
+# regression test: if they ever diverge again, liveness has stopped working.
 a=$(./elf/out/strbuild.elf); b2=$(./$B/out_strbuild)
 if [ "$a" = "$b2" ]; then
   printf '  %-34s %6s ms   (answer %s)\n' "ours, accumulator named once" "$(best 3 ./elf/out/strbuild.elf)" "$a"
@@ -159,8 +160,8 @@ if [ "$a" = "$b2" ] && [ "$a" = "$c2" ]; then
   printf '  %-34s %6s ms   (named ONCE: slot_set_own fires)\n' "ours, record assoc, C-175" "$(best 5 ./elf/out/rec1.elf)"
   printf '  %-34s %6s ms   (the same loop, nothing allocated)\n' "ours, bare i64" "$(best 5 ./elf/out/recflat.elf)"
   printf '  %-34s %6s ms\n' "C, gcc -O2, struct in registers" "$(best 5 ./$B/out_rec)"
-  printf '  %-34s %s\n' "" "F-140/F-141: the owning path exists now, and the"
-  printf '  %-34s %s\n' "" "accumulating idiom names the record twice so cannot reach it"
+  printf '  %-34s %s\n' "" "C-175/C-176: the owning path, and liveness rather than"
+  printf '  %-34s %s\n' "" "mention-counting, so the accumulating idiom reaches it"
 else
   echo "  FAIL: record '$a', flat '$b2', C '$c2'"; fail=1
 fi
