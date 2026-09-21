@@ -12853,6 +12853,45 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-163: `triple` is closed on the register allocator — not on safety, and not on the count
+
+**Improve, named and not taken. The probe that gated the strike answered it.** F-161
+established that strength reduction is legal under our semantics: `clang -O2` carries the
+same three `jo` we do and does it anyway, 19 uops / 4.51 cycles against our 20 / 4.86. The
+strike was briefed with a probe first, and STOP-1 fired.
+
+**Nine names, eight registers.** A strength-reduced `triple` carries `m3 m5 m7` (the
+counters), `a b c` (the accumulators) and `a2 b2 c2` (the let bindings). `go` has four
+parameters, so `nr = 4` takes rbx/r12/r13/rbp; the body is call-free so `nlr = 3` gives r8-r10
+to the lets; `nscr = 1` leaves r11, which this loop does not use because the `imul` writes the
+let register directly. Eliminating `i` frees rbx. **rbx and r11 are two homes for three
+counters. The third spills.**
+
+**And the reason is not the count -- it is that a dead name keeps its register.**
+`:c::param-env` assigns `:reg (/ i 3)`: purely positional, bound for the whole function, with
+no liveness anywhere in it. So nine names need nine distinct registers. A liveness-based
+allocator sees a peak of about six, because `a` is dead the instant `a2 = a + m3` is born and
+`a2` can have its register. **Clang fits six values in sixteen registers with an allocator.
+We need nine homes for nine names.**
+
+**The two ways out are both already measured and both lost.** Taking r8-r10 from `a2 b2 c2`
+is computing the accumulator in place -- C-189 did exactly that, lost the cycle, and was
+reverted (F-156). Spilling a counter is `elf/bench/triple2.wat`, which F-131 measured: three
+loads, three stores and a `jo` on the decrement. There is no register to put the counter in,
+so there is no strength-reduced `triple` to time.
+
+**What this settles about the board.** The last open loss is closed, and closed on the
+allocator F-150 named -- but for `triple`, not for records. C-193 closed records *without*
+one, which is why F-150's prerequisite claim had to be narrowed. The allocator is the
+prerequisite for the general case, and this is the general case: a loop whose live values
+exceed the positional budget.
+
+- **Class:** Improve. The queue item is a register allocator with liveness, and its first
+  payoff is this loop. Not attempted; the prize is about seven percent of one benchmark and
+  the change is the largest in the compiler.
+- **Repro:** `elf/compile.wat:3122` `:c::param-env` -- `:reg (/ i 3)`, positional, no
+  liveness. `elf/bench/triple2.wat` is the spilled version, already measured by F-131.
+
 ### C-193: a non-escaping record parameter becomes its field — records land on `recflat` exactly
 
 **Fix. The records loss is closed, and it cost a classifier rather than a register
