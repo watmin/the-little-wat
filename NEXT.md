@@ -111,9 +111,28 @@ The builder's ordering (2026-09-20): *"repl is our target after we know strings 
 sound -- we are clear out the hex literals to get our maintainability better before we work on
 capability and then our first real app"*.
 
-**Strings were measured in F-135/C-172 and again in F-139; records have never been measured
-against C at all**, and neither has memory traffic. That is the gap NEXT.md has named since
-F-132 and it is now the front of the queue.
+**RECORDS ARE MEASURED NOW, AND THEY ARE THE GAP (F-140).** `assoc` allocates a new record and
+copies every field -- always. Strings and Vectors each have a last-use ownership path from
+F-127/C-151 (`str_cat_own`, `vec_conj_own`); records have none, and nothing had recorded the
+omission.
+
+  rec.wat (record assoc)     158.90 ms
+  recflat.wat (bare i64)       8.31 ms      <- the identical loop, nothing allocated
+  rec.c (gcc -O2)              5.29 ms
+
+**19.1x, and it is the MEMORY not the instructions**: the instruction count only doubles, but
+2M records at 48 bytes is 91 MB of fresh heap streamed through the cache to carry one changing
+integer -- 501 page faults against 2.
+
+**The fix is `slot_set_own`**, chosen by the same `own?` flag the `concat` and `conj` paths
+already thread (`elf/compile.wat:1370`, `:1804`). The last-use analysis exists; `assoc` was never
+wired to it. **The compiler would be its own first beneficiary** -- `:c::emit` is
+`(assoc (assoc o :code ...) ...)` on the `:c::Out` record, once per instruction emitted.
+
+**Strings still want one measurement**: building a String by repeated `concat` in a loop. That is
+`str_cat_own`'s territory and the path DOES exist, so the question is whether the analysis
+actually fires -- which is the same question F-140 asks about records, pointed at a path that is
+supposed to work.
 
 ### The next objective is a REPL, not an XDP driver (2026-09-20, the builder's call)
 

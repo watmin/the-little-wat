@@ -12050,6 +12050,62 @@ this heap already IS a length in bytes followed by its bytes. Nothing was added 
   tests; `tools/bootstrap.sh` here.
 
 
+### F-140: a record field update allocates and copies — Strings and Vectors have an ownership path, records do not
+
+`assoc` on a record is **always** `slot_set`, which allocates a new record and copies every
+field. The compiler's own header says so -- *"`concat`, `conj` and `assoc` are all copies"* --
+and the asymmetry is the finding:
+
+| aggregate | copying path | ownership fast path |
+|---|---|---|
+| String | `str_cat` | **`str_cat_own`** |
+| Vector | `vec_conj` | **`vec_conj_own`** |
+| **record** | `slot_set` | **none** |
+
+F-127/C-151 gave Strings and Vectors a last-use path -- when the compiler has PROVED the operand
+is a temporary nothing else holds, it extends in place instead of copying. Records never got one,
+and nothing recorded the omission.
+
+- **Where:** `elf/bench/rec.wat` (a four-field record threaded through a loop, one field updated
+  per iteration) against `elf/bench/recflat.wat` -- **the identical loop with the accumulator
+  threaded as a bare i64**. Same arithmetic, same iteration count, same tail call; the only
+  difference is the allocation.
+- **Measured** (2,000,000 iterations, interleaved, best of 9):
+
+  | | wall | vs the i64 loop |
+  |---|---|---|
+  | `rec` — record `assoc` | **158.90 ms** | **19.1x** |
+  | `recflat` — bare i64 | 8.31 ms | — |
+  | `rec.c` — C struct, gcc -O2 | 5.29 ms | 0.64x |
+
+- **IT IS NOT THE INSTRUCTIONS, IT IS THE MEMORY.** `assoc` costs about twenty instructions --
+  a bump, a check, a four-word copy, a store -- so the instruction count only doubles
+  (80,506,209 against 40,853,584). The wall clock is 19x, and the reason is what those
+  instructions touch:
+
+  | | cache references | cache misses | page faults |
+  |---|---|---|---|
+  | `rec` | 1,425,267 | 201,410 | **501** |
+  | `recflat` | 528 | 90 | **2** |
+
+  Two million records at 48 bytes is **91 MB of fresh heap streamed through the cache** to carry
+  one changing integer. The flat loop touches nothing and keeps it in a register.
+
+- **And the compiler does this to itself.** `:c::emit` is
+  `(assoc (assoc o :code ...) ...)` on the `:c::Out` record, once per instruction emitted.
+- **Class:** Improve — `slot_set_own`, chosen by the same `own?` the `concat` and `conj` paths
+  already thread (`elf/compile.wat:1370`, `:1804`). The last-use analysis exists; `assoc` is
+  simply not wired to it.
+
+**A MISTAKE WORTH RECORDING, because it nearly shipped as the headline.** The first C control was
+`for (i...) s.a = s.a + i;` with a literal bound, and it measured **48.43x**. That number was
+garbage: `perf` showed gcc executing ~650,000 instructions for 2,000,000 iterations -- **less than
+one per iteration** -- because it folded the loop into a closed form. The control measured gcc's
+strength reduction and nothing else. F-131 already says *"when a C compiler is ahead, check what
+semantics bought it"*; the same caution is owed when it is ahead by fifty times. The bound comes
+from `argc` now, and the load-bearing comparison is the one with no C compiler in it at all.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

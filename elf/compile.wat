@@ -4068,6 +4068,8 @@
     (:c::compile "elf/bench/fib32.wat" "elf/out/fib32.elf")
     (:c::compile "elf/bench/fibreg.wat" "elf/out/fibreg.elf")
     (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
+    (:c::compile "elf/bench/rec.wat"     "elf/out/rec.elf")
+    (:c::compile "elf/bench/recflat.wat" "elf/out/recflat.elf")
     (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/triple2.wat" "elf/out/triple2.elf")
     (:c::compile "elf/bench/parse.wat"  "elf/out/parse.elf")
