@@ -12852,6 +12852,52 @@ and only after the transform we have not written yet.
 - **Repro:** `taskset -c 0 perf stat -e '{cpu_core/topdown-retiring/,cpu_core/topdown-fe-bound/,
   cpu_core/topdown-be-bound/,cpu_core/slots/,cpu_core/cycles/}' ./elf/out/triple.elf`
 
+### F-156: uops are one term of two, and a cheap uop can be load-bearing
+
+**Correct to F-155.** F-155 established `cycles = uops / (6 x retiring%)` and fitted it to two
+programs. C-189 tested it with a prediction specific enough to be wrong usefully.
+
+**The change.** A `let` binding headed for a tail-call parameter was allocated to THAT
+parameter's register instead of the next free one, so the diamond that selects the next value
+becomes an in-place conditional subtract -- `cmp` fused with its branch, then `lea` -- with no
+`jmp` and no join. Predicted 24 instructions to 21, 20 uops to 17, and about 3.97 cycles.
+
+**The uop half was exact and the cycle half was backwards:**
+
+| | ins | uops | retiring | fe-bound | be-bound | cycles |
+|---|---|---|---|---|---|---|
+| C-188 | 24 | 20.0 | **71.4%** | 14.1% | 16.5% | **4.67** |
+| C-189 | 21 | **17.05** | **58.8%** | 3.5% | 37.6% | **4.80** |
+| `gcc -O2` | 16 | 15.0 | 67.5% | 2.7% | 30.2% | 3.70 |
+
+Twenty-one instructions and 17.05 uops, exactly as forecast. **Cycles went UP**, because the
+model has TWO terms and only one of them was optimised: uops fell fifteen percent and the
+retiring fraction fell seventeen.
+
+**The three instructions removed were `mov %rax,%rN`, and they were doing work.** A
+register-to-register move is eliminated at rename -- no execution port, retires almost free --
+and it DECOUPLES a dependency: `add` into rax then `mov` to r12 lets the next iteration's
+arithmetic start in rax while r12 is still live. `add %rax,%r12` writes the loop-carried
+register directly and serialises against the diamond's `lea`, which also writes it. Front-end
+pressure fell exactly as designed, 14.1% to 3.5%; back-end pressure more than doubled.
+
+So **gcc's advantage is not only fewer uops -- it is fewer uops WHILE retiring at 67.5%.**
+Six attempts on `triple` have now moved one term at the other's expense.
+
+**What this says about the remaining route.** Strength reduction is the one candidate that
+removes uops without rearranging where work lands: it deletes the induction variable rather
+than moving values between registers. Every transform tried so far redistributed work; that
+one subtracts it.
+
+**And a measurement note.** The same binary read 4.67 cyc/it earlier and 5.09 an hour later on
+a thermally loaded laptop. **Uops and the retiring fraction were stable to 1%.** They are the
+quantities to track; cycles are the quantity to report, and only within one sitting.
+
+- **Class:** Correct (the model). C-189 built, measured, reverted -- with two segfaults on the
+  way, both caught by stage 1 rather than by any test.
+- **Repro:** `taskset -c 0 perf stat -e '{cpu_core/topdown-retiring/,cpu_core/topdown-fe-bound/,
+  cpu_core/topdown-be-bound/,cpu_core/slots/}' ./elf/out/triple.elf`
+
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
