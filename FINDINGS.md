@@ -12650,9 +12650,12 @@ ours   a -> add -> mov -> lea -> a         depth 3, and cmov would make it 4
 gcc    a -> add -> lea -> cmov -> a        depth 3, cmov already in it
 ```
 
-gcc can afford `cmov` BECAUSE it has no `mov` to pay for first. So the accumulator model costs
-three instructions directly and three more indirectly, by making the cheaper select
-unaffordable. **Measured, not argued:** C-185 built the cmov select and it went 28 instructions
+gcc can afford `cmov` BECAUSE it has no `mov` to pay for first.
+
+**That explanation is WRONG and F-153 disproves it.** C-186 removed the `mov`, making our
+recurrence the same depth as gcc's, and cmov lost by the same margin anyway. The mechanism
+here is not established; what is measured is the effect. Read F-153 before believing anything
+in this paragraph. **Measured, not argued:** C-185 built the cmov select and it went 28 instructions
 / 4.55 cycles to 25 / **5.82** -- eleven percent fewer instructions for twenty-eight percent
 more cycles, IPC falling 6.16 to 4.30 as the loop stopped being issue-bound and became
 latency-bound. Reverted.
@@ -12686,6 +12689,112 @@ nothing at all in records.
   gcc's measured 3.74. That is a model and is labelled as one.
 - **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/,
   cpu_core/branches/,cpu_core/branch-misses/ ./elf/out/triple.elf`.
+
+### F-153: cmov measured a THIRD time, on codegen that removed the reason it was supposed to fail
+
+**Fix to F-151, which was wrong.** F-151 explained the cmov loss as a chain-depth problem:
+our accumulator model puts `mov %rax,%rN` on the loop-carried path, so our recurrence was one
+link longer than gcc's, and `cmov` could not be afforded where gcc could afford it. C-186
+DELETED that `mov`. The prediction was that cmov would now win.
+
+Measured, pinned, multi-sample, on C-186's codegen:
+
+| `triple` | ins/it | taken br/it | cyc/it |
+|---|---|---|---|
+| branchy (C-186) | 25 | 5.00 | **4.58** |
+| cmov (C-187) | **22** | **2.00** | **5.96** |
+| `gcc -O2` | 16 | 1.00 | 3.70 |
+| `clang -O2` | 16 | 1.00 | 3.65 |
+
+| `loopsum` | ins/it | taken br/it | cyc/it |
+|---|---|---|---|
+| branchy | 11 | -- | **2.64** |
+| cmov | 10 | 2.00 | **3.64** |
+| `gcc -O2` | 6 | 1.00 | 3.04 |
+
+**Every prediction came true except the one that mattered.** Instructions fell to 22 as
+forecast. Taken branches fell to 2.00 as forecast. Cycles rose thirty percent. `loopsum`
+rose thirty-eight percent, reproducing the +34% an earlier session measured before any of
+this codegen existed.
+
+So **F-151's mechanism is falsified**: the chain was shortened and cmov lost by the same
+margin anyway.
+
+**And no model here predicts 5.96.** Twenty-two instructions at six wide is 3.7. Two taken
+branches is about 2. A three-deep recurrence is 3. Three mechanisms have been offered across
+this investigation -- chain depth, issue width, front-end taken-branch throughput -- and none
+of them produces the measured number. **The cause is not established**, and a fourth story
+would be worth less than saying so.
+
+What survives is the sentence the repo already had, which was right before it was improved on:
+
+> A `cmov` turns a control dependence into a DATA dependence, and on a latency-bound loop
+> that is the whole cost -- the branch was predicted perfectly and cost nothing.
+
+`triple` retires **0.000 branch misses an iteration**. A perfectly predicted branch is not
+merely cheap, it is free in a way cmov cannot match: the machine speculates straight past it
+without waiting on the condition. cmov waits on two operands and the flags. That trade does
+not care how our chain compares to gcc's, which is exactly why shortening ours changed
+nothing.
+
+**This is settled now rather than merely measured three times.** `:c::sel` has exactly ONE
+caller, `:c::tail-direct`, whose destination is always a parameter register of a self tail
+call -- so every select it emits feeds the loop recurrence BY CONSTRUCTION. There is no gate
+under which cmov is right there, and no codegen change upstream can create one.
+
+**What gcc's sixteen instructions and one taken branch actually are.** Not cmov. Strength
+reduction: it never computes `i*3`, it keeps three counters and decrements them by 3, 5 and 7,
+which eliminates the induction variable entirely and folds the loop test into a decrement.
+Trapping does not forbid that -- it requires PROVING the multiply cannot overflow, which needs
+loop-range analysis we do not have and which C is exempt from because its signed overflow is
+undefined. That, not the select, is the 1.24x.
+
+- **Class:** Fix (F-151's mechanism). C-187 built, measured, reverted.
+- **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/,
+  cpu_core/br_inst_retired.near_taken/ ./elf/out/triple.elf` against `./elf/out/loopsum.elf`.
+
+
+### F-154: a synthetic shape comparison cannot measure a twenty percent effect -- layout swamps it
+
+**Correct, and it is about method.** F-153 left one candidate for `triple`: rotate the loop so
+the test is at the bottom, which removes an instruction and one of our five taken branches.
+Rather than build it, it was priced first -- the discipline that found `rep movsb` (F-147) and
+that would have prevented both cmov attempts. A C file with the loop body written as inline
+asm, one variant per shape, same work and same chain.
+
+The same UNMODIFIED "ours" loop, measured three times, differing only in what else was in
+the binary:
+
+| binary | cyc/it for the identical loop |
+|---|---|
+| two variants, unaligned | **6.83** |
+| three variants, unaligned | **4.68** |
+| three variants, `.align 64` on each | **6.30 - 7.03** |
+
+**Fifty percent, from code layout alone**, and the alignment directive did not stabilise it --
+it moved everything again. The first reading said rotation wins by 24%; the second said it
+loses by 3%; the third said it wins by 25%. Same source file.
+
+So **loop rotation is UNPRICED** and no recommendation follows from these numbers. To price
+it the change has to be built and measured across many real programs, so that layout averages
+out rather than dominating.
+
+**And this qualifies F-153.** The cmov measurements compared two different builds with
+different layouts, so in principle some of "+30%" could be placement. What rescues that result
+is independent replication: `triple` +30% and `loopsum` +38% this session, and `loopsum` +34%
+in an earlier session on entirely different codegen. Three builds, three layouts, one
+direction, one magnitude. A single-program single-build comparison of a ten percent effect
+would prove nothing, and this entry is the reason to say so out loud.
+
+**What separates the results that held from the ones that did not:** every trustworthy
+measurement today was the same binary sampled repeatedly with an effect far larger than the
+noise -- `rep movsb` was 5.6 cycles of 6.5, unmissable. Every unreliable one was a small
+difference between two builds. The rule this yields: **do not attribute a sub-25% difference
+to a codegen change measured on one program in one build.**
+
+- **Class:** Correct (method). No compiler change.
+- **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
+  is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
