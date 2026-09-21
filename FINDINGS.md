@@ -12300,6 +12300,79 @@ address every iteration.
   both PMUs.
 
 
+### F-144 / C-177: an append is 37 instructions and eleven of them are the compiler talking to itself
+
+F-143 measured 37.0 instructions per append against C's 11.5 and named the capacity
+re-derivation as the cause. Disassembling the loop says the capacity is a THIRD of it. The
+whole append is two pieces and neither of them is mysterious:
+
+```
+CALLER, one iteration (17)               CALLEE str_cat_own, in-place path (20)
+  mov  %r12,%rax     \ cmp could take      cmpq $1,-0x8(%rax)   the share check
+  cmp  %r13,%rax     / r12 directly        jne                  (not taken)
+  jne                                      mov  %rcx,%r9
+  mov  %rbx,%rax                           mov  (%rax),%r8      len a
+  push %rax          \                     mov  (%r9),%r10      len b
+  movabs $0x4006ce   | a LITERAL address   mov  %r8,%r11
+  mov  %rax,%rcx     | spilled through     add  %r10,%r11       newlen
+  pop  %rax          / rax for no reason   lea  0xf(%r8),%rdx   \
+  call str_cat_own                         bsr  %rdx,%rcx       | re-derive the
+  mov  %rax,%rbx                           mov  $0x2,%rdi       | capacity
+  mov  %r12,%rax     \ the +1 round-       shl  %cl,%rdi        /
+  add  $0x1,%rax     | trips through       lea  0x10(%r11),%rdx
+  jo                 | rax and back        cmp  %rdi,%rdx
+  mov  %rax,%r12     /                     ja                   (not taken)
+  mov  %r13,%rax     \ SELF-MOVE:          mov  %r11,(%rax)     the new length
+  mov  %rax,%r13     / r13 -> r13          lea  0x8(%rax,%r8),%rdi
+  jmp                                      lea  0x8(%r9),%rsi
+                                           mov  %r10,%rcx
+                                           rep movsb            <- for ONE byte
+                                           ret
+```
+
+17 + 20 = 37, exactly the measured figure, so nothing is hiding behind the count. The
+inventory of waste:
+
+| | insns | string-specific? |
+|---|---|---|
+| `mov %r13,%rax ; mov %rax,%r13` -- a self-move | 2 | no |
+| `push ; movabs ; mov ; pop` around a literal argument | 3 | no |
+| `mov ; add ; jo ; mov` -- `i+1` round-tripping through rax | 2 | no |
+| `mov %r12,%rax ; cmp %r13,%rax` | 1 | no |
+| `lea ; bsr ; mov ; shl` -- re-deriving the capacity | 3 | **yes** |
+| `call` / `ret` where C has a store | 2 | no |
+
+**Eleven of the thirty-seven are bookkeeping, and only one of the six items is about
+strings.** F-143 pointed at the capacity field because that is the difference a String header
+makes; it is worth three, and the argument protocol is worth six. The other five are in every
+wat loop that calls anything, which is why they come first.
+
+**C-177 takes the self-move.** `:c::tail-direct` evaluated every argument into rax and then
+moved it to its parameter register -- so an argument passed through unchanged round-tripped,
+`mov %r13,%rax ; mov %rax,%r13`. `:c::selv` has carried an "already in place" test since
+C-153, for the arms of a select; the reason it can be used here is that the register file is
+numbered so that the four callee-saved registers ARE parameter indices 0..3. An argument that
+is a register symbol, a small literal or a `reg - imm` now goes straight to its parameter
+register, and when it is that register already it emits nothing.
+
+The safety argument was already paid for, which is the part worth writing down. `tail-direct`
+runs only when `:c::tail-direct?` has proved that no LATER argument mentions parameter `j` --
+which is exactly the condition that makes writing parameter registers in order legal, and
+exactly what stops `(f b a)` from clobbering `a` with `b`. And `:c::selv?` refuses pointer
+types, so the `:c::share` increment the general path applies can never be one this path skips.
+`:c::emit` clears the rax cache unconditionally, so emitting nothing is conservative, not
+stale.
+
+`strbuild`'s loop: **17 instructions to 15.** The compiler binary went the other way, 212,030
+bytes to 212,310 -- the new `cond` arm in the source outweighs the instructions it removes
+from the compiler's own loops. Both numbers are real and they point in opposite directions.
+
+- **Class:** F-144 Improve (five of six items outstanding); C-177 done.
+- **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
+  byte-identical across stages, fixpoint 212,310; `tools/elf-run.sh` 30/30 agreeing with the
+  interpreter, refusals and traps unchanged.
+- **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000 elf/out/strbuild.elf`.
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

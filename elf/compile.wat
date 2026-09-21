@@ -2817,15 +2817,26 @@
                                    rt <- :c::Layout tb <- :wat::core::i64
                                    slot <- :wat::core::i64 nr <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= j n) o
-    (:wat::core::if
+    (:wat::core::cond
+      ;; **an argument that is already a value goes straight into its parameter register** --
+      ;; a register, a small literal, a `reg - imm`. `selv` is the same emitter the diamond's
+      ;; arms use, and it carries the check that matters here: when the argument is the
+      ;; parameter register ALREADY it emits nothing, where the general path below spends
+      ;; `mov %rN,%rax ; mov %rax,%rN` saying so. C-177.
+      ((:wat::core::and (:wat::core::< j nr)
+         (:c::selv? (:wat::core::nth ks (:wat::core::+ j 1)) env pg (:c::Prog/bnds pg)))
+        (:c::tail-direct ks (:wat::core::+ j 1) n
+          (:c::emit o (:c::selv (:wat::core::nth ks (:wat::core::+ j 1)) j env pg))
+          env pg rt tb slot nr))
       ;; **an argument that is a select goes straight into its parameter register**, which is
       ;; where the diamond's last `mov` went anyway
-      (:wat::core::and (:wat::core::< j nr)
-                       (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
-      (:c::tail-direct ks (:wat::core::+ j 1) n
-        (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
-        env pg rt tb slot nr)
-      (:wat::core::let
+      ((:wat::core::and (:wat::core::< j nr)
+                        (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
+        (:c::tail-direct ks (:wat::core::+ j 1) n
+          (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
+          env pg rt tb slot nr))
+      (:else
+       (:wat::core::let
         [o1 (:c::share (:wat::core::nth ks (:wat::core::+ j 1)) env pg
               (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
          o2 (:c::emit o1
@@ -2833,7 +2844,7 @@
                 (:c::store (:c::fp o1 (:wat::core::+ 16
                              (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
                            (:c::Out/fpr o1))))]
-        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr)))))
+        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr))))))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
