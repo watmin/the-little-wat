@@ -2832,6 +2832,34 @@
 ;; register**, so the diamond's closing `mov %rax,%r12` is gone and each arm is one instruction.
 ;; Since `:c::selv` has a length the moment it is built, every displacement here is known without
 ;; patching and both branches are `rel8`.
+;; **`(+ i 1)` where `i` is already the parameter register is `add $1,%r12`.** The general
+;; path evaluates into rax and moves back, four instructions for one:
+;; `mov %r12,%rax ; add $1,%rax ; jo ; mov %rax,%r12`. `:c::selv` gets there in one when the
+;; bounds PROVE no overflow, because then it can use `lea`, which carries no check; this is
+;; the case where the proof is unavailable and the check has to stay. Writing the destination
+;; BEFORE the check is safe because the check aborts -- there is no path on which the
+;; clobbered register is read again. C-180.
+(:wat::core::defn :c::acc-op? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
+        (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))]
+          (:wat::core::and
+            (:wat::core::or (:wat::core::= op "+") (:wat::core::= op "-"))
+            (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth ks 1) env pg) 0)
+                             (:c::imm-cmp? (:wat::core::nth ks 2) pg))))))))
+
+(:wat::core::defn :c::acc-op [a <- :wat::core::i64 dst <- :wat::core::i64 o <- :c::Out
+                              env <- :c::Env pg <- :c::Prog rt <- :c::Layout] -> :c::Out
+  (:wat::core::let
+    [ks (:c::kidsof pg a)
+     op (:c::binop (:c::text pg (:wat::core::nth ks 0)))
+     r (:c::reg-of (:wat::core::nth ks 1) env pg)
+     v (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)
+     mv (:wat::core::if (:wat::core::= r dst) "" (:c::mov-rr r dst))
+     ar (:wat::core::if (:wat::core::= op "+") (:c::add-ri dst v) (:c::sub-ri dst v))]
+    (:c::ovf-check op (:c::emit o (:wat::string::concat mv ar)) rt false)))
+
 (:wat::core::defn :c::sel [a <- :wat::core::i64 dst <- :wat::core::i64 o <- :c::Out
                            env <- :c::Env pg <- :c::Prog] -> :c::Out
   (:wat::core::let [ks (:c::kidsof pg a)
@@ -2880,6 +2908,12 @@
                         (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
         (:c::tail-direct ks (:wat::core::+ j 1) n
           (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
+          env pg rt tb slot nr))
+      ;; the counter step, when no bound was available to make it a `lea`
+      ((:wat::core::and (:wat::core::< j nr)
+                        (:c::acc-op? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
+        (:c::tail-direct ks (:wat::core::+ j 1) n
+          (:c::acc-op (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg rt)
           env pg rt tb slot nr))
       (:else
        (:wat::core::let

@@ -12430,7 +12430,65 @@ becomes ours-against-ours evidence like `strbuild2`.
 - **Class:** F-146 Correct (the scoreboard), C-179 done.
 - **Repro:** `./elf/out/rec.elf` and `./elf/out/rec1.elf` print different numbers.
 
-- **Class:** F-144 Improve (three of six items outstanding); C-177, C-178, C-179 done.
+### F-147 / C-180, C-182: the string loop was never instruction-bound, and `rep movsb` was the whole gap
+
+**Fix, and the most important measurement in this file.** F-144 counted 37 instructions an
+append and listed six items of waste. Taking four of them -- C-177 through C-180 -- removed
+seven instructions. Pinned, `taskset -c 0`, both PMUs, the same methodology F-143 used:
+
+| | ins/append | cyc/append | IPC |
+|---|---|---|---|
+| F-143 baseline | 37.0 | 15.5 | 2.39 |
+| after C-177..C-180 | 30.0 | 15.07 | 1.99 |
+| C, `gcc -O2`, safe append | 11.5 | 8.55 | 1.35 |
+
+**Nineteen percent of the instructions bought under three percent of the cycles.** The loop
+had issue width to spare and every item on F-144's list was spending a resource it was not
+short of -- including the capacity field, which F-143 named as "the real one" and which is
+three more instructions in a loop that does not care about instructions. It comes off the
+queue.
+
+**C is stalling too, at IPC 1.35, which is what makes the gap attributable.** `append` in
+`elf/bench/strbuild.c` is `noinline` and round-trips `len` through memory exactly as
+`str_cat_own` does; neither side is issue-limited, both are waiting on a store-to-load
+forward. So the 6.5-cycle difference is work we do that C does not, and there is only one
+candidate that costs cycles without costing instructions.
+
+**The diagnostic, which cost one file and should have come first:**
+
+```c
+/* identical loop, identical memory chain, two copiers */
+for (i = 0; i < n; i++) { ...; __asm__("rep movsb" ...); len = len + 1; }   /* vs movb */
+```
+
+```
+movb        15.2 ins/it   12.96 cyc/it
+rep movsb   16.9 ins/it   18.58 cyc/it
+```
+
+**5.6 cycles of the 6.5 were one instruction.** `rep movsb` is a string-copy instruction with
+a microcoded startup, being asked to copy ONE byte -- and appending a single character is the
+string-building idiom, so it was the common case.
+
+**C-182** puts a `cmp $1 / jne` in `str_cat_own`'s in-place path and copies the byte with
+`mov (%rsi),%dl ; mov %dl,(%rdi)`. rdx is free there: it carried `newlen + 16` into the
+capacity compare and is dead after it.
+
+| | ins/append | cyc/append | vs C |
+|---|---|---|---|
+| after C-182 | **32.0** | **6.03** | **1.39x AHEAD** |
+
+Instructions went UP by two and cycles fell by sixty percent. Interleaved best of three,
+ours 5.88 / 6.69 / 7.61 against C's 8.16 / 8.26 / 8.79.
+
+- **Class:** Fix. The lesson is the entry: an instruction count is not a cost model, and the
+  cheap experiment that identifies the binding resource belongs BEFORE the codegen work, not
+  after four changes aimed at the wrong one.
+- **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/
+  ./elf/out/strbuild.elf` against `gcc -O2 -static elf/bench/strbuild.c`.
+
+- **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
+  C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
   byte-identical across stages, fixpoint 212,310; `tools/elf-run.sh` 30/30 agreeing with the
   interpreter, refusals and traps unchanged.

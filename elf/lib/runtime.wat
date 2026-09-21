@@ -99,10 +99,23 @@
     [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::vec-ptr)) (:c::heap-arm))
      ;; the copying concat, which both failures hand off to
      to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat lay)))
+     ;; **`rep movsb` is a string instruction being asked to copy one byte.** F-147 measured
+     ;; its startup against a plain byte store in an identical loop: 18.58 cycles an iteration
+     ;; against 12.96, so 5.6 cycles of the 6.5 we were behind C on `strbuild` were this one
+     ;; instruction. Appending a single character is the string-building idiom, so it gets the
+     ;; two instructions that skip the rep entirely. rdx is free here -- it carried
+     ;; `newlen + 16` into the compare above and is dead after it.
+     one (:wat::string::concat
+           (:c::mov-r8m (:c::rsi) 0 (:c::rdx))
+           (:c::mov-mr8 (:c::rdx) (:c::rdi) 0)
+           (:c::ret))
      fit (:wat::string::concat
            (:c::mov-mr (:c::r11) (:c::rax) 0)
            (:c::rm "8d" (:c::rdi) (:c::rax) (:c::r8) 1 (:c::str-data))
            (:c::lea-at (:c::r9) (:c::str-data) (:c::rsi))
+           (:c::cmp-ri (:c::r10) 1)
+           (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) one)
+           one
            (:c::mov-rr (:c::r10) (:c::rcx))
            (:c::rep-movsb)
            (:c::ret))
