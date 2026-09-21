@@ -54,17 +54,44 @@
 ;; The range admits BOTH readings of the width -- a byte is -128..127 signed or 0..255 unsigned,
 ;; and callers use both -- so this catches the value that fits neither, which is the one that
 ;; becomes a different number. This is the check rung: the encoder stops rather than emit it.
+;; **and the reading is the CALLER's fact, not this function's.** The first cut admitted the
+;; union of both ranges, which closed the hole for a value fitting neither and left it open
+;; for the one that started it: 128 at width 1 is a legal unsigned byte and NOT a legal signed
+;; displacement, so `:c::br-over` of a 128-byte body still emitted `eb 80` -- a forward skip
+;; the processor reads as a backward jump of 128. Same split at width 4: a sign-extending
+;; immediate changes meaning at 2147483648, and the union admitted it, so `cmp-ri rax,
+;; 2147483648` assembled as `cmp rax, -2147483648`. `:c::mov-rax-lit` escaped only because it
+;; consults `:c::imm32?`, which is the signed bound, and widens instead.
+;;
+;; Seeing `(n, width)` alone, the function cannot know which reading is wanted. So it does not
+;; guess: `:asm::le` is SIGNED -- displacements, sign-extending immediates, every default --
+;; and a caller that means an unsigned field says so by name.
 (:wat::core::defn :asm::fits? [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::cond
-    ((:wat::core::= width 1) (:wat::core::and (:wat::core::>= n -128) (:wat::core::<= n 255)))
-    ((:wat::core::= width 2) (:wat::core::and (:wat::core::>= n -32768) (:wat::core::<= n 65535)))
+    ((:wat::core::= width 1) (:wat::core::and (:wat::core::>= n -128) (:wat::core::<= n 127)))
+    ((:wat::core::= width 2) (:wat::core::and (:wat::core::>= n -32768) (:wat::core::<= n 32767)))
     ((:wat::core::= width 4) (:wat::core::and (:wat::core::>= n -2147483648)
+                                              (:wat::core::<= n 2147483647)))
+    (:else true)))
+
+(:wat::core::defn :asm::fits-u? [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= width 1) (:wat::core::and (:wat::core::>= n 0) (:wat::core::<= n 255)))
+    ((:wat::core::= width 2) (:wat::core::and (:wat::core::>= n 0) (:wat::core::<= n 65535)))
+    ((:wat::core::= width 4) (:wat::core::and (:wat::core::>= n 0)
                                               (:wat::core::<= n 4294967295)))
     (:else true)))
 
 (:wat::core::defn :asm::le [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::String
   (:wat::core::do
     (:wat::test::assert-eq (:asm::fits? n width) true)
+    (:wat::core::if (:wat::core::>= n 0) (:asm::le-pos n width "")
+      (:asm::le-neg n width ""))))
+
+;; the same bytes, for a field the processor reads without a sign
+(:wat::core::defn :asm::le-u [n <- :wat::core::i64 width <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::do
+    (:wat::test::assert-eq (:asm::fits-u? n width) true)
     (:wat::core::if (:wat::core::>= n 0) (:asm::le-pos n width "")
       (:asm::le-neg n width ""))))
 

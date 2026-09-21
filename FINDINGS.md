@@ -12938,7 +12938,37 @@ be written in. Neither reaches it: `:asm::le` takes two `i64`s and wat has no ty
 "an i64 that fits in one byte", and `rsp` is an ordinary register value. A runtime check is
 the top of this ladder, and the primer says to hold the highest rung reached and say so.
 
-- **Class:** C-190 Fix (hole 1), C-191 Fix (holes 2 and 3). F-160 closed.
+**C-192: the first cut of C-191 was a check that GUESSED, and it let the original bug
+through.** `:asm::fits?` admitted the union of the signed and unsigned ranges. Seeing only
+`(n, width)`, it cannot know which reading a caller wants -- so admitting both did not make it
+permissive, it made it **wrong for every caller half the time**, and the half it got wrong is
+the case F-160 was written about: 128 at width 1 is a legal unsigned byte and NOT a legal
+signed displacement, so `:c::br-len "eb" 128` still emitted `eb 80` = `jmp -128`. Width 4 split
+the same way: `cmp-ri rax, 2147483648` assembled as `cmp rax, -2147483648`, while
+`:c::mov-rax-lit` escaped only because it consults `:c::imm32?`, the signed bound, and widens.
+
+**Worse, this entry defended it.** It recorded "the first test written for this was wrong, not
+the check" about `le 128 1` returning bytes -- and stopped there. The test was wrong AND the
+check was wrong; satisfaction at catching the first closed the question on the second. Found by
+the fifth peer strike (grok), on the one value the entry singled out as correct.
+
+**The repair is not a better range -- it is moving the fact to where it is known.** `:asm::le`
+is SIGNED (displacements, sign-extending immediates, every default); a caller meaning an
+unsigned field writes `:asm::le-u`. That is a rung up: not a check inferring intent, but a name
+at the call site declaring it, where being wrong means calling a different function.
+
+Verified: `le 128 1` aborts, `le-u 128 1` gives `80`, `le-u 256 1` aborts, `br-len "eb" 128`
+aborts while `127` gives `eb7f`, `cmp-ri rax, 2147483648` aborts while `2147483647` gives
+`48 81 f8 ff ff ff 7f`.
+
+**And tightening to signed fired ZERO assertions across 75 programs** -- every existing caller
+was already signed, so the latitude protected nothing and exposed the one case that mattered.
+`:asm::le-u` therefore has no callers today, and is kept deliberately: without it the next
+caller who legitimately needs an unsigned field hits the assert, and the obvious repair from
+inside that moment is to widen `fits?` back to the union -- reintroducing this bug while fixing
+a real failure. The unused half is what keeps the arrangement removed.
+
+- **Class:** C-190, C-191, C-192 Fix. F-160 closed.
 - **Oracle:** fixpoint 218,901; `tools/emitted.sh` 73/73 byte-identical; elf-run 30/30. The
   bytes themselves verified by `llvm-mc -disassemble -triple=x86_64` against the encoder's own
   output -- which is the only check that could have found any of this.
