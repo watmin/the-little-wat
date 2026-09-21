@@ -12853,6 +12853,59 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### C-193: a non-escaping record parameter becomes its field — records land on `recflat` exactly
+
+**Fix. The records loss is closed, and it cost a classifier rather than a register
+allocator.** Struck by grok against BRIEF-scalarize-2; every number below re-measured here
+and the analysis read rather than taken from the report.
+
+| | ins/it | uops/it | cycles/it | |
+|---|---|---|---|---|
+| `rec` before | 16.00 | -- | 6.0-6.4 | |
+| **`rec` after** | **8.00** | **7.00** | **1.503** | |
+| `recflat` | 8.00 | 7.00 | 1.503 | the ceiling, hit exactly |
+| `rec1` | 14.00 | 14.00 | 2.34 | **unchanged -- it returns the record** |
+
+`slots/cycles` 6.00 on all three this sitting. Answers unchanged: `1999999000000`.
+
+**The analysis is a CLASSIFIER, which is what F-162 established the existing three could not
+be composed into.** `:c::use-walk` returns none, one field, or other, for every occurrence of
+a record parameter:
+
+- `(:R/f name)` is a read of that field -- and the record TYPE has to match, not just the
+  accessor shape.
+- `(assoc name :f v)` is a write of that field **only when the assoc is an argument of a tail
+  self-call**. Anywhere else its result is a record and the register no longer holds one.
+- a bare `name` is **other** -- the escape -- except in that same tail-argument position,
+  where the register already holds the field.
+- a self-call **not** in tail position is other: it re-enters the prologue, which still
+  expects a pointer.
+- a function whose return type is a record is left alone entirely.
+- the `:else` arm folds with `as-arg` false, so any unrecognised form containing the name is
+  a bare mention. Conservative by construction.
+
+**The arms of an `if` are UNIONED, not maxed** -- the one property I asked to be checked
+before any code, because `:c::occ` maxes them (it asks about the worst path) and inheriting
+that here is precisely the bug that made trigger 1 wrong. `:c::use-union` returns other if
+either side is other, and other if two sides name different fields. Read, not reported.
+
+**`rec1` declining is the strongest evidence the gate is not merely permissive.** It returns
+the record, so the bare mention classifies as other and the transform refuses -- a real case
+refused, not a hypothetical one.
+
+**And it fired on a program the brief never mentioned.** `tools/emitted.sh` moved two of 74:
+`rec.elf` and `moved.elf`, whose `user/leak` reads a `Box` field twice and returns an `i64`.
+That is the difference between a peephole and an optimisation -- it found a shape nobody
+pointed it at, and `elf-run` agrees on it.
+
+**Cost:** the compiler grew 220,081 to 229,326 bytes, about four percent, for the classifier.
+
+- **Class:** Fix. F-140/F-148/F-150/F-158's record line is closed; F-150's "a register
+  allocator is the prerequisite" stands only for the general case -- two hot fields, a record
+  not already in a register, a write-back where the whole record escapes.
+- **Oracle:** my own re-run -- fixpoint 229,326 byte-identical, `emitted.sh` 2 of 74 moved and
+  both explained, `elf-run` 30/30 agreeing with the same refusals and traps.
+
 ### F-162: a STOP trigger caught the orchestrator, which is what they are for
 
 **Correct (the brief, not the code).** The scalarisation strike was briefed with three STOP

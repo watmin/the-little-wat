@@ -755,6 +755,10 @@
   [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
    linear <- (:wat::core::Vector :- [:wat::core::String])
    pokers <- (:wat::core::Vector :- [:wat::core::String])
+   ;; parameters represented by one field, in the register the parameter already has.
+   ;; parallel to `sfield`: the field index within the record. empty unless scalarised.
+   scalar <- (:wat::core::Vector :- [:wat::core::String])
+   sfield <- (:wat::core::Vector :- [:wat::core::i64])
    ;; the callee-saved registers this function hands to `let`: how many, and the first index
    ;; a parameter has not already taken (C-136). Per-function, so it rides here rather than
    ;; threading a new argument through every expression form.
@@ -804,6 +808,8 @@
             :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
+            :scalar (:wat::core::Vector :- [:wat::core::String])
+            :sfield (:wat::core::Vector :- [:wat::core::i64])
             :nlr 0 :regbase 0
             :src (rd/read "")))
 
@@ -1398,15 +1404,24 @@
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "field arity" a pg)
               (:wat::core::let
                 [d (:wat::core::+ 8 (:wat::core::* 8 (:c::acc-index pg head)))
-                 r (:c::reg-of (:wat::core::nth ks 1) env pg)]
+                 opnd (:wat::core::nth ks 1)
+                 r (:c::reg-of opnd env pg)
+                 sf (:wat::core::if (:wat::core::= (:c::kind opnd pg) "symbol")
+                      (:c::scalar-field pg (:c::text pg opnd) 0) -1)]
                 ;; **a field read from a register-resident record does not want the pointer
                 ;; in rax first.** `mov %rbx,%rax ; mov 0x8(%rax),%rax` is one instruction:
                 ;; `mov 0x8(%rbx),%rax`. `:c::load-at` hardcodes rax as the base, which is
                 ;; right when the pointer arrived there and a wasted `mov` when it did not.
-                ;; C-183.
-                (:wat::core::if (:wat::core::>= r 0) (:c::emit o (:c::mov-rm r d (:c::rax)))
-                  (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-                    (:c::load-at d))))))
+                ;; C-183. A scalarised parameter has no pointer left: the register IS the field.
+                (:wat::core::cond
+                  ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::not= sf (:c::acc-index pg head)))
+                    (:c::fail "scalar field" a pg))
+                  ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::>= r 0))
+                    (:c::emit o (:c::mov-rr r (:c::rax))))
+                  ((:wat::core::>= r 0) (:c::emit o (:c::mov-rm r d (:c::rax))))
+                  (:else
+                    (:c::emit (:c::expr opnd o env pg rt tb slot (:c::no-tail))
+                      (:c::load-at d)))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
           ;; `=` on two Strings must compare CONTENT. The type pass knows both operands, so
@@ -2353,6 +2368,15 @@
               (:c::field-index (:c::Rec/fields (:wat::core::nth (:c::Prog/recs pg) ri))
                 (:wat::string::subs kws 1 (:wat::string::length kws)) 0))]
         (:wat::core::if (:wat::core::< fi 0) (:c::fail "assoc field" a pg)
+          (:wat::core::if
+            (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+              (:wat::core::= (:c::scalar-field pg (:c::text pg (:wat::core::nth ks 1)) 0) fi))
+            ;; the value is computed while the register still holds the old field.
+            ;; rax keeps the new one; the tail call writes it into the parameter
+            ;; register. writing it here would clobber the other arm of an `if`
+            ;; that also passes the old field through.
+            (:c::share (:wat::core::nth ks 3) env pg
+              (:c::expr (:wat::core::nth ks 3) o env pg rt tb slot (:c::no-tail)))
           (:wat::core::let
             [rm? (:c::remat? (:wat::core::nth ks 1) env pg)
              o1 (:wat::core::if rm? o
@@ -2380,7 +2404,7 @@
                   (:c::mov-ri (:c::rcx) fi)))
                 (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax)
                   (:c::mov-ri (:c::rcx) fi)) 8))
-              (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt))))))
+              (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt)))))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
       ;; (PersistentMap :- [K V]), or :wat::core::Record" -- which is F-104 in the language
       ;; itself. The machine code for it is already here and costs nothing extra: `slot_set`
@@ -3568,6 +3592,226 @@
      o5 (:c::emit o4 (:c::ret))]
     (:c::patch o5 at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ at 1)) 1))))
 
+;; ---------------------------------------------------------------- one field, in the parameter's register
+;;
+;; A record parameter whose every use is a read or an `assoc` of ONE field does not need the
+;; pointer. The register already assigned to the parameter holds the field: the prologue loads
+;; it once, a field read is that register, an `assoc` is a write of it, and a tail self-call
+;; passes it back. The back edge jumps to the body, so it skips the load -- the caller still
+;; passed a pointer, and only the loop carries the field.
+;;
+;; `:c::occ` maxes the arms of an `if`, because it asks how many reads the worst path takes.
+;; This asks whether ANY arm escapes, so the arms are unioned. A mention the three existing
+;; walks cannot classify -- a bare name that is not the container of an `assoc` and not the
+;; operand of the one field's reader -- is the record leaving, and that is `other`.
+
+(:wat::core::defrecord :c::Use [k <- :wat::core::i64 f <- :wat::core::i64])
+(:wat::core::defrecord :c::Sc
+  [names <- (:wat::core::Vector :- [:wat::core::String])
+   fields <- (:wat::core::Vector :- [:wat::core::i64])])
+
+(:wat::core::defn :c::use-none [] -> :c::Use (:c::Use :k 0 :f -1))
+(:wat::core::defn :c::use-other [] -> :c::Use (:c::Use :k 2 :f -1))
+(:wat::core::defn :c::use-field [f <- :wat::core::i64] -> :c::Use (:c::Use :k 1 :f f))
+
+(:wat::core::defn :c::use-union [a <- :c::Use b <- :c::Use] -> :c::Use
+  (:wat::core::cond
+    ((:wat::core::or (:wat::core::= (:c::Use/k a) 2) (:wat::core::= (:c::Use/k b) 2))
+      (:c::use-other))
+    ((:wat::core::= (:c::Use/k a) 0) b)
+    ((:wat::core::= (:c::Use/k b) 0) a)
+    ((:wat::core::= (:c::Use/f a) (:c::Use/f b)) a)
+    (:else (:c::use-other))))
+
+(:wat::core::defn :c::scalar-field [pg <- :c::Prog name <- :wat::core::String
+                                    i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length (:c::Prog/scalar pg))) -1)
+    ((:wat::core::= (:wat::core::nth (:c::Prog/scalar pg) i) name)
+      (:wat::core::nth (:c::Prog/sfield pg) i))
+    (:else (:c::scalar-field pg name (:wat::core::+ i 1)))))
+
+;; `as-arg` means this expression is an argument of a tail self-call, so its value is the
+;; field, not a pointer the callee will load through. A bare name there is the field already
+;; in the register. Anywhere else a bare name is the record escaping.
+(:wat::core::defn :c::use-walk [pg <- :c::Prog a <- :wat::core::i64 name <- :wat::core::String
+                                fname <- :wat::core::String rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::let [k (:c::kind a pg)]
+    (:wat::core::cond
+      ((:wat::core::= k "symbol")
+        (:wat::core::if (:wat::core::= (:c::text pg a) name)
+          (:wat::core::if as-arg (:c::use-none) (:c::use-other))
+          (:c::use-none)))
+      ((:wat::core::= k "vector")
+        (:c::use-fold pg (:c::kidsof pg a) 0 name fname rname false false))
+      ((:wat::core::not= k "list") (:c::use-none))
+      (:else (:c::use-form pg (:c::kidsof pg a) name fname rname in-tail as-arg)))))
+
+(:wat::core::defn :c::use-fold [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::use-none)
+    (:c::use-union
+      (:c::use-walk pg (:wat::core::nth ks i) name fname rname in-tail as-arg)
+      (:c::use-fold pg ks (:wat::core::+ i 1) name fname rname in-tail as-arg))))
+
+;; both arms, not the worse one. `occ` maxes; an escape on either arm escapes.
+(:wat::core::defn :c::use-both [pg <- :c::Prog a <- :wat::core::i64 b <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:c::use-union
+    (:c::use-walk pg a name fname rname in-tail as-arg)
+    (:c::use-walk pg b name fname rname in-tail as-arg)))
+
+(:wat::core::defn :c::use-last [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::use-none)
+    (:wat::core::let [last? (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))]
+      (:c::use-union
+        (:c::use-walk pg (:wat::core::nth ks i) name fname rname
+          (:wat::core::and in-tail last?)
+          (:wat::core::and as-arg last?))
+        (:c::use-last pg ks (:wat::core::+ i 1) name fname rname in-tail as-arg)))))
+
+(:wat::core::defn :c::use-cond [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::use-none)
+    (:c::use-union
+      (:c::use-clause pg (:wat::core::nth ks i) name fname rname in-tail as-arg)
+      (:c::use-cond pg ks (:wat::core::+ i 1) name fname rname in-tail as-arg))))
+
+(:wat::core::defn :c::use-clause [pg <- :c::Prog a <- :wat::core::i64 name <- :wat::core::String
+                                  fname <- :wat::core::String rname <- :wat::core::String
+                                  in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+    (:c::use-walk pg a name fname rname false false)
+    (:wat::core::let [cks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::< (:wat::core::length cks) 1) (:c::use-none)
+        (:c::use-union
+          (:c::use-walk pg (:wat::core::nth cks 0) name fname rname false false)
+          (:c::use-last pg cks 1 name fname rname in-tail as-arg))))))
+
+(:wat::core::defn :c::use-args [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String] -> :c::Use
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::use-none)
+    (:c::use-union
+      (:c::use-walk pg (:wat::core::nth ks i) name fname rname false true)
+      (:c::use-args pg ks (:wat::core::+ i 1) name fname rname))))
+
+(:wat::core::defn :c::kw-field [pg <- :c::Prog rname <- :wat::core::String
+                                kw <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [ri (:c::rec-index (:c::Prog/recs pg) rname 0)
+                    tx (:c::text pg kw)]
+    (:wat::core::if (:wat::core::or (:wat::core::< ri 0)
+                      (:wat::core::not= (:c::kind kw pg) "keyword")) -1
+      (:c::field-index (:c::Rec/fields (:wat::core::nth (:c::Prog/recs pg) ri))
+        (:wat::string::subs tx 1 (:wat::string::length tx)) 0))))
+
+(:wat::core::defn :c::use-form [pg <- :c::Prog ks <- :c::Kids name <- :wat::core::String
+                                fname <- :wat::core::String rname <- :wat::core::String
+                                in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
+  (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::use-none)
+    (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))]
+      (:wat::core::cond
+        ;; `(:R/f name)` -- the operand is the parameter, so it is not a bare mention
+        ((:wat::core::and (:wat::core::>= (:c::acc-index pg head) 0)
+                          (:wat::core::= (:wat::core::length ks) 2)
+                          (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                          (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))
+          (:wat::core::let [at (:c::slash-at head (:wat::core::- (:wat::string::length head) 1))]
+            (:wat::core::if (:wat::core::or (:wat::core::< at 0)
+                              (:wat::core::not= (:wat::string::subs head 0 at) rname))
+              (:c::use-other)
+              (:c::use-field (:c::acc-index pg head)))))
+        ;; `(assoc name :f v)` is a write only when THIS value is handed to the tail self-call.
+        ;; anywhere else the result is a record, and the register no longer holds one.
+        ((:wat::core::and (:c::assoc? head)
+                          (:wat::core::= (:wat::core::length ks) 4)
+                          (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                          (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))
+          (:wat::core::if (:wat::core::not as-arg) (:c::use-other)
+            (:wat::core::let [fi (:c::kw-field pg rname (:wat::core::nth ks 2))]
+              (:wat::core::if (:wat::core::< fi 0) (:c::use-other)
+                (:c::use-union (:c::use-field fi)
+                  (:c::use-walk pg (:wat::core::nth ks 3) name fname rname false false))))))
+        ((:wat::core::and (:c::if? head) (:wat::core::= (:wat::core::length ks) 4))
+          (:c::use-union
+            (:c::use-walk pg (:wat::core::nth ks 1) name fname rname false false)
+            (:c::use-both pg (:wat::core::nth ks 2) (:wat::core::nth ks 3)
+              name fname rname in-tail as-arg)))
+        ((:c::do? head)
+          (:c::use-last pg ks 1 name fname rname in-tail as-arg))
+        ((:wat::core::and (:c::let? head) (:wat::core::>= (:wat::core::length ks) 2))
+          (:c::use-union
+            (:c::use-walk pg (:wat::core::nth ks 1) name fname rname false false)
+            (:c::use-last pg ks 2 name fname rname in-tail as-arg)))
+        ((:c::cond? head)
+          (:c::use-cond pg ks 1 name fname rname in-tail as-arg))
+        ((:wat::core::or (:c::and? head) (:c::or? head))
+          (:wat::core::if as-arg
+            (:c::use-fold pg ks 1 name fname rname false true)
+            (:c::use-last pg ks 1 name fname rname in-tail false)))
+        ;; a self-call outside tail position re-enters the prologue, which still expects a pointer
+        ((:wat::core::= head fname)
+          (:wat::core::if (:wat::core::not in-tail) (:c::use-other)
+            (:c::use-args pg ks 1 name fname rname)))
+        (:else (:c::use-fold pg ks 1 name fname rname false false))))))
+
+(:wat::core::defn :c::use-body [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                name <- :wat::core::String fname <- :wat::core::String
+                                rname <- :wat::core::String] -> :c::Use
+  (:c::use-last pg ks i name fname rname true false))
+
+(:wat::core::defn :c::scalar-params [pv <- :c::Kids i <- :wat::core::i64 ks <- :c::Kids
+                                     start <- :wat::core::i64 fname <- :wat::core::String
+                                     env <- :c::Env pg <- :c::Prog
+                                     names <- (:wat::core::Vector :- [:wat::core::String])
+                                     fields <- (:wat::core::Vector :- [:wat::core::i64])] -> :c::Sc
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv))
+    (:c::Sc :names names :fields fields)
+    (:wat::core::let
+      [nm (:c::text pg (:wat::core::nth pv i))
+       ei (:wat::core::- (:wat::core::length env) 1)
+       ty (:c::lookup-ty env nm ei)
+       reg (:c::lookup-reg env nm ei)
+       rn (:c::rec-name-of ty)
+       go? (:wat::core::and (:wat::core::>= reg 0) (:wat::core::not= rn ""))
+       u (:wat::core::if go?
+           (:c::use-body pg ks start nm fname rn) (:c::use-none))
+       take? (:wat::core::= (:c::Use/k u) 1)]
+      (:c::scalar-params pv (:wat::core::+ i 3) ks start fname env pg
+        (:wat::core::if take? (:wat::core::conj names nm) names)
+        (:wat::core::if take? (:wat::core::conj fields (:c::Use/f u)) fields)))))
+
+(:wat::core::defn :c::scalar-of [pv <- :c::Kids ks <- :c::Kids start <- :wat::core::i64
+                                 fname <- :wat::core::String env <- :c::Env pg <- :c::Prog] -> :c::Sc
+  (:wat::core::if (:wat::string::starts-with? (:c::fn-ret pg fname 0) "rec:")
+    (:c::Sc :names (:wat::core::Vector :- [:wat::core::String])
+            :fields (:wat::core::Vector :- [:wat::core::i64]))
+    (:c::scalar-params pv 0 ks start fname env pg
+      (:wat::core::Vector :- [:wat::core::String])
+      (:wat::core::Vector :- [:wat::core::i64]))))
+
+(:wat::core::defn :c::scalar-bytes [env <- :c::Env names <- (:wat::core::Vector :- [:wat::core::String])
+                                    fields <- (:wat::core::Vector :- [:wat::core::i64])
+                                    i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length names)) ""
+    (:wat::core::let
+      [r (:c::lookup-reg env (:wat::core::nth names i)
+           (:wat::core::- (:wat::core::length env) 1))
+       d (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::nth fields i)))]
+      (:wat::string::concat
+        (:wat::core::if (:wat::core::>= r 0) (:c::mov-rm r d r) "")
+        (:c::scalar-bytes env names fields (:wat::core::+ i 1))))))
+
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :c::Layout tb <- :wat::core::i64
                                   tail-in <- :c::Buf] -> :c::Out
@@ -3594,6 +3838,8 @@
                (:wat::core::> slots 0)))
      nr (:wat::core::if regs? (:c::imin n (:c::nregs)) 0)
      env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs?)
+     fname (:c::text pg (:wat::core::nth ks 1))
+     sc (:c::scalar-of pv ks start fname env pg)
      ;; **the registers a parameter did not take, `let` can have.** C-142's inlining turns every
      ;; inlined call into a `let`, and each of those bindings was round-tripping through a frame
      ;; slot -- a store and a load per read -- where gcc keeps the value in a register. Excluded
@@ -3666,7 +3912,11 @@
                        (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
                        (:c::sub-rsp frame)
                        (:c::reg-saves 0 nsave "")
-                       (:c::reg-loads pv 0 n nr pg fkv fpr? "")))
+                       (:c::reg-loads pv 0 n nr pg fkv fpr? "")
+                       ;; after the pointer is in its register, and BEFORE the tail target,
+                       ;; so the call from outside loads the field once and the back edge
+                       ;; jumps over the load carrying the field
+                       (:c::scalar-bytes env (:c::Sc/names sc) (:c::Sc/fields sc) 0)))
      ;; the top of the body is wherever the prologue ended -- which is NOT a constant any more,
      ;; now that `sub rsp` is one byte of displacement when it fits and nothing at all when the
      ;; frame is empty. It used to be hardcoded as eleven, and the first build after the short
@@ -3685,7 +3935,9 @@
              (:c::fn-of pg (:c::text pg (:wat::core::nth ks 1)) 0)
              (:wat::core::Vector :- [:c::Bnd]) pg)
      pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-          (:wat::core::assoc (:wat::core::assoc pg :bnds bnds0) :nscr nscr) :nlr nlr) :regbase nr)
+          (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
+            (:wat::core::assoc pg :bnds bnds0) :nscr nscr) :nlr nlr) :regbase nr)
+            :scalar (:c::Sc/names sc)) :sfield (:c::Sc/fields sc))
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
      tc (:wat::core::if (:c::has-clone? node pg)
