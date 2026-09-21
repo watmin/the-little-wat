@@ -1077,11 +1077,19 @@
 ;; `:c::TC` is the context: the name and arity of the function being compiled, and the address
 ;; to jump back to. A `name` of "" means "this is not a tail position", and every subexpression
 ;; that is not in tail position is compiled with `(:c::no-tail)`.
+;; **`test` and `body` are the rotated loop** (C-188). A tail-recursive function is emitted
+;; as `top: <test> ; jcc body ; <base case> ; body: <recur> ; jmp top` -- so going round costs
+;; a `jmp` back to the test AND the test's own branch: two taken branches an iteration where
+;; one will do. When the test is one instruction on operands already in registers, the tail
+;; call can emit the test ITSELF and branch straight to `body`, leaving the `jmp top` on the
+;; exit path where it runs once. `test` is that instruction plus its branch opcode, `body` is
+;; where the recursion starts; both empty when the shape does not apply.
 (:wat::core::defrecord :c::TC
   [name <- :wat::core::String  arity <- :wat::core::i64  target <- :wat::core::i64
-   nregs <- :wat::core::i64])
+   nregs <- :wat::core::i64    test <- :wat::core::String  body <- :wat::core::i64])
 
-(:wat::core::defn :c::no-tail [] -> :c::TC (:c::TC :name "" :arity 0 :target 0 :nregs 0))
+(:wat::core::defn :c::no-tail [] -> :c::TC
+  (:c::TC :name "" :arity 0 :target 0 :nregs 0 :test "" :body 0))
 
 (:wat::core::defn :c::tail-call? [tc <- :c::TC head <- :wat::core::String n <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::and (:wat::core::not= (:c::TC/name tc) "")
@@ -2034,9 +2042,25 @@
      ;; its uses ARE joins; this is the one place that knows better.)
      o6k (:wat::core::if (:wat::core::not= fast "")
            (:wat::core::assoc o6 :rax (:c::Out/rax o1)) o6)
+     ;; **the else arm can close the loop itself** (C-188). `fast` is the whole test when
+     ;; both operands were already in place -- nothing was emitted for the left one -- so it
+     ;; is safe to emit again at the bottom. `:c::here o6k` is where the else arm starts,
+     ;; which is exactly where a back edge wants to land.
+     ;; **only the `if` that IS the loop head may do this.** `if-cmp` runs for every `if` in
+     ;; the function, and handing the test down unconditionally gave any tail call nested in
+     ;; an inner `if`'s else arm a back edge to THAT arm instead of the function body -- a
+     ;; loop with no exit. Stage 1 hung for twelve minutes on it. The head is the `if` that
+     ;; begins the body, so its address is exactly where the back edge already went.
+     tc2 (:wat::core::if
+           (:wat::core::and (:wat::core::= (:c::here o) (:c::TC/target tc))
+             (:wat::core::and (:wat::core::not= fast "")
+               (:wat::core::not (:wat::core::or then0? else0?))))
+           (:wat::core::assoc (:wat::core::assoc tc :test
+             (:wat::string::concat fast (:c::jcc-not op))) :body (:c::here o6k))
+           tc)
      o7 (:c::expr (:wat::core::nth ks 3) o6k env
           (:wat::core::assoc pg :bnds (:c::bnds-arm cks op false pg (:c::Prog/bnds pg)))
-          rt tb slot tc)
+          rt tb slot tc2)
      o8 (:wat::core::if then0?
           (:c::patch o7 at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ at w)) w))
           o7)]
@@ -3051,8 +3075,19 @@
               (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc))
               (:c::tail-store 0 n (:c::push-but-last ks 1 o env pg rt tb slot)
                 (:c::TC/nregs tc)))]
-        (:c::emit o2 (:wat::string::concat "e9"
-          (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o2) 5)) 4))))
+        ;; **the back edge tests for itself** (C-188), when `if-cmp` handed down a test it
+        ;; can repeat. Looping is then one taken branch instead of two, and the `jmp` to the
+        ;; top is left behind for the exit path -- where it re-runs the test once and falls
+        ;; into the base case, which is correct and off the hot path.
+        (:wat::core::let
+          [t (:c::TC/test tc)
+           o3 (:wat::core::if (:wat::core::= t "") o2
+                (:c::emit o2 (:wat::string::concat t
+                  (:asm::le (:wat::core::- (:c::TC/body tc)
+                              (:wat::core::+ (:c::here o2)
+                                (:wat::core::+ (:c::hexlen t) 4))) 4))))]
+          (:c::emit o3 (:wat::string::concat "e9"
+            (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o3) 5)) 4)))))
       (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
                         o2 (:c::call o1 (:c::fn-addr pg head 0))]
         (:wat::core::if (:wat::core::= n 0) o2
@@ -3656,7 +3691,7 @@
      tc (:wat::core::if (:c::has-clone? node pg)
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
-                  :target (:wat::core::+ base (:c::codelen o1))))
+                  :target (:wat::core::+ base (:c::codelen o1)) :test "" :body 0))
      ;; when the head was peeled off, the body is the `if`'s ELSE arm and nothing else
      o2 (:wat::core::if wrap?
           (:c::expr (:wat::core::nth (:c::kidsof pg (:wat::core::nth ks start)) 3)

@@ -86,6 +86,15 @@ sources () { echo elf/compile.wat elf/lib/*.wat; }
 srcsum () { sha256sum $(sources) | sha256sum | cut -c1-16; }
 SRC_SUM=$(srcsum)
 
+# **the negative tests are a DERIVED artifact, so derive them** (F-152). elf/refuse-*.wat are
+# elf/compile.wat with a different driver; they are committed, and nothing regenerated them,
+# so they drifted across seven changes while still passing. tools/elf-run.sh now fails when
+# they drift -- and caught the very next commit, one change after the check was written,
+# because "remember to regenerate" was never going to hold. They are regenerated here instead,
+# before anything is compiled, and the check in elf-run.sh is the backstop rather than the
+# only defence.
+tools/gen-refuse.sh >/dev/null || { echo "FAIL: could not regenerate the negative tests"; exit 1; }
+
 cp elf/out/compiler.elf elf/out/stage1.elf
 chmod +x elf/out/stage1.elf
 
