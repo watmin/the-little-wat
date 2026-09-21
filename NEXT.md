@@ -69,12 +69,25 @@ so keep it at 0.
 
 ### In flight (2026-09-20)
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Thirteen done
+**READING IS STILL O(n^2), AND THE CONVERSION IS FEEDING IT.** Hoisting `wat.string/length` out
+of the reader (F-138) left `rd/ch` -- `(wat.string/subs src i (+ i 1))` -- which walks to
+character `i` every time, so scanning is still quadratic in the source. Measured across the
+conversion batches: source **+4.1%** (355,264 -> 369,977 bytes), compiled-compiler time **+19%**
+(613 -> ~730 ms). Time grows ~4.6x faster than source, and every routine converted adds source.
+
+**The fix is two O(1) byte-oriented verbs in wat-rs**, not a fast path that lies:
+`:wat::string::byte-at` and `:wat::string::byte-length`. `s.as_bytes()[i]` and `s.len()` are both
+O(1) and well-defined for every string; the reader may use them because this compiler refuses
+non-ASCII outright (F-120), so a byte index IS a character index for everything it will accept.
+An ASCII *fast path* inside `length`/`subs` is the wrong shape -- `is_ascii()` is itself O(n), so
+it would cost what it saves. **Do this before converting many more routines.**
+
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Sixteen done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
-`vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`); **20 left**, biggest last
-(`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175,
-`prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size: `str-contains` 68,
-`buf-put` 70, `slot-set` 76.
+`vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
+`slot-set`); **17 left**, biggest last (`vec-conj-own` 240 bytes, `prim-read-hex` 227,
+`tree-push` 199, `io-read-file` 175, `prim-write-hex` 163, `print-str` 147, `i64-to-str` 138).
+Next by size: `str-cat-own` 79, `str-subs` 79, `die` 81, `print-i64` 87.
 
 The encoder carries a full 16-register file, a general memory-operand layer (ModRM+SIB, all four
 addressing shapes), forward and backward jumps, operand sizes (32/16/8-bit stores, which needed

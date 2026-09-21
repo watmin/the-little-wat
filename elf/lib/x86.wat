@@ -384,8 +384,13 @@
 ;; **a forward branch over a piece, where the displacement IS that piece's length.** No label
 ;; table is needed when the thing being skipped is an expression: it is right there, so
 ;; `:c::hexlen` of it is the displacement. C-169's `:c::sel` already builds its diamond this way.
+;; the same branch given the DISTANCE rather than the piece. A loop whose body contains the
+;; branch cannot hand that body to `:c::br-over` -- it does not exist yet -- but its length is
+;; still a sum of pieces that do.
+(:wat::core::defn :c::br-len [cc <- :wat::core::String n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat cc (:asm::le n 1)))
 (:wat::core::defn :c::br-over [cc <- :wat::core::String body <- :wat::core::String] -> :wat::core::String
-  (:wat::string::concat cc (:asm::le (:c::hexlen body) 1)))
+  (:c::br-len cc (:c::hexlen body)))
 ;; **a BACKWARD jump, where the displacement is the piece being jumped over plus the jump.**
 ;; The forward case (`:c::br-over`) skips a piece that follows it, so the distance is that piece's
 ;; length. A loop jumps back over a piece that PRECEDES it and over itself, so the distance is
@@ -446,6 +451,11 @@
 (:wat::core::defn :c::add-rm [base <- :wat::core::i64 disp <- :wat::core::i64
                               reg <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "03" reg base disp))
+;; the other direction -- `add %rdx,(%r14)` bumps a counter that lives in memory without loading
+;; it first. `03` reads memory into a register; `01` adds a register into memory.
+(:wat::core::defn :c::add-mr [src <- :wat::core::i64 base <- :wat::core::i64
+                              disp <- :wat::core::i64] -> :wat::core::String
+  (:c::rm-at "01" src base disp))
 ;; `movzbq disp(BASE,INDEX,1), DST` -- one byte, zero-extended, which is how a string's
 ;; characters are read (C-172)
 (:wat::core::defn :c::movzb [base <- :wat::core::i64 index <- :wat::core::i64
@@ -580,5 +590,14 @@
   (:wat::string::concat "0f" (:asm::u8 (:wat::core::+ 128 cc))))
 
 ;; the unsigned pair the hex routines need: `below` is 2, and negating it gives `above-or-equal`
+;; **the five conditions this compiler names.** Three of them lived in lib/runtime.wat until now,
+;; not because they were runtime facts but because they sat beside `:c::rt-branch` when C-174 drew
+;; the line. A condition code is an x86 fact: it is the low nibble of the opcode, and
+;; `:c::negate-cc` flips bit zero, which is why the pairs below are adjacent numbers.
+(:wat::core::defn :c::cc-overflow [] -> :wat::core::i64 0)
 (:wat::core::defn :c::cc-below [] -> :wat::core::i64 2)
+(:wat::core::defn :c::cc-zero [] -> :wat::core::i64 4)
 (:wat::core::defn :c::cc-below-eq [] -> :wat::core::i64 6)
+;; `js` -- the sign flag, so a subtraction that went negative is tested without a second compare
+(:wat::core::defn :c::cc-sign [] -> :wat::core::i64 8)
+(:wat::core::defn :c::cc-greater [] -> :wat::core::i64 15)

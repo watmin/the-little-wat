@@ -167,11 +167,42 @@
     "666c6f4889442408b8770a00008944241048c7c7020000004889e648c7c2"
     "1200000048c7c0010000000f0548c7c74600000048c7c03c0000000f05"))
 
-(:wat::core::defn :c::rt-buf-put [] -> :wat::core::String
-  (:wat::string::concat
-    "498b06488d0c104881f90010000076265652e86cffffff5a5e4881fa0010"
-    "0000761148c7c70100000048c7c0010000000f05c34831c0498d7e104801"
-    "c74901164889d1f3a4c3"))
+;; `buf_put(rsi = bytes, rdx = length)` -- append to the output buffer, flushing first if this
+;; put would cross the high-water mark. **A put larger than the buffer goes straight to the
+;; kernel**: after the flush there is nothing to append to, so it is written where it stands.
+(:wat::core::defn :c::rt-buf-put [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [direct (:wat::string::concat
+              (:c::mov-ri (:c::rdi) (:c::fd-stdout))
+              (:c::mov-ri (:c::rax) (:c::sys-write))
+              (:c::syscall) (:c::ret))
+     saved (:wat::string::concat (:c::reg-push (:c::rsi)) (:c::reg-push (:c::rdx)))
+     head (:wat::string::concat
+            (:c::mov-rm (:c::r14) (:c::hdr-pending) (:c::rax))
+            (:c::lea (:c::rax) (:c::rdx) 1 0 (:c::rcx))
+            (:c::cmp-ri (:c::rcx) (:c::buf-hiwater)))
+     at-call (:wat::core::+ (:c::at-put lay)
+               (:wat::core::+ (:c::hexlen head)
+                 (:wat::core::+ (:c::rel8-size) (:c::hexlen saved))))
+     spill (:wat::string::concat
+             saved
+             (:c::rt-call (:c::at-flush lay) (:wat::core::+ at-call (:c::call-size)))
+             (:c::reg-pop (:c::rdx)) (:c::reg-pop (:c::rsi))
+             (:c::cmp-ri (:c::rdx) (:c::buf-hiwater))
+             (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) direct)
+             direct
+             ;; the buffer is empty now, so the append starts at zero
+             (:c::xor-rr (:c::rax) (:c::rax)))]
+    (:wat::string::concat
+      head
+      (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) spill)
+      spill
+      (:c::lea-at (:c::r14) (:c::hdr-buf) (:c::rdi))
+      (:c::add-rr (:c::rax) (:c::rdi))
+      (:c::add-mr (:c::rdx) (:c::r14) (:c::hdr-pending))
+      (:c::mov-rr (:c::rdx) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::ret))))
 
 ;; `flush()`, 36 bytes: write whatever is buffered and empty it. Called before `exit`, before
 ;; `fork` and before `clone`, and at the end of the entry stub -- see each for why.
@@ -369,15 +400,36 @@
     "49c7070000000049c74708010000004d8d4f10498d5001498911498d7908"
     "488d70084c89c1f348a54c89174d89df4c89c8c3"))
 
-;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax`, 49 bytes: a copy with one slot
-;; replaced. This is `assoc`, for a record field and a vector index alike, since they are the
-;; same layout -- and it is the answer to F-104 in machine code: no positional update, so make
-;; a new one.
-(:wat::core::defn :c::rt-slot-set [] -> :wat::core::String
-  (:wat::string::concat
-    "534c8b004989ca4889d34d89fb4a8d14c5100000004901d34d3b5e087605"
-    "e85ff8ffff49c707010000004d8d4f084d8901498d7908488d70084c89c1"
-    "f348a54d89df4c89c84a895cd0085bc3"))
+;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax` -- a copy of the whole array with
+;; one slot changed, which is what an immutable `assoc` on a leaf costs. The allocation is
+;; `vec_new`'s, so it is `:c::rt-bump` again; the size is computed into rdx between the two
+;; halves of the check, which is why `grow` is a string rather than a register.
+(:wat::core::defn :c::rt-slot-set [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::rbx))
+           (:c::mov-rm (:c::rax) 0 (:c::r8))
+           (:c::mov-rr (:c::rcx) (:c::r10))
+           (:c::mov-rr (:c::rdx) (:c::rbx)))
+     grow (:wat::string::concat
+            (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::vec-hdr) (:c::rdx))
+            (:c::add-rr (:c::rdx) (:c::r11)))]
+    (:wat::string::concat
+      pre
+      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow)
+      (:c::mov-mi (:c::r15) 0 1)
+      (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r9))
+      (:c::mov-mr (:c::r8) (:c::r9) 0)
+      (:c::lea-at (:c::r9) (:c::vec-data) (:c::rdi))
+      (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
+      (:c::mov-rr (:c::r8) (:c::rcx))
+      (:c::rep-movsq)
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::r9) (:c::rax))
+      ;; the one slot that differs
+      (:c::rm "89" (:c::rbx) (:c::rax) (:c::r10) (:c::word) (:c::vec-data))
+      (:c::reg-pop (:c::rbx))
+      (:c::ret))))
 
 ;; `oom()`, 89 bytes, the last resort. Every allocator checks `r15 + need` against the limit at
 ;; `[r14+8]` BEFORE it writes anything, and jumps here when it will not fit: flush whatever
@@ -438,13 +490,48 @@
     (:c::br-over (:c::jcc-rel8 (:c::cc-greater)) (:c::rt-str-body))
     (:c::rt-str-tail)))
 
-;; `str_contains(rax = s, rcx = needle) -> 0 or 1`, 68 bytes: the naive search, which is what
-;; the interpreter's is too at this size.
+;; `str_contains(rax = s, rcx = needle) -> 0 or 1`, the naive search -- try the needle at every
+;; offset the haystack has room for. **`repz cmpsb` is the inner loop**, so what this routine
+;; writes is the OUTER one: bump the offset, re-point rsi, compare again.
+;;
+;; The two forward exits and the jump back all measure themselves. The jump back cannot ask
+;; `:c::br-over` for its distance -- the body it jumps over contains the jump -- so it is a sum
+;; of the pieces that do exist, which is what `:c::br-len` is for.
 (:wat::core::defn :c::rt-str-contains [] -> :wat::core::String
-  (:wat::string::concat
-    "4c8b004c8b094d89c24d29ca78324c8d5808488d51084831c04c39d07f22"
-    "4c89de4801c64889d74c89c94885c97409f3a6740548ffc0ebe148c7c001"
-    "000000c34831c0c3"))
+  (:wat::core::let
+    [yes  (:wat::string::concat (:c::mov-ri (:c::rax) 1) (:c::ret))
+     fail (:wat::string::concat (:c::xor-rr (:c::rax) (:c::rax)) (:c::ret))
+     inc  (:c::inc-r (:c::rax))
+     ;; the needle matched: skip the bump and the jump back
+     je2  (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+            (:wat::core::+ (:c::hexlen inc) (:c::rel8-size)))
+     scan (:wat::string::concat (:c::repz-cmpsb) je2 inc)
+     ;; an empty needle matches anywhere, and `repz cmpsb` with rcx = 0 sets no flags at all
+     je1  (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+            (:wat::core::+ (:c::hexlen scan) (:c::rel8-size)))
+     probe (:wat::string::concat
+             (:c::mov-rr (:c::r11) (:c::rsi)) (:c::add-rr (:c::rax) (:c::rsi))
+             (:c::mov-rr (:c::rdx) (:c::rdi)) (:c::mov-rr (:c::r9) (:c::rcx))
+             (:c::test-rr (:c::rcx) (:c::rcx)) je1 scan)
+     ;; past the last offset the needle could fit at
+     jg   (:c::br-len (:c::jcc-rel8 (:c::cc-greater))
+            (:wat::core::+ (:c::hexlen probe)
+              (:wat::core::+ (:c::rel8-size) (:c::hexlen yes))))
+     body (:wat::string::concat (:c::cmp-rr (:c::r10) (:c::rax)) jg probe)
+     loop (:wat::string::concat body (:c::jmp-back body))
+     setup (:wat::string::concat
+             (:c::lea-at (:c::rax) (:c::str-data) (:c::r11))
+             (:c::lea-at (:c::rcx) (:c::str-data) (:c::rdx))
+             (:c::xor-rr (:c::rax) (:c::rax)))]
+    (:wat::string::concat
+      (:c::mov-rm (:c::rax) 0 (:c::r8))
+      (:c::mov-rm (:c::rcx) 0 (:c::r9))
+      (:c::mov-rr (:c::r8) (:c::r10))
+      (:c::sub-rr (:c::r9) (:c::r10))
+      ;; a needle longer than the haystack: the subtraction went negative
+      (:c::br-over (:c::jcc-rel8 (:c::cc-sign))
+        (:wat::string::concat setup loop yes))
+      setup loop yes fail)))
 
 ;; `i64_to_str(rax = n) -> rax`, 128 bytes: `print_i64`'s divide-by-ten loop, landing in the heap
 ;; instead of the output buffer.
@@ -587,7 +674,7 @@
   (:wat::core::cond
     ((:wat::core::= i 0) (:c::rt-flush))
     ((:wat::core::= i 1) (:c::rt-ovf))
-    ((:wat::core::= i 2) (:c::rt-buf-put))
+    ((:wat::core::= i 2) (:c::rt-buf-put lay))
     ((:wat::core::= i 3) (:c::rt-print-i64))
     ((:wat::core::= i 4) (:c::rt-print-bool lay))
     ((:wat::core::= i 5) (:c::rt-oom))
@@ -612,7 +699,7 @@
     ((:wat::core::= i 24) (:c::rt-tree-from-arr))
     ((:wat::core::= i 25) (:c::rt-vec-conj))
     ((:wat::core::= i 26) (:c::rt-vec-conj-own))
-    ((:wat::core::= i 27) (:c::rt-slot-set))
+    ((:wat::core::= i 27) (:c::rt-slot-set lay))
     ((:wat::core::= i 28) (:c::rt-hexval))
     ((:wat::core::= i 29) (:c::rt-hexchar))
     ((:wat::core::= i 30) (:c::rt-prim-write-hex))
@@ -709,6 +796,9 @@
 (:wat::core::defn :c::hdr-pending [] -> :wat::core::i64 0)
 (:wat::core::defn :c::hdr-limit [] -> :wat::core::i64 8)
 (:wat::core::defn :c::hdr-buf [] -> :wat::core::i64 16)
+;; the pending count at which the buffer is written out. The allocation (`:c::buf-bytes`) is
+;; larger, so a single put that crosses this still has somewhere to land before the flush.
+(:wat::core::defn :c::buf-hiwater [] -> :wat::core::i64 4096)
 ;; the Linux calls this runtime makes, by number rather than by the `1` that means three things
 (:wat::core::defn :c::sys-write [] -> :wat::core::i64 1)
 (:wat::core::defn :c::sys-exit [] -> :wat::core::i64 60)
@@ -723,6 +813,9 @@
 ;; the two numbers are written as one fact each rather than as 16 and 8 in adjacent lines.
 ;; what a Vector's pointer actually addresses: the length, then the trie's shift (how many bits
 ;; of an index the root level consumes), then the root node.
+;; from the pointer to the first element. C-174 deleted this as dead -- it was, then -- and
+;; `slot_set` is what wanted it: the distance it copies from and to.
+(:wat::core::defn :c::vec-data [] -> :wat::core::i64 8)
 (:wat::core::defn :c::vec-shift [] -> :wat::core::i64 8)
 (:wat::core::defn :c::vec-root [] -> :wat::core::i64 16)
 (:wat::core::defn :c::vec-ptr [] -> :wat::core::i64 8)
@@ -736,9 +829,6 @@
 (:wat::core::defn :c::rt-branch [cc <- :wat::core::i64 target <- :wat::core::i64
                                  here <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::jcc-rel32 cc) (:asm::le (:wat::core::- target here) 4)))
-(:wat::core::defn :c::cc-zero [] -> :wat::core::i64 4)
-(:wat::core::defn :c::cc-overflow [] -> :wat::core::i64 0)
-(:wat::core::defn :c::cc-greater [] -> :wat::core::i64 15)
 ;; the same distance, called rather than jumped
 (:wat::core::defn :c::rt-call [target <- :wat::core::i64
                                here <- :wat::core::i64] -> :wat::core::String
