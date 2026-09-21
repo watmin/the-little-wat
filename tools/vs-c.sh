@@ -125,17 +125,23 @@ else
 fi
 
 echo
-echo "== 9. strings: BUILDING one, 200000 appends (F-141) =="
+echo "== 9. strings: BUILDING one, 5000000 appends (F-141, F-143) =="
 gcc -O2 -static -o $B/out_strbuild elf/bench/strbuild.c || fail=1
 # **The load-bearing comparison here has no C compiler in it.** strbuild2 is a copy of strbuild
 # with one extra read of the accumulator -- a read that happens BEFORE the append and cannot
 # observe it. Until C-176 that second mention disqualified the name and the copy went quadratic,
 # exhausting the heap where this one finished in 19 ms (F-141). The two now agree, which is the
 # regression test: if they ever diverge again, liveness has stopped working.
+# **Two C controls, deliberately.** `f` is what gcc makes of the naive `s[i]='x'` loop -- a
+# vectorised memset with NO per-element work, which is not appending at all. It is the floor.
+# The default is the like-for-like: a call per character that checks capacity and grows, which
+# is what `str_cat_own` does. Comparing against the fill measures the SEMANTICS (wat's concat
+# returns a value and must check ownership); comparing against the append measures the CODE.
 a=$(./elf/out/strbuild.elf); b2=$(./$B/out_strbuild)
 if [ "$a" = "$b2" ]; then
   printf '  %-34s %6s ms   (answer %s)\n' "ours, accumulator named once" "$(best 3 ./elf/out/strbuild.elf)" "$a"
-  printf '  %-34s %6s ms\n' "C, gcc -O2"                   "$(best 3 ./$B/out_strbuild)"
+  printf '  %-34s %6s ms   (like-for-like)\n' "C, gcc -O2, safe append"  "$(best 3 ./$B/out_strbuild)"
+  printf '  %-34s %6s ms   (a memset; the floor, not an opponent)\n' "C, gcc -O2, buffer fill" "$(best 3 ./$B/out_strbuild f)"
 else
   echo "  FAIL: ours '$a', C '$b2'"; fail=1
 fi

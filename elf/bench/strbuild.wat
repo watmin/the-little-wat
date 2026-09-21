@@ -9,4 +9,4 @@
     (user/build (wat.string/concat acc "x") (wat.core/+ i 1) n)))
 
 (wat.core/defn user/main [] :- wat.type/nil
-  (wat.kernel/println (wat.string/byte-length (user/build "" 0 200000))))
+  (wat.kernel/println (wat.string/byte-length (user/build "" 0 5000000))))

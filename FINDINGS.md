@@ -12250,6 +12250,56 @@ name mentioned once pays nothing for the analysis.
 - **Class:** Improve, done.
 
 
+### F-143: the string-building benchmark was measuring startup and a memset — and a String has no capacity field
+
+Chasing C on string building turned up two measurement faults of my own before it turned up
+anything about wat.
+
+**The benchmark was too small.** At n = 200,000 the loop is ~0.8 ms and process startup is ~3 ms,
+so "ours 7 ms against C's 3 ms" was mostly `fork`/`exec`. Decomposed against `four.elf` (a
+program that only prints), our loop was ~1,554 us and C's ~50. n is 5,000,000 now.
+
+**The C control was a memset.** `for (i...) s[i] = 'x'` is not an append -- gcc vectorises it to
+a fill with **zero** measurable per-element work. That is the same fault F-140's first control
+had, and it is the second time in one session I have compared against an optimiser rather than a
+program. `elf/bench/strbuild.c` now carries TWO controls: the fill, labelled as the floor, and a
+non-inlined `append()` that checks capacity and grows -- which is what `str_cat_own` does.
+
+**And my instruction counts were half-measurements.** This machine is hybrid, and
+`perf stat -e instructions` reports `cpu_atom` and `cpu_core` separately; reading one gave 61.7,
+97.6 and 81.6 instructions per append at three sizes -- irregular enough that I went looking for
+a bug in the code. Pinned with `taskset` and both PMUs summed it is **37.0, exactly constant**.
+`tools/cc-time.sh` was already doing this correctly (`taskset -c 2`, explicit PMU); my ad-hoc
+commands were not.
+
+**With all three fixed, the real number** (n = 5,000,000, pinned):
+
+| | cycles/append | instructions/append |
+|---|---|---|
+| ours, `concat` | **15.5** | 37.0 |
+| ours, with an extra read | 16.1 | 41.0 |
+| C, safe append | **8.2** | 11.5 |
+| C, memset fill | 0.0 | 0.0 |
+
+**1.9x a like-for-like C append**, at IPC 2.38 -- we are not stalling, we are executing more.
+
+**Where the excess goes, and the structural part is the interesting one.** `:c::rt-cap`
+recomputes the capacity on EVERY append -- `lea`, `bsr`, `mov`, `shl` -- because a wat String
+stores only its length and the capacity is derived from it by rounding up to a power of two. C
+keeps `cap` in a variable and compares. That is about four instructions per append spent
+re-deriving something C remembers, and closing it means giving the String header a capacity
+field, which every routine that touches a String would have to agree about.
+
+The rest is smaller: a self-move in the tail call (`mov %r13,%rax ; mov %rax,%r13` for an
+argument passed unchanged -- `:c::tail-direct` has no "already in place" check, though
+`:c::selv` has exactly that check for selects), and a ten-byte `movabs` reloading a literal's
+address every iteration.
+
+- **Class:** Improve, and named rather than taken. The capacity field is the real one.
+- **Repro:** `tools/vs-c.sh` section 9; `taskset -c 0 perf stat -e instructions,cycles` summing
+  both PMUs.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
