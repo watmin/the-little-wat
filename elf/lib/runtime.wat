@@ -1193,6 +1193,30 @@
 ;; one blob with `+ 30`, `+ 163` and `+ 220` written into the offset chain by hand -- the same
 ;; shape as the `base + 11` that broke every tail call in C-135.
 
+
+;; `slot_set_own(rax = rec, rcx = index, rdx = value) -> rax` -- `assoc` where the record turns
+;; out to be uniquely held, so the field is written where it stands and nothing is allocated.
+;;
+;; **The word one before the pointer is a SHARE COUNT, not a tag.** `:c::share` increments it
+;; when a value is stored or passed on -- guarded, because a literal in the read-only segment has
+;; a count of zero by construction and writing to it would fault. So a count of exactly one means
+;; nobody else holds this record and a write cannot be observed.
+;;
+;; That makes the RUNTIME the safety proof and the compiler's `:c::linear?` merely a hint, which
+;; is why `assoc` calls this unconditionally: being wrong costs a compare and a branch, never
+;; correctness. F-141 measured what the conservative hint costs when it is the only gate.
+(:wat::core::defn :c::rt-slot-set-own [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::vec-ptr)) (:c::heap-arm))
+     at-jne (:wat::core::+ (:c::at-slot-own lay) (:c::hexlen head))]
+    (:wat::string::concat
+      head
+      ;; shared, or a literal: fall through to the copy
+      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-slot lay)
+        (:wat::core::+ at-jne (:c::rel32-size)))
+      (:c::rm "89" (:c::rdx) (:c::rax) (:c::rcx) (:c::word) (:c::vec-data))
+      (:c::ret))))
+
 ;; `hexval(rax = one ascii hex digit) -> rax = 0..15`, 15 bytes -- `:c::rt-hexchar` run backwards,
 ;; and composed the same way. Take off `'0'`; if what is left is still above nine it was a letter,
 ;; so take off the seven-character gap as well.
@@ -1437,7 +1461,7 @@
 ;; lookup instead of a walk.
 (:wat::core::typealias :c::Layout (:wat::core::Vector :- [:wat::core::i64]))
 
-(:wat::core::defn :c::rt-count [] -> :wat::core::i64 33)
+(:wat::core::defn :c::rt-count [] -> :wat::core::i64 34)
 
 ;; **the one place the routine order is written.** It used to be in three: this list, the
 ;; `rt-at lvl N` table inside `:c::runtime`, and the recursion in the `at-*` chain. The other two
@@ -1473,10 +1497,11 @@
     ((:wat::core::= i 25) (:c::rt-vec-conj lay))
     ((:wat::core::= i 26) (:c::rt-vec-conj-own lay))
     ((:wat::core::= i 27) (:c::rt-slot-set lay))
-    ((:wat::core::= i 28) (:c::rt-hexval))
-    ((:wat::core::= i 29) (:c::rt-hexchar))
-    ((:wat::core::= i 30) (:c::rt-prim-write-hex lay))
-    ((:wat::core::= i 31) (:c::rt-prim-read-hex lay))
+    ((:wat::core::= i 28) (:c::rt-slot-set-own lay))
+    ((:wat::core::= i 29) (:c::rt-hexval))
+    ((:wat::core::= i 30) (:c::rt-hexchar))
+    ((:wat::core::= i 31) (:c::rt-prim-write-hex lay))
+    ((:wat::core::= i 32) (:c::rt-prim-read-hex lay))
     (:else (:c::rt-io-read-file lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
@@ -1581,11 +1606,12 @@
 (:wat::core::defn :c::at-vconj [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 25))
 (:wat::core::defn :c::at-vconj-own [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 26))
 (:wat::core::defn :c::at-slot [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 27))
-(:wat::core::defn :c::at-hexval [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 28))
-(:wat::core::defn :c::at-hexchar [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 29))
-(:wat::core::defn :c::at-wrhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 30))
-(:wat::core::defn :c::at-rdhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 31))
-(:wat::core::defn :c::at-rdfile [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 32))
+(:wat::core::defn :c::at-slot-own [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 28))
+(:wat::core::defn :c::at-hexval [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 29))
+(:wat::core::defn :c::at-hexchar [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 30))
+(:wat::core::defn :c::at-wrhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 31))
+(:wat::core::defn :c::at-rdhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 32))
+(:wat::core::defn :c::at-rdfile [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 33))
 
 ;; ---------------------------------------------------------------- what the heap looks like
 ;;

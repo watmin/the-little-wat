@@ -125,6 +125,47 @@ else
 fi
 
 echo
+echo "== 9. strings: BUILDING one, 200000 appends (F-141) =="
+gcc -O2 -static -o $B/out_strbuild elf/bench/strbuild.c || fail=1
+# **The load-bearing comparison here has no C compiler in it.** strbuild2 is a copy of strbuild
+# with one extra read of the accumulator -- a read that happens BEFORE the append and cannot
+# observe it. `:c::linear?` decides ownership by counting MENTIONS, so the copy never reaches
+# `str_cat_own` and goes quadratic. A within-language control cannot be optimised away.
+a=$(./elf/out/strbuild.elf); b2=$(./$B/out_strbuild)
+if [ "$a" = "$b2" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours, accumulator named once" "$(best 3 ./elf/out/strbuild.elf)" "$a"
+  printf '  %-34s %6s ms\n' "C, gcc -O2"                   "$(best 3 ./$B/out_strbuild)"
+else
+  echo "  FAIL: ours '$a', C '$b2'"; fail=1
+fi
+o=$(./elf/out/strbuild2.elf 2>&1); orc=$?
+if [ $orc -eq 0 ]; then
+  printf '  %-34s %6s ms\n' "ours, named TWICE" "$(best 3 ./elf/out/strbuild2.elf)"
+else
+  printf '  %-34s %s (exit %s)\n' "ours, named TWICE" "$o" "$orc"
+  printf '  %-34s %s\n' "" "F-141: one extra read, and the same n cannot finish"
+fi
+
+echo
+echo "== 10. records: updating one field, 2000000 times (F-140) =="
+gcc -O2 -static -o $B/out_rec elf/bench/rec.c || fail=1
+# Again the load-bearing pair is ours-against-ours: recflat.wat is the IDENTICAL loop with the
+# accumulator threaded as a bare i64. gcc keeps the struct in registers, and an earlier version
+# of rec.c with a literal bound was folded to a closed form entirely -- under one instruction per
+# iteration -- so the C column here is a floor, not an opponent.
+a=$(./elf/out/rec.elf); b2=$(./elf/out/recflat.elf); c2=$(./$B/out_rec)
+if [ "$a" = "$b2" ] && [ "$a" = "$c2" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours, record assoc"       "$(best 5 ./elf/out/rec.elf)" "$a"
+  printf '  %-34s %6s ms   (named ONCE: slot_set_own fires)\n' "ours, record assoc, C-175" "$(best 5 ./elf/out/rec1.elf)"
+  printf '  %-34s %6s ms   (the same loop, nothing allocated)\n' "ours, bare i64" "$(best 5 ./elf/out/recflat.elf)"
+  printf '  %-34s %6s ms\n' "C, gcc -O2, struct in registers" "$(best 5 ./$B/out_rec)"
+  printf '  %-34s %s\n' "" "F-140/F-141: the owning path exists now, and the"
+  printf '  %-34s %s\n' "" "accumulating idiom names the record twice so cannot reach it"
+else
+  echo "  FAIL: record '$a', flat '$b2', C '$c2'"; fail=1
+fi
+
+echo
 echo "== 7. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?

@@ -27,14 +27,25 @@ entries before moving.
 
 ### Where we stand against `gcc -O2`
 
-| | ours | gcc | ratio | shape |
+Run `tools/vs-c.sh`; it has ten sections now and prints these. Measured 2026-09-20, gcc 16:
+
+| | ours | gcc -O2 | | shape |
 |---|---|---|---|---|
-| size, a program that prints 4 | 611 B | 968 B | **0.63x** | we win |
-| buffered output, 100k integers | 5.5 ms | 11.6 ms | **0.47x** | we win |
-| `loopsum` — latency-bound loop | 218M cyc | 304M | **0.72x** | we win |
-| startup, tail calls | — | — | 1.00x | tie |
-| `triple` — throughput-bound loop | 151.5M cyc | 110.8M | **1.36x** | behind |
-| `fib32` — call-heavy | 15.0M cyc | 9.8M | **1.52x** | behind (but see below) |
+| size, a program that prints 4 | 600 B | 968 B | **0.62x** | we win |
+| startup, 500 runs | 590 ms | 707 ms | **0.83x** | we win |
+| buffered output, 100k integers | 7 ms | 18 ms | **0.39x** | we win |
+| `loopsum` — latency-bound loop | 161 ms | 199 ms | **0.81x** | we win (on 14 instructions an iteration against 6) |
+| strings, SCANNING 194 KB | 4 ms | 4 ms | **1.00x** | parity |
+| tail calls, 1M deep | constant stack | not guaranteed | — | tie/win |
+| `triple` — throughput-bound loop | 111 ms | 84 ms | 1.32x | behind — the surviving overflow checks (F-130: 32% of the loop) |
+| `fib32` — call-heavy | 13 ms | 9 ms | 1.44x | behind — gcc REASSOCIATES the sum, which trapping forbids (F-132) |
+| strings, BUILDING 200k appends | 7 ms | 3 ms | 2.3x | behind (F-141) |
+| **records, 2M field updates** | **129 ms** | **7 ms** | **18.4x** | behind (F-140) |
+
+**Section 10 is the one to read.** The same loop with the accumulator as a bare i64 is **7 ms --
+exactly C's number**. So the entire 18.4x is the ALLOCATION: not the loop, not the calling
+convention, not the overflow checks. That is what makes F-140 a missing optimisation rather than
+a semantic cost.
 
 **`gcc -O2` is not the only yardstick, and on `fib` it is the wrong one** (F-132). Against C
 compilers held to **wat's trapping semantics** we are **2.46x** faster than `clang` and **3.22x**

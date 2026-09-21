@@ -12153,6 +12153,53 @@ twice is disqualified, no matter where or when the second mention happens.
 - **Repro:** `elf/bench/strbuild.wat` and `elf/bench/strbuild2.wat`; compile both and run.
 
 
+### C-175 / F-142: records get an ownership path — and the static test turns out to be load-bearing
+
+F-140 found records were the one aggregate with no last-use fast path. `:c::rt-slot-set-own` is
+that path: seventeen bytes that test the share count and either write the field where it stands
+or fall through to the copying `slot_set`.
+
+| | | |
+|---|---|---|
+| `rec1.wat` — record named ONCE | **11 ms** | the owning path fires |
+| `recflat.wat` — bare i64, nothing allocated | 7 ms | the floor |
+| `rec.wat` — named twice | 131 ms | unchanged, F-141 |
+
+A field update costs about **2 ns** now where the copy costs 60.
+
+**F-142, AND IT IS A CORRECTION TO MY OWN REASONING.** `:c::share` emits
+`cmp [rax-8],0 ; je +4 ; incq [rax-8]` -- the word before the pointer is a SHARE COUNT, zero
+meaning a literal in the read-only segment. Reading that, I concluded the runtime count was the
+safety proof and the compiler's `:c::linear?` merely an optimisation hint, so `assoc` could call
+the owning path unconditionally and let the count decide. That is clean, and it is wrong.
+
+The bootstrap said so at once: **`bench.elf`, `fib32.elf` and `fib.elf` differed between the
+interpreted and the compiled compiler**, while the fixpoint still held. That signature is
+diagnostic -- `assoc` is pure in the interpreter, so a disagreement means the compiled side
+mutated a record something else was still holding.
+
+**The count UNDER-counts.** `:c::share` increments only for symbols of pointer type, at nine
+sites; a record can reach a second holder without passing through any of them. So the static test
+is not a hint -- it is compensating for an incomplete count, and `conj` and `concat` were gated
+for a reason I had assumed away. `assoc` is gated the same way now, and the count is the second
+of two checks rather than the only one.
+
+- **What it cost:** one bootstrap. **What it bought:** a fact about the ownership model that was
+  written down nowhere and that I would otherwise have carried into the REPL work.
+- **And the oracle that caught it was not byte-identity.** This was the first change all day to
+  alter emitted code, so byte-identity against the previous commit did not apply. What caught it
+  was the bootstrap's OTHER comparison -- the interpreter's output against the compiled
+  compiler's -- which exists precisely for a divergence that only appears once the compiler is
+  compiled.
+- **F-141 is now the binding constraint, and it is not a shortfall in this fix.** The accumulating
+  idiom `(assoc s :a (+ (St/a s) i))` names the record twice and CANNOT be written otherwise:
+  computing the new value from the old field is inherently a second mention. There is a benchmark
+  on each side of that line now -- `rec1.wat` reaches the path, `rec.wat` cannot.
+- **Class:** Improve (done) + the liveness test still open.
+- **Repro:** `tools/vs-c.sh` section 10; `tools/bootstrap.sh`; `tools/elf-run.sh` for the
+  differential that cleared it.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so

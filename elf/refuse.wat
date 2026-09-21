@@ -2185,9 +2185,19 @@
           (:wat::core::let
             [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
              o2 (:c::share (:wat::core::nth ks 3) env pg
-                  (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))]
+                  (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))
+             ;; the same proof `conj` requires of its container (elf/compile.wat, `:c::conj?`)
+             own? (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                    (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0))]
+            ;; **The static test is LOAD-BEARING, not a hint** -- measured, F-142. Calling the
+            ;; owning path unconditionally and letting the runtime share count decide made the
+            ;; compiler emit different code for `bench`, `fib` and `fib32` when compiled than
+            ;; when interpreted: the count UNDER-counts, because `:c::share` increments only for
+            ;; symbols of pointer type at nine sites, and a record can reach a second holder
+            ;; without passing through any of them. So this gates the same way `conj` and
+            ;; `concat` do, and the count is the second of two checks rather than the only one.
             (:c::call (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax) (:c::mov-rcx fi)) 8)
-              (:c::at-slot rt)))))
+              (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt))))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
       ;; (PersistentMap :- [K V]), or :wat::core::Record" -- which is F-104 in the language
       ;; itself. The machine code for it is already here and costs nothing extra: `slot_set`
@@ -3947,14 +3957,14 @@
     ((:c::is? s "wat.string/contains?" ":wat::string::contains?") 17)
     ((:c::is? s "wat.core/Vector" ":wat::core::Vector") 19)
     ((:c::is? s "wat.core/conj" ":wat::core::conj") 27)
-    ((:c::is? s "wat.core/assoc" ":wat::core::assoc") 27)
-    ((:c::is? s "prim/write-hex" ":prim::write-hex") 32)
-    ((:c::is? s "prim/read-hex" ":prim::read-hex") 32)
-    ((:c::is? s "wat.io/read-file" ":wat::io::read-file") 32)
+    ((:c::is? s "wat.core/assoc" ":wat::core::assoc") 28)
+    ((:c::is? s "prim/write-hex" ":prim::write-hex") 33)
+    ((:c::is? s "prim/read-hex" ":prim::read-hex") 33)
+    ((:c::is? s "wat.io/read-file" ":wat::io::read-file") 33)
     ;; a record constructor allocates, which is vec_new
     ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) s 0) 0) 18)
     ;; **the safety net**: a built-in nothing above names takes all of it
-    ((:c::builtin? s) 32)
+    ((:c::builtin? s) 33)
     (:else 0)))
 
 (:wat::core::defn :c::lvl-node [pg <- :c::Prog a <- :wat::core::i64 hs <- :wat::core::bool] -> :wat::core::i64
