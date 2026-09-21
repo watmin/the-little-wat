@@ -548,19 +548,102 @@
     "05e876faffff49c7070100000049c7470801000000498d4710498d4d0148"
     "8908488950084c8940104d89df415d415c5bc3"))
 
-(:wat::core::defn :c::rt-tree-from-arr [] -> :wat::core::String
-  (:wat::string::concat
-    "53415441554889c34c8b2b4d31e4e88ffeffff4989c14d89fb4983c3284d"
-    "3b5e087605e823faffff49c7070100000049c7470801000000498d471048"
-    "c7000000000048c74008000000004c8948104d89df4d39ec730f4a8b4ce3"
-    "08e8d9feffff49ffc4ebec415d415c5bc3"))
+;; `tree_from_arr(rax = flat array) -> rax` -- promote a flat Vector to the 32-way trie, by
+;; making an empty tree and pushing every element into it. Called once, when a vector outgrows
+;; `:c::arr-max`; after that `vec_conj` goes straight to `tree_push`.
+(:wat::core::defn :c::rt-tree-from-arr [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::rbx)) (:c::reg-push 1) (:c::reg-push 2)
+           (:c::mov-rr (:c::rax) (:c::rbx))
+           (:c::mov-rm (:c::rbx) 0 2)
+           (:c::xor-rr 1 1))
+     ;; the root node first: `tree_push` needs somewhere to push into
+     at-nn (:wat::core::+ (:c::at-tfa lay) (:c::hexlen pre))
+     mk (:wat::string::concat
+          (:c::rt-call (:c::at-nnew lay) (:wat::core::+ at-nn (:c::call-size)))
+          (:c::mov-rr (:c::rax) (:c::r9)))
+     ;; an empty Vector object: the tree arm, then len 0, shift 0, and the root
+     obj (:wat::core::+ (:c::varr-ptr) (:wat::core::* 3 (:c::word)))
+     alloc (:wat::string::concat
+             (:c::mov-mi (:c::r15) 0 (:c::vec-tree))
+             (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
+             (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::rax))
+             (:c::mov-mi (:c::rax) 0 0)
+             (:c::mov-mi (:c::rax) (:c::vec-shift) 0)
+             (:c::mov-mr (:c::r9) (:c::rax) (:c::vec-root))
+             (:c::mov-rr (:c::r11) (:c::r15)))
+     exit (:wat::string::concat (:c::reg-pop 2) (:c::reg-pop 1) (:c::reg-pop (:c::rbx)) (:c::ret))
+     ;; one element: fetch it and push it
+     step0 (:c::rm "8b" (:c::rcx) (:c::rbx) 1 (:c::word) (:c::vec-data))
+]
+    (:wat::core::let
+      [bump (:c::rt-bump (:wat::core::+ at-nn (:c::hexlen mk)) lay
+              (:c::add-ri (:c::r11) obj) (:c::r11))
+       top (:wat::core::+ at-nn
+             (:wat::core::+ (:c::hexlen mk)
+               (:wat::core::+ (:c::hexlen bump) (:c::hexlen alloc))))
+       guard (:wat::string::concat (:c::cmp-rr 2 1)
+               (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-below)))
+                 (:wat::core::+ (:c::hexlen step0)
+                   (:wat::core::+ (:c::call-size)
+                     (:wat::core::+ (:c::hexlen (:c::inc-r 1)) (:c::rel8-size))))))
+       at-push (:wat::core::+ top (:wat::core::+ (:c::hexlen guard) (:c::hexlen step0)))
+       body (:wat::string::concat guard step0
+              (:c::rt-call (:c::at-tpush lay) (:wat::core::+ at-push (:c::call-size)))
+              (:c::inc-r 1))]
+      (:wat::string::concat pre mk bump alloc body (:c::jmp-back body) exit))))
 
-(:wat::core::defn :c::rt-vec-conj [] -> :wat::core::String
-  (:wat::string::concat
-    "488378f0000f85c3feffff4c8b004983f808720c51e87bffffff59e9aefe"
-    "ffff4989ca4a8d14c5200000004d89fb4901d34d3b5e087605e8a4f9ffff"
-    "49c7070000000049c74708010000004d8d4f10498d5001498911498d7908"
-    "488d70084c89c1f348a54c89174d89df4c89c8c3"))
+;; `vec_conj(rax = vec, rcx = value) -> rax`. Three paths, and the first two are handoffs:
+;; a vector already a TREE goes to `tree_push`; a flat one at `:c::arr-max` is promoted first and
+;; then goes to `tree_push`; a flat one with room is copied with the new element appended.
+(:wat::core::defn :c::rt-vec-conj [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat))
+     at-jne (:wat::core::+ (:c::at-vconj lay) (:c::hexlen head))
+     ;; not flat: it is the trie already
+     to-push (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-tpush lay)
+               (:wat::core::+ at-jne (:c::rel32-size)))
+     test (:wat::string::concat
+            (:c::mov-rm (:c::rax) 0 (:c::r8))
+            (:c::cmp-ri (:c::r8) (:c::arr-max)))
+     at-promote (:wat::core::+ at-jne
+                  (:wat::core::+ (:c::rel32-size)
+                    (:wat::core::+ (:c::hexlen test) (:c::rel8-size))))
+     ;; full: promote to a tree, then push into it
+     promote (:wat::string::concat
+               (:c::reg-push (:c::rcx))
+               (:c::rt-call (:c::at-tfa lay)
+                 (:wat::core::+ at-promote
+                   (:wat::core::+ (:c::hexlen (:c::reg-push (:c::rcx))) (:c::call-size))))
+               (:c::reg-pop (:c::rcx)))
+     at-jmp (:wat::core::+ at-promote (:c::hexlen promote))
+     spill (:wat::string::concat promote
+             (:c::jmp-rel32 (:wat::core::- (:c::at-tpush lay)
+                              (:wat::core::+ at-jmp (:c::call-size)))))
+     size (:c::lea (:c::no-reg) (:c::r8) (:c::word)
+            (:wat::core::+ (:c::varr-hdr) (:c::word)) (:c::rdx))
+     pre (:wat::string::concat (:c::mov-rr (:c::rcx) (:c::r10)) size)
+     at-bump (:wat::core::+ at-promote
+               (:wat::core::+ (:c::hexlen spill) (:c::hexlen pre)))]
+    (:wat::string::concat
+      head to-push test
+      (:c::br-over (:c::jcc-rel8 (:c::cc-below)) spill)
+      spill pre
+      (:c::rt-bump at-bump lay (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11))
+      (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
+      (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
+      (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r9))
+      (:c::lea-at (:c::r8) 1 (:c::rdx))
+      (:c::mov-mr (:c::rdx) (:c::r9) 0)
+      (:c::lea-at (:c::r9) (:c::vec-data) (:c::rdi))
+      (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
+      (:c::mov-rr (:c::r8) (:c::rcx))
+      (:c::rep-movsq)
+      (:c::mov-mr (:c::r10) (:c::rdi) 0)
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::r9) (:c::rax))
+      (:c::ret))))
 
 ;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax` -- a copy of the whole array with
 ;; one slot changed, which is what an immutable `assoc` on a leaf costs. The allocation is
@@ -895,8 +978,8 @@
     ((:wat::core::= i 21) (:c::rt-node-copy lay))
     ((:wat::core::= i 22) (:c::rt-tree-get))
     ((:wat::core::= i 23) (:c::rt-tree-push))
-    ((:wat::core::= i 24) (:c::rt-tree-from-arr))
-    ((:wat::core::= i 25) (:c::rt-vec-conj))
+    ((:wat::core::= i 24) (:c::rt-tree-from-arr lay))
+    ((:wat::core::= i 25) (:c::rt-vec-conj lay))
     ((:wat::core::= i 26) (:c::rt-vec-conj-own))
     ((:wat::core::= i 27) (:c::rt-slot-set lay))
     ((:wat::core::= i 28) (:c::rt-hexval))
@@ -948,6 +1031,27 @@
 (:wat::core::defn :c::layout [rt <- :wat::core::i64] -> :c::Layout
   (:c::lay (:wat::core::Vector :- [:wat::core::i64]) rt 0))
 
+;; **the block does not move, so it is built ONCE and the offsets are shifted.**
+;;
+;; Every internal reference in it is a DIFFERENCE between two of its own addresses, so the bytes
+;; at base 0 and at a real load address are identical -- checked directly when the layout was
+;; first computed (F-137), not assumed. That makes `(:c::layout rt-addr)` the base-0 layout plus
+;; rt-addr, and nothing has to be built a second time to learn it.
+;;
+;; This matters because a routine is no longer a string literal. `:c::compile` built the whole
+;; block THREE times -- `(:c::layout 0)` to measure, `(:c::layout rt-addr)` for the real
+;; addresses, and `:c::runtime` to emit -- which cost nothing while `:c::rt-flush` returned a
+;; constant and cost 36% of the compiler's time by the twenty-sixth conversion. F-137's shape,
+;; one level up: the work was always there, and turning the routines into expressions is what
+;; made it expensive.
+(:wat::core::defn :c::shift [lay <- :c::Layout base <- :wat::core::i64 i <- :wat::core::i64
+                             acc <- :c::Layout] -> :c::Layout
+  (:wat::core::if (:wat::core::>= i (:wat::core::length lay)) acc
+    (:c::shift lay base (:wat::core::+ i 1)
+      (:wat::core::conj acc (:wat::core::+ (:wat::core::nth lay i) base)))))
+(:wat::core::defn :c::rebase [lay <- :c::Layout base <- :wat::core::i64] -> :c::Layout
+  (:c::shift lay base 0 (:wat::core::Vector :- [:wat::core::i64])))
+
 ;; every entry point, by index into that one pass. `divzero`, `tree-push`, `tree-from-arr`,
 ;; `hexchar` and `node-new`'s siblings are reached only from inside other routines, so they need
 ;; no accessor -- only their place in the order, which they have.
@@ -979,6 +1083,10 @@
 (:wat::core::defn :c::at-nnew [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 20))
 (:wat::core::defn :c::at-ncopy [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 21))
 (:wat::core::defn :c::at-tget [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 22))
+;; reached only from inside the vector routines, like `divzero` -- but with an offset like
+;; everything else, and asking the layout is the only non-recursive way to have it
+(:wat::core::defn :c::at-tpush [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 23))
+(:wat::core::defn :c::at-tfa [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 24))
 (:wat::core::defn :c::at-vconj [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 25))
 (:wat::core::defn :c::at-vconj-own [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 26))
 (:wat::core::defn :c::at-slot [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 27))
@@ -1032,6 +1140,12 @@
 (:wat::core::defn :c::vec-root [] -> :wat::core::i64 16)
 (:wat::core::defn :c::vec-ptr [] -> :wat::core::i64 8)
 (:wat::core::defn :c::vec-hdr [] -> :wat::core::i64 16)
+;; **a Vector is FLAT until it is not.** The word two before the pointer says which: a small
+;; vector is a plain array and `conj` copies it; past `:c::arr-max` elements it is promoted to
+;; the 32-way trie and `conj` goes through `tree_push` instead. `vec_conj` tests exactly this.
+(:wat::core::defn :c::vec-flat [] -> :wat::core::i64 0)
+(:wat::core::defn :c::vec-tree [] -> :wat::core::i64 1)
+(:wat::core::defn :c::arr-max [] -> :wat::core::i64 8)
 (:wat::core::defn :c::varr-ptr [] -> :wat::core::i64 16)
 (:wat::core::defn :c::varr-hdr [] -> :wat::core::i64 24)
 

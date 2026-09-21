@@ -81,13 +81,26 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-four done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-six done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
-`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`);
-**9 left**, biggest last (`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199,
-`io-read-file` 175, `prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size:
-`tree-from-arr` 107, `vec-conj` 110.
+`slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`,
+`tree-from-arr`, `vec-conj`); **7 left**: `i64-to-str` 138, `print-str` 147, `prim-write-hex`
+163, `io-read-file` 175, `tree-push` 199, `prim-read-hex` 227, `vec-conj-own` 240.
+
+**THE BLOCK IS BUILT ONCE PER COMPILE NOW, and nothing else rebuilds it.** Three times was the
+count -- `(:c::layout 0)` to measure, `(:c::layout rt-addr)` for the real addresses, and
+`:c::runtime` to emit. Free while a routine was a string literal; **36% of the compiler's time by
+the twenty-sixth conversion** (509 -> 694 ms). The block is position-independent -- every internal
+reference is a difference between two of its own addresses, verified at base 0 and at a real load
+address when F-137 first built the layout -- so `(:c::layout rt-addr)` is the base-0 layout
+shifted, and emitting slices the one build. **503 ms on the largest compiler yet.**
+
+This is the THIRD instance of one class today (the `at-*` chain, `stub-len`'s duplicate layout,
+this). Each time the work was always there and invisible, because it was cheap before the
+routines became expressions. After this there is nothing left rebuilding per compile -- one
+build, one shift, one slice -- which matters because the last seven conversions would each have
+made any survivor worse.
 
 **A byte count does not belong in a comment.** The first audit of the claims against the real
 bytes -- possible only once `tools/rt-disasm.sh` stopped grepping hex out of the source -- found
