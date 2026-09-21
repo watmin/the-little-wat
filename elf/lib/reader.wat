@@ -52,35 +52,35 @@
 
 ;; ---------------------------------------------------------------- scanning
 
-(wat.core/defn rd/eol [src :- wat.type/String i :- wat.type/i64] :- wat.type/i64
+(wat.core/defn rd/eol [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
-    ((wat.core/>= i (wat.string/length src)) i)
+    ((wat.core/>= i n) i)
     ((wat.core/= (rd/ch src i) "\n") (wat.core/+ i 1))
-    (:else (rd/eol src (wat.core/+ i 1)))))
+    (:else (rd/eol src n (wat.core/+ i 1)))))
 
 ;; whitespace and `;` comments, to the next thing that matters
-(wat.core/defn rd/skip [src :- wat.type/String i :- wat.type/i64] :- wat.type/i64
+(wat.core/defn rd/skip [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
-    ((wat.core/>= i (wat.string/length src)) i)
-    ((rd/ws? (rd/ch src i)) (rd/skip src (wat.core/+ i 1)))
-    ((wat.core/= (rd/ch src i) ";") (rd/skip src (rd/eol src i)))
+    ((wat.core/>= i n) i)
+    ((rd/ws? (rd/ch src i)) (rd/skip src n (wat.core/+ i 1)))
+    ((wat.core/= (rd/ch src i) ";") (rd/skip src n (rd/eol src n i)))
     (:else i)))
 
-(wat.core/defn rd/atom-end [src :- wat.type/String i :- wat.type/i64] :- wat.type/i64
+(wat.core/defn rd/atom-end [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
-    ((wat.core/>= i (wat.string/length src)) i)
+    ((wat.core/>= i n) i)
     ((rd/ws? (rd/ch src i)) i)
     ((rd/delim? (rd/ch src i)) i)
-    (:else (rd/atom-end src (wat.core/+ i 1)))))
+    (:else (rd/atom-end src n (wat.core/+ i 1)))))
 
 ;; from just after the opening quote to just after the closing one; a backslash takes the next
 ;; character with it, whatever it is
-(wat.core/defn rd/str-end [src :- wat.type/String i :- wat.type/i64] :- wat.type/i64
+(wat.core/defn rd/str-end [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
-    ((wat.core/>= i (wat.string/length src)) i)
-    ((wat.core/= (rd/ch src i) "\\") (rd/str-end src (wat.core/+ i 2)))
+    ((wat.core/>= i n) i)
+    ((wat.core/= (rd/ch src i) "\\") (rd/str-end src n (wat.core/+ i 2)))
     ((wat.core/= (rd/ch src i) "\"") (wat.core/+ i 1))
-    (:else (rd/str-end src (wat.core/+ i 1)))))
+    (:else (rd/str-end src n (wat.core/+ i 1)))))
 
 ;; ---------------------------------------------------------------- classifying an atom
 
@@ -121,60 +121,67 @@
 
 ;; ---------------------------------------------------------------- the parser
 
-(wat.core/defn rd/form [src :- wat.type/String st :- :rd::St] :- :rd::St
-  (wat.core/let [i (rd/skip src (:rd::St/pos st))
+(wat.core/defn rd/form [src :- wat.type/String n :- wat.type/i64 st :- :rd::St] :- :rd::St
+  (wat.core/let [i (rd/skip src n (:rd::St/pos st))
                  a (:rd::St/arena st)]
     (wat.core/cond
-      ((wat.core/>= i (wat.string/length src))
+      ((wat.core/>= i n)
         (:rd::St :arena a :pos i :node -1 :kids (rd/empty-kids)))
-      ((wat.core/= (rd/ch src i) "(") (rd/seq src a i ")" "list"))
-      ((wat.core/= (rd/ch src i) "[") (rd/seq src a i "]" "vector"))
-      ((wat.core/= (rd/ch src i) "{") (rd/seq src a i "}" "map"))
+      ((wat.core/= (rd/ch src i) "(") (rd/seq src n a i ")" "list"))
+      ((wat.core/= (rd/ch src i) "[") (rd/seq src n a i "]" "vector"))
+      ((wat.core/= (rd/ch src i) "{") (rd/seq src n a i "}" "map"))
       ((wat.core/= (rd/ch src i) "\"")
-        (wat.core/let [e (rd/str-end src (wat.core/+ i 1))]
+        (wat.core/let [e (rd/str-end src n (wat.core/+ i 1))]
           (rd/add a (wat.core/length a) "string" (wat.string/subs src i e) (rd/empty-kids) e)))
       (:else
-        (wat.core/let [e (rd/atom-end src i)
+        (wat.core/let [e (rd/atom-end src n i)
                        t (wat.string/subs src i e)]
           (rd/add a (wat.core/length a) (rd/classify t) t (rd/empty-kids) e))))))
 
 ;; children up to the closing delimiter; `kids` carries the indices back out
-(wat.core/defn rd/kids-of [src :- wat.type/String st :- :rd::St
+(wat.core/defn rd/kids-of [src :- wat.type/String n :- wat.type/i64 st :- :rd::St
                            close :- wat.type/String acc :- :rd::Kids] :- :rd::St
-  (wat.core/let [i (rd/skip src (:rd::St/pos st))
+  (wat.core/let [i (rd/skip src n (:rd::St/pos st))
                  a (:rd::St/arena st)]
     (wat.core/cond
-      ((wat.core/>= i (wat.string/length src))
+      ((wat.core/>= i n)
         (:rd::St :arena a :pos i :node -1 :kids acc))
       ((wat.core/= (rd/ch src i) close)
         (:rd::St :arena a :pos (wat.core/+ i 1) :node -1 :kids acc))
       (:else
-        (wat.core/let [r (rd/form src (:rd::St :arena a :pos i :node -1 :kids acc))]
-          (rd/kids-of src r close (wat.core/conj acc (:rd::St/node r))))))))
+        (wat.core/let [r (rd/form src n (:rd::St :arena a :pos i :node -1 :kids acc))]
+          (rd/kids-of src n r close (wat.core/conj acc (:rd::St/node r))))))))
 
-(wat.core/defn rd/seq [src :- wat.type/String a :- :rd::Arena i :- wat.type/i64
+(wat.core/defn rd/seq [src :- wat.type/String n :- wat.type/i64 a :- :rd::Arena i :- wat.type/i64
                        close :- wat.type/String kind :- wat.type/String] :- :rd::St
-  (wat.core/let [r (rd/kids-of src (:rd::St :arena a :pos (wat.core/+ i 1) :node -1
+  (wat.core/let [r (rd/kids-of src n (:rd::St :arena a :pos (wat.core/+ i 1) :node -1
                                             :kids (rd/empty-kids))
                                close (rd/empty-kids))
                  ra (:rd::St/arena r)]
     (rd/add ra (wat.core/length ra) kind (wat.string/subs src i (:rd::St/pos r))
             (:rd::St/kids r) (:rd::St/pos r))))
 
-(wat.core/defn rd/tops [src :- wat.type/String st :- :rd::St acc :- :rd::Kids] :- :rd::St
-  (wat.core/let [i (rd/skip src (:rd::St/pos st))
+(wat.core/defn rd/tops [src :- wat.type/String n :- wat.type/i64 st :- :rd::St acc :- :rd::Kids] :- :rd::St
+  (wat.core/let [i (rd/skip src n (:rd::St/pos st))
                  a (:rd::St/arena st)]
-    (wat.core/if (wat.core/>= i (wat.string/length src))
+    (wat.core/if (wat.core/>= i n)
       (:rd::St :arena a :pos i :node -1 :kids acc)
-      (wat.core/let [r (rd/form src (:rd::St :arena a :pos i :node -1 :kids acc))]
-        (rd/tops src r (wat.core/conj acc (:rd::St/node r)))))))
+      (wat.core/let [r (rd/form src n (:rd::St :arena a :pos i :node -1 :kids acc))]
+        (rd/tops src n r (wat.core/conj acc (:rd::St/node r)))))))
 
 (wat.core/defn rd/empty-arena [] :- :rd::Arena (wat.core/Vector :- [:rd::Node]))
 
 ;; read another file into the SAME arena, so that node indices from every file a program is made
 ;; of live in one space. That is what `load-file!` needs: two arenas would give two node 7s.
+;; **`n` is the source's length, measured once and carried.** Every scanner below used to ask
+;; `(wat.string/length src)` at its own bounds check -- seven sites, each inside a loop over the
+;; characters. wat measures a String in CHARACTERS and the substrate holds UTF-8, so that call is
+;; O(n) in the whole source: `perf` put `core::str::count::do_count_chars` at 19-31% of the time
+;; spent reading, which made reading O(n^2) in the source size -- 4x the source was 8x the time.
+;; The length does not change while the source is being read, so it is a parameter (F-138).
 (wat.core/defn rd/read-into [a :- :rd::Arena src :- wat.type/String] :- :rd::St
-  (rd/tops src (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids)) (rd/empty-kids)))
+  (rd/tops src (wat.string/length src)
+    (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids)) (rd/empty-kids)))
 
 (wat.core/defn rd/read [src :- wat.type/String] :- :rd::St
   (rd/read-into (rd/empty-arena) src))

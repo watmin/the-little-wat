@@ -11950,6 +11950,29 @@ linear earlier: 4x source is 8x time.
 - **Repro:** `bench/records.wat` for the aggregate gap; the three-arm decomposition and the
   `perf` invocation are in this entry.
 
+**Fixed, and the whole arc measured.** `elf/lib/reader.wat` now carries the source length as a
+parameter, computed once in `rd/read-into` -- 21 call sites, 8 scanners, and the node counts are
+unchanged (2,404 / 6,008 / 12,981 at 40/80/160 KB), so it parses exactly what it parsed before.
+
+| | stage 0 | the compiled compiler |
+|---|---|---|
+| before C-173 | ~270 s | ~400 ms |
+| after C-173 (F-137's regression) | 659 s | 1,716 ms |
+| after the layout fix | 490 s | 562 ms |
+| **after the hoist** | **296 s** | **613 ms** |
+
+The profile moved where it was predicted to and no further: `do_count_chars` 19-31% -> 11.5%,
+and nothing replaced it at the top -- `advance_by` 14.5%, `drop_glue::<Value>` 13.2%, then the
+interpreter's own loop (`env_key`, `dispatch_keyword_head_value`, `Environment::lookup`,
+`eval_inner`) at ~29% combined. **Removing the dominant cost promotes the next one**, which is why
+the isolated read probe showed 11% while the real compile showed 40%: reading is a larger share
+of a compile than of a read.
+
+What is left of the string cost is `rd/ch`, which is `(wat.string/subs src i (+ i 1))` -- O(i) per
+character, and the `advance_by` 14.5%. An O(1) char-at is possible because this compiler is
+ASCII-only by construction (F-120), so char index IS byte index; that is a substrate change and
+is not taken here.
+
 
 ## Predicted, unverified
 
