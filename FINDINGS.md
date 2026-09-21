@@ -12796,6 +12796,62 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-155: the currency is UOPS, and with that the whole board becomes one model
+
+**Improve, and it is the entry the last five attempts were missing.** Every failed prediction
+today came from counting instructions. The machine does not count instructions.
+
+Top-down, pinned, `taskset -c 0`:
+
+| `triple` | uops/it | retiring | fe-bound | be-bound | predicted | measured |
+|---|---|---|---|---|---|---|
+| ours | 20.0 | 69.4% | 14.1% | 16.5% | 4.80 | **4.84** |
+| `gcc -O2` | 15.0 | 67.8% | 3.1% | 29.0% | 3.69 | **3.70** |
+
+| `loopsum` | uops/it | retiring | fe-bound | be-bound | predicted | measured |
+|---|---|---|---|---|---|---|
+| ours | 7.99 | 58.4% | 8.6% | 33.0% | 2.28 | **2.48** |
+| `gcc -O2` | 5.01 | 30.6% | 4.4% | 64.7% | 2.73 | **3.07** |
+
+**`cycles = uops / (6 x retiring%)`**, within about ten percent on both. Two terms: how many
+micro-ops you issue, and what fraction of the six-wide issue you can actually use.
+
+- On `triple` **both sides retire at ~68%** -- neither is stalled -- so the uop count decides
+  and gcc's fifteen beat our twenty. We lose on WORK, not on efficiency; our retiring
+  fraction is in fact slightly HIGHER than gcc's.
+- On `loopsum` **gcc retires at 30.6% and is 64.7% backend-bound** -- sitting on its
+  dependency chain two cycles in three. We retire at 58.4%. So our eight uops beat its five.
+  **We win while doing sixty percent more work.**
+
+**Instructions are not uops.** `cmp` + `jcc` macro-fuse into ONE uop. Our twenty-four
+instructions are twenty uops because four pairs fuse; gcc's sixteen are fifteen because one
+pair does. Removing an instruction that fuses removes nothing, which is why C-186 (three
+instructions) and C-188 (one instruction and one taken branch) moved no cycles.
+
+**And it settles cmov arithmetically rather than empirically.** The select is NINE uops either
+way: ours is three fused `cmp`/`jcc` plus three `lea` plus three `jmp`; gcc's is three `lea`
+plus three `cmp` plus three `cmov`. It was never a saving. It cost the macro-fusion and added
+a data dependency, which is why it lost three times.
+
+**The five-uop gap on `triple`, itemised:**
+
+| | uops |
+|---|---|
+| three `jo` -- trapping arithmetic | **+3** |
+| induction variable, for want of strength reduction | **+2** |
+| the three selects | wash, 9 vs 9 |
+| multiplies, adds | wash |
+
+So strength reduction would put us at seventeen uops, about 4.08 cycles against gcc's 3.70 --
+**1.10x, and the remainder is exactly the overflow checks.** That is the quantitative version
+of "we are slower because we impose correctness": true, to the tune of three uops in twenty,
+and only after the transform we have not written yet.
+
+- **Class:** Improve. The queue item is strength reduction (needs induction-variable range
+  analysis, which trapping requires and C is exempt from); the rest of the gap is chosen.
+- **Repro:** `taskset -c 0 perf stat -e '{cpu_core/topdown-retiring/,cpu_core/topdown-fe-bound/,
+  cpu_core/topdown-be-bound/,cpu_core/slots/,cpu_core/cycles/}' ./elf/out/triple.elf`
+
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
