@@ -12380,7 +12380,57 @@ every address zero purely to measure and pass two has to come out the same lengt
 *itself* up by 21% -- stage 1 from 816 ms to 647 ms -- because `concat` against a literal is
 everywhere in its own source. Fixpoint 212,692 bytes.
 
-- **Class:** F-144 Improve (four of six items outstanding); C-177, C-178 done.
+### F-146 / C-179: the record loop, and a benchmark that was not measuring what it stood next to
+
+The same disassembly for `elf/bench/rec.wat`, which is the record target. Nineteen
+instructions, and the waste is a different shape from the string one:
+
+```
+  mov  %r12,%rax          \ cmp through rax
+  cmp  %r13,%rax          /
+  jne  <rel32>            <- six bytes where rel8 reaches (the target is 15 away)
+  mov  %rbx,%rax          \
+  push %rax               | spills the receiver...
+  mov  %rbx,%rax          / ...and reloads it from rbx on the very next instruction
+  mov  0x8(%rax),%rax     the field read
+  add  %r12,%rax
+  jo
+  mov  %rax,%rdx
+  pop  %rax               <- restores what rbx still held
+  movabs $0x0,%rcx        <- the slot INDEX, a constant 0, in ten bytes
+  call slot_set_own
+  ...
+```
+
+**C-179 takes the spill and the index.** The receiver lives in rbx, and our own callees save
+rbx/r12/r13/rbp -- as do the runtime routines that use them as scratch -- which is the entire
+reason parameters live there. So the push and the pop protect it from nothing: it can be
+rematerialised with one `mov` after the value is computed. And the slot index is fixed-width
+either way, but unlike a literal's ADDRESS it cannot change between the measuring pass and the
+emitting pass, because it comes from the program text -- so it does not need the ten-byte
+`movabs` an address does.
+
+Record loop **19 instructions to 17**; stage 1 578 ms, from 647. Fixpoint 212,996 bytes.
+
+**F-146: `rec1.wat` was printed in C's column and computes something else.** `rec.wat`
+accumulates, `(assoc s :a (+ (St/a s) i))`; `rec1.wat` stores the counter, `(assoc s :a i)`.
+Different answers -- 1999999000000 and 1999999 -- and `tools/vs-c.sh` answer-checked
+`rec.elf`, `recflat.elf` and the C control against each other while printing `rec1.elf`'s time
+beside them unchecked. rec1 does strictly less work an iteration: no field read, no add, no
+overflow check.
+
+The attempted fix is the finding. Giving `rec.c` a matching store-only mode produced
+`sub $0x1,%edi ; imul $0x1e8480,%edi,%edi ; lea -0x1(%rdi),%rsi` -- **gcc folded the loop to
+a closed form**, which is the F-140/F-143 fault for the fourth time. The fourth occurrence is
+the one that explains it: `s.a = i` in a loop genuinely IS dead code, because only the last
+write is observable. **No C compiler will ever perform that loop**, so rec1 cannot have a fair
+C rival and never could. The error was giving it a column, not lacking the right control; it
+becomes ours-against-ours evidence like `strbuild2`.
+
+- **Class:** F-146 Correct (the scoreboard), C-179 done.
+- **Repro:** `./elf/out/rec.elf` and `./elf/out/rec1.elf` print different numbers.
+
+- **Class:** F-144 Improve (three of six items outstanding); C-177, C-178, C-179 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
   byte-identical across stages, fixpoint 212,310; `tools/elf-run.sh` 30/30 agreeing with the
   interpreter, refusals and traps unchanged.

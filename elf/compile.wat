@@ -1792,6 +1792,18 @@
            o5 (:c::arith-emit op o4 rt dead?)]
           (:c::fold op ks (:wat::core::+ i 1) o5 env pg rt tb slot -1 ab2)))))))
 
+;; **an operand that can be RE-MATERIALIZED does not have to be spilled.** The two-operand
+;; forms evaluate the first operand into rax, push it, evaluate the second, and pop -- three
+;; instructions and a memory round trip to protect a value that, when it lives in one of the
+;; four callee-saved registers, nothing in between can touch. Our own callees save those four
+;; and so do the runtime routines that use them as scratch, which is the whole reason
+;; parameters live there. `assoc`'s receiver in `elf/bench/rec.wat` was the visible case:
+;; `mov %rbx,%rax ; push %rax ; mov %rbx,%rax` spilled rbx and reloaded rbx on the very next
+;; instruction. C-179.
+(:wat::core::defn :c::remat? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+                   (:wat::core::>= (:c::reg-of a env pg) 0)))
+
 ;; **an operand with a home of its own does not have to displace the accumulator.**
 ;; `cat-fold` brackets every right-hand operand with `push rax ... mov rax,rcx ; pop rax` --
 ;; four instructions of protocol so that the accumulator in rax survives evaluating the
@@ -2289,7 +2301,10 @@
                 (:wat::string::subs kws 1 (:wat::string::length kws)) 0))]
         (:wat::core::if (:wat::core::< fi 0) (:c::fail "assoc field" a pg)
           (:wat::core::let
-            [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
+            [rm? (:c::remat? (:wat::core::nth ks 1) env pg)
+             o1 (:wat::core::if rm? o
+                  (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                    (:c::push-rax) 8))
              o2 (:c::share (:wat::core::nth ks 3) env pg
                   (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))
              ;; the same proof `conj` requires of its container (elf/compile.wat, `:c::conj?`)
@@ -2302,7 +2317,16 @@
             ;; symbols of pointer type at nine sites, and a record can reach a second holder
             ;; without passing through any of them. So this gates the same way `conj` and
             ;; `concat` do, and the count is the second of two checks rather than the only one.
-            (:c::call (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax) (:c::mov-rcx fi)) 8)
+            ;; the field index is FIXED-WIDTH either way, but unlike a literal's address it
+            ;; cannot change between the measuring pass and the emitting pass -- it comes from
+            ;; the program text -- so it does not need the ten-byte `movabs` an address does
+            (:c::call
+              (:wat::core::if rm?
+                (:c::emit o2 (:wat::string::concat "4889c2"
+                  (:c::mov-rr (:c::reg-of (:wat::core::nth ks 1) env pg) (:c::rax))
+                  (:c::mov-ri (:c::rcx) fi)))
+                (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax)
+                  (:c::mov-ri (:c::rcx) fi)) 8))
               (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt))))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
       ;; (PersistentMap :- [K V]), or :wat::core::Record" -- which is F-104 in the language
