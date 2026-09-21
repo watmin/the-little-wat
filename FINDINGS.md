@@ -12853,6 +12853,71 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-160 / C-190: the encoder had three holes no oracle here could see, and the fix reintroduced one of them
+
+**Fix, found by a peer audit against `llvm-mc` (grok, `.pulsare/SCORE-encoder.md`), every claim
+re-verified here.** `elf/lib/x86.wat` had never been checked against an assembler that did not
+come from us. 4,513 forms were encoded through the interpreter and disassembled with
+`llvm-mc 22.1.8`. The 64-bit surface is correct, including the four registers that need special
+cases -- `lea rax,[r12]` is `49 8d 04 24` with its SIB, `lea rax,[r13]` is `49 8d 45 00` with
+its forced disp8. Three holes were not.
+
+**Why no oracle here could catch any of them.** Every instrument in this repo compares us to
+ourselves: `bootstrap.sh` runs the SAME encoder on both sides of its byte-identity check;
+`elf-run.sh` compares ANSWERS, and a wrong register that nothing reads still answers right;
+`tools/emitted.sh` compares bytes to bytes; `vs-c.sh` times whatever we emit. **A legal
+instruction naming a different operand passes all four.**
+
+**Hole 1 -- the byte forms never emitted REX (FIXED, C-190).** With no REX, ModRM codes 4-7 name
+`ah ch dh bh`, NOT `spl bpl sil dil`. So a byte operand needs the prefix for two unrelated
+reasons: the register is r8-r15, *or* its code is 4 or above. `:c::rex-n` only ever asked the
+first, which is why `:c::rex-narrow` was correct for `mov-mi32/16/8` (no byte register) and
+useless here. Of 144 forms, **124 disassembled to a different register**; the 20 correct ones
+are exactly `al/cl/dl/bl` with a base needing no REX -- the subset every shipped caller happens
+to use.
+
+| call | was | is now |
+|---|---|---|
+| `add-ri8 r12,1` | `80 c4 01` = `add ah,1` | `41 80 c4 01` = `add r12b,1` |
+| `mov-mr8 rsi->[rax]` | `88 30` = `mov [rax],dh` | `40 88 30` = `mov [rax],sil` |
+| `mov-mr8 r8->[rax]` | `88 00` = `mov [rax],al` | `44 88 00` = `mov [rax],r8b` |
+| `mov-mr8 rbx->[r12]` | `88 1c 24` = `mov [rsp],bl` | `41 88 1c 24` = `mov [r12],bl` |
+| `mov-mr8 rdx->[rsi]` | `88 16` = `mov [rsi],dl` | unchanged -- the shipped case |
+
+**And the fix reintroduced the same class, which is the part worth keeping.** One correct rule
+applied to three functions produced two right and one wrong: REX carries a register's extension
+bit in a DIFFERENT FIELD depending on which ModRM slot the register occupies. `mov-mr8` puts its
+byte register in `reg` -> REX.R. `add-ri8` puts its register in `rm`, with `reg` serving as the
+`/0` opcode extension -> REX.B, and **REX.R is silently ignored there**. The first cut emitted
+`44 80 c4 01` = `add spl, 1`. Hence `:c::rex-byte` and `:c::rex-byte-rm`, two functions because
+there are two positions.
+
+> **A fix to an unreachable path has no oracle in this repo.** `tools/emitted.sh` read 73/73
+> byte-identical on the BROKEN fix, and it was right to -- the paths being corrected are
+> precisely the ones nothing executes. Zero moved programs proves a fix disturbed nothing
+> working. It says nothing about whether the fix is correct. Verifying that needs the external
+> assembler, every time.
+
+**Hole 2 -- `rsp` as a SIB index silently encodes "no index" (OPEN, documented).** Index code 4
+with REX.X clear means the form has no index; that is correct for rsp as a BASE and wrong for
+rsp as an INDEX. `lea rcx,[rax+rsp]` encodes as `lea rcx,[rax]`, scale and all. r12 is fine --
+it sets REX.X and the same code 4 then really is r12. **The machine has no encoding for this**,
+so there are no correct bytes to emit; the fix is a refusal, not different output. No caller
+passes it today. Left as a comment at `:c::mrm` so the first one that tries finds it.
+
+**Hole 3 -- `:asm::le` truncates silently (OPEN).** `:c::disp8?` and `:c::imm32?` know the
+ranges, and the 64-bit memory forms and `:c::mov-rax-lit` consult them; the other immediate
+forms consult `disp8?` only to choose between one byte and four, then trust `:asm::le` with no
+check that four is enough. `cmp-ri rax, 2147483648` reads back as `cmp rax, -2147483648`. Worse,
+the branch helpers consult nothing: **`:c::br-over` of a 128-byte body emits `eb 80`, which is
+`jmp -128`** -- a forward skip that jumps backward. Shipped uses are far under; `:c::br-len` will
+do it the first time a length outside -128..127 reaches it, and it will still assemble.
+
+- **Class:** C-190 Fix (hole 1, landed). F-160 holes 2 and 3 open, named, not bundled.
+- **Oracle:** fixpoint 218,901; `tools/emitted.sh` 73/73 byte-identical; elf-run 30/30. The
+  bytes themselves verified by `llvm-mc -disassemble -triple=x86_64` against the encoder's own
+  output -- which is the only check that could have found any of this.
+
 ### F-159: held to wat's semantics, `triple` is a WIN over gcc — the 1.33x was a different language
 
 **Fix, and it retires six attempts' worth of chasing.** Every `triple` measurement in F-151

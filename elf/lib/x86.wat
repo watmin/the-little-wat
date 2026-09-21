@@ -268,7 +268,14 @@
 (:wat::core::defn :c::mrm [field <- :wat::core::i64 base <- :wat::core::i64
                            index <- :wat::core::i64 scale <- :wat::core::i64
                            disp <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [s? (:c::sib? base index)]
+;; **rsp cannot be an index, and the encoding for "rsp as index" is "no index".** SIB index
+;; code 4 with REX.X clear means the form has no index at all -- correct for rsp as a BASE and
+;; silently wrong for rsp as an INDEX: `lea rcx,[rax+rsp]` encodes as `lea rcx,[rax]`, scale and
+;; all, with no diagnostic. r12 is fine, because it sets REX.X and the same code 4 then really
+;; is r12. No caller passes rsp as an index today; found by an llvm-mc audit, not by any oracle
+;; here, and recorded so the first caller that tries it finds this comment rather than a wrong
+;; address. The machine has no encoding for it, so there is nothing to fix in the bytes.
+(:wat::core::let [s? (:c::sib? base index)]
     (:wat::string::concat
       (:c::modrm (:c::mem-mod base disp) field
                  (:wat::core::if s? 4 (:c::rcode base)))
@@ -523,15 +530,42 @@
 ;; `div` arrives there -- so turning it into a character and storing it are both byte-wide. Only
 ;; rax/rcx/rdx/rbx reach their low byte without a REX prefix, which is why these take none; the
 ;; four that would need one (`spl`/`bpl`/`sil`/`dil`) are not used this way.
+;; **a byte operand needs REX for two different reasons, and one of them is not "extended".**
+;; With no REX prefix, ModRM codes 4-7 name `ah ch dh bh` -- NOT `spl bpl sil dil`. So a byte
+;; form must emit REX when its register or base is r8-r15 (the ordinary reason) AND when the
+;; byte register's own code is 4 or above (the x86 rule that has nothing to do with extension).
+;; Without this, `add-ri8` of r12 assembled to `add ah, 1` and `mov-mr8` of sil to `mov [rax],
+;; dh` -- legal instructions naming a different register, which every oracle in this repo would
+;; call green, because the bytes round-trip and the shipped callers all happen to use al and dl.
+;; An encoder audit against llvm-mc found it; nothing here could have.
+(:wat::core::defn :c::rex-byte [reg <- :wat::core::i64 base <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::and (:c::reg? reg) (:wat::core::>= (:c::rcode reg) 4))
+    (:asm::u8 (:wat::core::+ 64 (:wat::core::+ (:wat::core::if (:c::rext? reg) 4 0)
+                (:wat::core::if (:wat::core::and (:c::reg? base) (:c::rext? base)) 1 0))))
+    (:c::rex-n reg base)))
+
+;; **and the same question again for a register in the RM field.** `add-ri8`'s operand sits in
+;; ModRM.rm -- the `reg` field is the `/0` opcode extension -- so its extension bit is REX.B,
+;; not REX.R. The first cut of this fix used `:c::rex-byte` and emitted REX.R, which the
+;; processor IGNORES when `reg` is an extension: `add-ri8` of r12 assembled to `add spl, 1`.
+;; Three `mov` forms were right and this one was wrong for exactly that reason, and only
+;; disassembling the fix's own output showed it.
+(:wat::core::defn :c::rex-byte-rm [rm <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::or (:wat::core::>= (:c::rcode rm) 4) (:c::rext? rm))
+    (:asm::u8 (:wat::core::+ 64 (:wat::core::if (:c::rext? rm) 1 0))) ""))
+
 (:wat::core::defn :c::add-ri8 [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "80" (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 1)))
+  (:wat::string::concat (:c::rex-byte-rm dst) "80"
+    (:c::modrm 3 0 (:c::rcode dst)) (:asm::le n 1)))
 (:wat::core::defn :c::mov-mr8 [src <- :wat::core::i64 base <- :wat::core::i64
                                disp <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "88" (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))
+  (:wat::string::concat (:c::rex-byte src base) "88"
+    (:c::mrm (:c::rcode src) base (:c::no-reg) 1 disp)))
 ;; the load: `8a` is `88` with the direction bit set, the same pair as `8b`/`89` one size up
 (:wat::core::defn :c::mov-r8m [base <- :wat::core::i64 disp <- :wat::core::i64
                                dst <- :wat::core::i64] -> :wat::core::String
-  (:wat::string::concat "8a" (:c::mrm (:c::rcode dst) base (:c::no-reg) 1 disp)))
+  (:wat::string::concat (:c::rex-byte dst base) "8a"
+    (:c::mrm (:c::rcode dst) base (:c::no-reg) 1 disp)))
 ;; **`cmp $imm8, %al` has its own one-byte opcode.** x86 gives the accumulator short forms for
 ;; the common immediates -- no ModRM at all -- which is why a scanner comparing a byte against a
 ;; character is two bytes rather than three. It is `%al` ONLY; any other register needs `80 /7`.
