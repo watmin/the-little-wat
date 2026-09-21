@@ -4413,6 +4413,7 @@
     (:c::compile "elf/bench/strbuild2.wat" "elf/out/strbuild2.elf")
     (:c::compile "elf/bench/triple.wat" "elf/out/triple.elf")
     (:c::compile "elf/bench/triple2.wat" "elf/out/triple2.elf")
+    (:c::compile "elf/bench/tripleclamp.wat" "elf/out/tripleclamp.elf")
     (:c::compile "elf/bench/parse.wat"  "elf/out/parse.elf")
     (:c::compile "elf/bench/parsebits.wat" "elf/out/parsebits.elf")
     (:c::compile "elf/bench/walk.wat"   "elf/out/walk.elf")

@@ -12853,6 +12853,52 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-159: held to wat's semantics, `triple` is a WIN over gcc — the 1.33x was a different language
+
+**Fix, and it retires six attempts' worth of chasing.** Every `triple` measurement in F-151
+through F-157 compared us to `gcc -O2`, which compiles a language where signed overflow is
+undefined. F-133 established years-of-findings ago that this is the wrong yardstick for `fib`.
+Nobody applied it to the throughput loop until now.
+
+`elf/bench/triplechk.c` is `triple.c` with `__builtin_mul_overflow` / `__builtin_add_overflow`
+on every arithmetic op -- the same check our `jo` is, written where gcc can optimise it.
+Pinned, `taskset -c 0`, two sittings, all five printing 6570000225000000:
+
+| | ins/it | uops/it | retiring | slots/cyc | cycles/it |
+|---|---|---|---|---|---|
+| **ours (traps)** | 24.0 | **19.9** | 67.5% | 6.00 | **4.86 - 4.92** |
+| `gcc -O2`, checked | 23.0 | 21.0 | 70.2% | 6.00 | **4.97** |
+| `clang -O2`, checked | 20.0 | 19.0 | 70.2% | 6.00 | **4.51** |
+| `gcc -O2` | 16.0 | 15.0 | 67.8% | 5.99 | 3.69 |
+| `clang -O2` | 16.0 | 15.0 | 68.6% | 5.99 | 3.63 |
+
+**The whole 1.33x is the trapping.** gcc doing the same work needs 21.0 uops to our 19.9 and
+runs slower. The five "extra" uops F-155 itemised buy a guarantee the unchecked build does not
+provide, and against a compiler that provides it we are ahead.
+
+**Where we are actually behind is `clang -O2` checked: 4.51 against 4.86, about eight percent**,
+on 19.0 uops to our 19.9. That is the real target on this loop and it is small.
+
+**What this does to the queue.** Strength reduction was named as "the one remaining route" when
+the gap looked like 1.33x. Against checked C it is worth roughly one uop of an eight percent
+difference. It is not worth a new induction-variable analysis.
+
+**The probe that got here failed, and failing is what produced the finding.**
+`elf/bench/tripleclamp.wat` is `triple.wat` with the accumulator CLAMPED to zero instead of
+subtracting, so its interval converges and the existing `:c::dst-dead?` should have deleted the
+three checks using a proof the compiler already holds. **It deleted nothing.** The blocker is
+not what C-170 describes for `triple` (an accumulator whose interval diverges) -- it is that
+bounds enter through exactly one door, the counted-loop recogniser, which bounds a COUNTER. An
+accumulator has no path to a bound at all, clamped or not. So the cheap fix does not exist, and
+the question had to be asked of C instead.
+
+- **Class:** Fix. `triple` moves from "behind gcc -O2 by 1.33x" to "ahead of checked gcc,
+  behind checked clang by 8%".
+- **Repro:** `gcc -O2 -static elf/bench/triplechk.c`, then `taskset -c 0 perf stat -e
+  '{cpu_core/topdown-retiring/,cpu_core/slots/,cpu_core/cycles/,cpu_core/instructions/}'` over
+  each binary. `elf/out/tripleclamp.elf` is the failed probe, kept because it records what the
+  bounds analysis cannot see.
+
 ### F-157: F-155's formula is an identity, and F-156's mechanism describes a schedule that does not exist
 
 **Correct, from a peer review (grok, `.pulsare/SCORE-review-f156.md`) that was right on both
