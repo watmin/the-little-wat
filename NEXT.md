@@ -81,12 +81,19 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-six done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-eight done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
 `slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`,
-`tree-from-arr`, `vec-conj`); **7 left**: `i64-to-str` 138, `print-str` 147, `prim-write-hex`
-163, `io-read-file` 175, `tree-push` 199, `prim-read-hex` 227, `vec-conj-own` 240.
+`tree-from-arr`, `vec-conj`, `print-i64`+`i64-to-str` via a shared `:c::rt-digits`); **5 left**:
+`print-str` 147, `prim-write-hex` 163, `io-read-file` 175, `tree-push` 199, `prim-read-hex` 227,
+`vec-conj-own` 240.
+
+**The conversion keeps finding duplicates, which is its real payoff.** So far: three abort
+routines that were one (`ovf`/`oom`/`divzero`), `rt-cap` (the power-of-two size, computed
+identically in four places), `rt-bump` (the limit check, four callers and three shapes), and now
+`rt-digits` -- 55 bytes byte-identical between `print_i64` and `i64_to_str`, differing only in
+where rsi starts and what they do with the result. None of it was visible as hex.
 
 **THE BLOCK IS BUILT ONCE PER COMPILE NOW, and nothing else rebuilds it.** Three times was the
 count -- `(:c::layout 0)` to measure, `(:c::layout rt-addr)` for the real addresses, and
@@ -131,10 +138,12 @@ depend on arguments, are out of its reach entirely. Worth doing for legibility, 
 **TIME EACH BATCH, do not trust green** -- F-137 is exactly this change regressing 5x while all
 68 binaries stayed byte-identical and the fixpoint held.
 
-**BUT COMPARE LIKE WITH LIKE.** `--fast` and a full bootstrap measure stage 1 under different
-conditions and give systematically different numbers -- full: 509/518/562/613 ms today;
-`--fast`: 643 through 890. Comparing across the two manufactured a phantom 36% regression on
-2026-09-20 and cost an hour chasing it. **The guard is the FULL bootstrap's stage-1 time.**
+**AND THE GUARD IS `tools/cc-time.sh`, NOT THE BOOTSTRAP'S PRINTED TIME.** That number is one
+sample and it lied three times in one session -- 739 and 828 ms against real measurements of 546
+or better, plus a phantom 36% from comparing a `--fast` sample to a full-bootstrap one. cc-time
+copies the binary (R-006), checks every exit, takes the best of fourteen, and reports an
+**instruction count**, which barely moves with load. Compare instructions; they said +0.6% for
+the batch the wall clock called +43%.
 
 ### The next objective is a REPL, not an XDP driver (2026-09-20, the builder's call)
 

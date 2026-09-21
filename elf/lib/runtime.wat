@@ -23,6 +23,42 @@
 ;; the order below is load-bearing. This is the part of the output a C toolchain would link libc
 ;; for, and `buf_put` is the part libc calls stdio.
 
+;; **the digits, and the sign -- shared by `print_i64` and `i64_to_str`.**
+;;
+;; They come out BACKWARDS, so they are written backwards: rsi walks DOWN from wherever the
+;; caller left it, and the caller measures how far afterwards. `div` leaves the remainder in rdx,
+;; and adding `'0'` to its LOW BYTE makes it a character in place.
+;;
+;; The two callers differ only in where rsi starts and what they do with the result -- one writes
+;; it to the output buffer, the other copies it to the heap -- and these fifty-five bytes were
+;; identical in both. That is not a thing anyone was going to see in two hex blobs.
+(:wat::core::defn :c::rt-digits [] -> :wat::core::String
+  (:wat::core::let
+    [digit (:wat::string::concat
+             (:c::xor-rr (:c::rdx) (:c::rdx))
+             (:c::div-r (:c::rcx))
+             (:c::add-ri8 (:c::rdx) (:asm::code-of "0"))
+             (:c::dec-r (:c::rsi))
+             (:c::mov-mr8 (:c::rdx) (:c::rsi) 0)
+             (:c::test-rr (:c::rax) (:c::rax)))
+     loop (:wat::string::concat digit
+            (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) digit))
+     ;; a negative was negated to divide it, and r8 remembers that it was
+     sign (:wat::string::concat (:c::neg-r (:c::rax)) (:c::mov-ri (:c::r8) 1))
+     minus (:wat::string::concat
+             (:c::dec-r (:c::rsi))
+             (:c::mov-mi8 (:c::rsi) 0 (:asm::code-of "-")))]
+    (:wat::string::concat
+      (:c::xor-rr (:c::r8) (:c::r8))
+      (:c::test-rr (:c::rax) (:c::rax))
+      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-sign))) sign)
+      sign
+      (:c::mov-ri (:c::rcx) 10)
+      loop
+      (:c::test-rr (:c::r8) (:c::r8))
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) minus)
+      minus)))
+
 ;; `print_i64(rax)` -- the digits come out BACKWARDS, so they are written backwards. rsi starts
 ;; at the end of a stack scratch and walks down; the count at the end is how far it walked.
 ;;
@@ -32,21 +68,6 @@
 (:wat::core::defn :c::rt-print-i64 [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [top -1
-     ;; one digit: divide by ten, make the remainder a character, step back, store it
-     digit (:wat::string::concat
-             (:c::xor-rr (:c::rdx) (:c::rdx))
-             (:c::div-r (:c::rcx))
-             (:c::add-ri8 (:c::rdx) (:asm::code-of "0"))
-             (:c::dec-r (:c::rsi))
-             (:c::mov-mr8 (:c::rdx) (:c::rsi) 0)
-             (:c::test-rr (:c::rax) (:c::rax)))
-     loop (:wat::string::concat digit
-            (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) digit))
-     ;; a negative was negated for the division, and r8 remembers it
-     sign (:wat::string::concat (:c::neg-r (:c::rax)) (:c::mov-ri (:c::r8) 1))
-     minus (:wat::string::concat
-             (:c::dec-r (:c::rsi))
-             (:c::mov-mi8 (:c::rsi) 0 (:asm::code-of "-")))
      tail (:wat::string::concat
             (:c::lea-at (:c::rbp) top (:c::rdx))
             (:c::sub-rr (:c::rsi) (:c::rdx))
@@ -54,17 +75,10 @@
      head (:wat::string::concat
             (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
             (:c::sub-ri (:c::rsp) (:c::scratch-frame))
+            ;; the newline is planted first, at the top, so it needs no separate write
             (:c::lea-at (:c::rbp) top (:c::rsi))
             (:c::mov-mi8 (:c::rsi) 0 (:c::nl))
-            (:c::xor-rr (:c::r8) (:c::r8))
-            (:c::test-rr (:c::rax) (:c::rax))
-            (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-sign))) sign)
-            sign
-            (:c::mov-ri (:c::rcx) 10)
-            loop
-            (:c::test-rr (:c::r8) (:c::r8))
-            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) minus)
-            minus
+            (:c::rt-digits)
             tail)]
     (:wat::string::concat
       head
@@ -98,7 +112,7 @@
             (:c::mov-rm (:c::r9) 0 (:c::r10))
             (:c::mov-rr (:c::r8) (:c::r11))
             (:c::add-rr (:c::r10) (:c::r11))
-            (:c::rt-cap (:c::r8) (:c::rdi))
+            (:c::rt-cap (:c::r8) (:c::rdx) (:c::rdi))
             (:c::lea-at (:c::r11) (:c::vec-hdr) (:c::rdx))
             (:c::cmp-rr (:c::rdi) (:c::rdx))
             (:c::br-over (:c::jcc-rel8 (:c::cc-above)) fit)
@@ -126,7 +140,7 @@
            (:c::lea-at (:c::rcx) (:c::str-data) (:c::r11))
            (:c::mov-rr (:c::r8) (:c::rax))
            (:c::add-rr (:c::r9) (:c::rax))
-           (:c::rt-cap (:c::rax) (:c::rdx)))]
+           (:c::rt-cap (:c::rax) (:c::rdx) (:c::rdx)))]
     (:wat::string::concat
       pre
       ;; rcx carries the new top here, not r11 -- r10 and r11 are holding the two sources
@@ -389,10 +403,14 @@
 ;; **the allocation a String of `len` bytes needs: the next power of two at or above len+16.**
 ;; `bsr` gives the index of the highest set bit -- a base-2 logarithm for free -- and shifting 2
 ;; by it rounds up. `str_subs` and `str_cat_own` computed this identically and separately.
-(:wat::core::defn :c::rt-cap [len <- :wat::core::i64 out <- :wat::core::i64] -> :wat::core::String
+;; `scratch` holds `len+15` only long enough for `bsr` to read it, and the callers do not agree
+;; on which register that is -- three use rdx and `i64_to_str` reuses `out`. It is a parameter
+;; rather than a choice made here, because the caller is the one holding everything else.
+(:wat::core::defn :c::rt-cap [len <- :wat::core::i64 scratch <- :wat::core::i64
+                              out <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat
-    (:c::lea-at len 15 (:c::rdx))
-    (:c::bsr-rr (:c::rdx) (:c::rcx))
+    (:c::lea-at len 15 scratch)
+    (:c::bsr-rr scratch (:c::rcx))
     (:c::mov-ri out 2)
     (:c::shl-cl out)))
 
@@ -689,7 +707,7 @@
            (:c::mov-rr (:c::rdx) (:c::r8))
            (:c::sub-rr (:c::rcx) (:c::r8))
            (:c::rm "8d" (:c::rdi) (:c::rax) (:c::rcx) 1 (:c::str-data))
-           (:c::rt-cap (:c::r8) (:c::r9)))]
+           (:c::rt-cap (:c::r8) (:c::rdx) (:c::r9)))]
     (:wat::string::concat
       pre
       (:c::rt-bump (:wat::core::+ (:c::at-subs lay) (:c::hexlen pre)) lay
@@ -789,15 +807,32 @@
         (:wat::string::concat setup loop yes))
       setup loop yes fail)))
 
-;; `i64_to_str(rax = n) -> rax`: `print_i64`'s divide-by-ten loop, landing in the heap
-;; instead of the output buffer.
-(:wat::core::defn :c::rt-i64-to-str [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec204889ee4d31c04885c0790a48f7d849c7c00100000048"
-    "c7c10a0000004831d248f7f180c23048ffce88164885c075ed4d85c07406"
-    "48ffcec6062d4989e94929f14d8d510f490fbdca49c7c20200000049d3e2"
-    "4d89fb4d01d34d3b5e087605e8c0fcffff49c707010000004d8d57084d89"
-    "0a498d7a084d89df4c89c9f3a44c89d0c9c3"))
+;; `i64_to_str(rax = n) -> rax` -- the same digits, landing in the heap instead of the output
+;; buffer. rsi starts AT rbp here rather than one below it, because there is no newline to plant.
+(:wat::core::defn :c::rt-i64-to-str [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
+           (:c::sub-ri (:c::rsp) (:c::scratch-frame))
+           (:c::mov-rr (:c::rbp) (:c::rsi))
+           (:c::rt-digits)
+           ;; how far rsi walked IS the length
+           (:c::mov-rr (:c::rbp) (:c::r9))
+           (:c::sub-rr (:c::rsi) (:c::r9))
+           (:c::rt-cap (:c::r9) (:c::r10) (:c::r10)))]
+    (:wat::string::concat
+      pre
+      (:c::rt-bump (:wat::core::+ (:c::at-tostr lay) (:c::hexlen pre)) lay
+        (:c::add-rr (:c::r10) (:c::r11)) (:c::r11))
+      (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
+      (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
+      (:c::mov-mr (:c::r9) (:c::r10) 0)
+      (:c::lea-at (:c::r10) (:c::str-data) (:c::rdi))
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::r9) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::leave) (:c::ret))))
 
 ;; `str_eq(rax = a, rcx = b) -> 0 or 1`, 40 bytes. **This one closes a silent divergence.**
 ;; `(wat.core/= a b)` on two Strings compiled to a machine-word compare, which compares
@@ -968,7 +1003,7 @@
     ((:wat::core::= i 11) (:c::rt-str-cat lay))
     ((:wat::core::= i 12) (:c::rt-str-cat-own lay))
     ((:wat::core::= i 13) (:c::rt-str-subs lay))
-    ((:wat::core::= i 14) (:c::rt-i64-to-str))
+    ((:wat::core::= i 14) (:c::rt-i64-to-str lay))
     ((:wat::core::= i 15) (:c::rt-str-starts))
     ((:wat::core::= i 16) (:c::rt-str-contains))
     ((:wat::core::= i 17) (:c::rt-str-eq))

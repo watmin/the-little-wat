@@ -60,6 +60,20 @@ else
          "$(ls elf/out/*.elf | wc -l)" "$t0" "$(stat -c%s elf/out/compiler.elf)"
 fi
 
+# **--fast REPORTS ONE SPURIOUS `DIFFER` AFTER ANY CHANGE TO THE EMITTED RUNTIME.**
+# It seeds from the compiler already built, so the seed compiles the comparison set with the
+# runtime it was BORN with while stage 1 compiles its set with the new one. They disagree for
+# exactly one run, and --fast cannot tell that from a regression. Re-run it: the second pass
+# seeds from a compiler carrying the new runtime and the two agree. A failed run also POISONS
+# the seed, leaving a broken elf/out/compiler.elf so the next --fast dies on a source already
+# fixed. Neither afflicts a full run, where stage 0 builds everything from the interpreter.
+#
+# **AND THE TIME PRINTED BELOW IS ONE SAMPLE. Do not use it as a regression guard.**
+# Three times in one session a single stage-1 number sent someone chasing a regression that was
+# not there (739, 828 -- both 546 or better on a real measurement). Use `tools/cc-time.sh`,
+# which copies the binary, checks every exit status, takes the best of fourteen, and reports an
+# INSTRUCTION COUNT -- which barely moves with machine load and is the number to compare.
+#
 # **the source must not move while this runs.** Stage 0 compiles what is on disk and stage 1
 # compiles it again; edit the compiler in between and the two stages build DIFFERENT compilers,
 # which surfaces as a baffling "DIFFER: compiler.elf" with the fixpoint still green. That has now
