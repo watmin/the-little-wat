@@ -7,13 +7,13 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-20, HEAD 819be1c)
+## elf/ — the live queue (2026-09-21, HEAD 21ccaf7)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `819be1c`**. `git log --oneline -1` must print that
+**Freshness probe:** written against **HEAD `21ccaf7`**. `git log --oneline -1` must print that
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
@@ -25,34 +25,38 @@ by rule, so every finding written before it stays valid. If `git log --oneline -
 something else, trust the log and `FINDINGS.md` over every line here, and re-read the newest
 entries before moving.
 
-### Where we stand against `gcc -O2`
+### Where we stand — FOUR opponents, every run pinned (2026-09-21)
 
-Run `tools/vs-c.sh`; it has ten sections now and prints these. Measured 2026-09-20, gcc 16:
+Run `tools/vs-c.sh`. It builds `gcc -O0`, `gcc -O2`, `clang -O0`, `clang -O2` for every section
+(F-146) and pins every timed run (F-149) — unpinned, this hybrid CPU times two programs in
+different frequency domains and the board measures the scheduler. Wall-clock across two board
+RUNS is not comparable at all: gcc's own `triple` read 68 ms and 101 ms on one thermally loaded
+afternoon with no code change.
 
-| | ours | gcc -O2 | | shape |
-|---|---|---|---|---|
-| size, a program that prints 4 | 600 B | 968 B | **0.62x** | we win |
-| startup, 500 runs | 590 ms | 707 ms | **0.83x** | we win |
-| buffered output, 100k integers | 7 ms | 18 ms | **0.39x** | we win |
-| `loopsum` — latency-bound loop | 161 ms | 199 ms | **0.81x** | we win (on 14 instructions an iteration against 6) |
-| strings, SCANNING 194 KB | 4 ms | 4 ms | **1.00x** | parity |
-| tail calls, 1M deep | constant stack | not guaranteed | — | tie/win |
-| `triple` — throughput-bound loop | 111 ms | 84 ms | 1.32x | behind — the surviving overflow checks (F-130: 32% of the loop) |
-| `fib32` — call-heavy | 13 ms | 9 ms | 1.44x | behind — gcc REASSOCIATES the sum, which trapping forbids (F-132) |
-| strings, BUILDING 200k appends | 7 ms | 3 ms | 2.3x | behind (F-141) |
-| **records, 2M field updates** | **129 ms** | **7 ms** | **18.4x** | behind (F-140) |
+| | ours | best C | shape |
+|---|---|---|---|
+| size, a program that prints 4 | 600 B | 856 KB static / 968 B free-standing | we win |
+| startup, 500 runs | 472 ms | 607 (gcc -O0) | we win, all four |
+| buffered output, 100k integers | 7 ms | 11 (clang -O0) | we win, all four |
+| `loopsum` — latency-bound loop | 145 ms | 173 (gcc -O2) | we win, all four |
+| **strings, BUILDING 5M appends** | **25 ms** | 26 (clang -O0), 31 (gcc -O2) | **we win, all four** (C-182) |
+| strings, SCANNING 194 KB | 5 ms | 3 (clang -O2) | slightly behind |
+| tail calls, 1M deep | constant stack | not guaranteed | tie/win |
+| `triple` — throughput-bound | 93 ms | 63 (clang -O2) | behind — see F-155/F-157 |
+| `fib32` — call-heavy | 14 ms | 10 (gcc -O2); **clang -O2 is 16** | behind gcc only (F-132/F-133) |
+| **records, 2M field updates** | 11 ms | 3 (clang -O2) | behind — F-158 |
 
-**Section 10 is the one to read.** The same loop with the accumulator as a bare i64 is **7 ms --
-exactly C's number**. So the entire 18.4x is the ALLOCATION: not the loop, not the calling
-convention, not the overflow checks. That is what makes F-140 a missing optimisation rather than
-a semantic cost.
+**Strings crossed over.** C-182 found `rep movsb` copying ONE byte and put a `cmp $1 / jne`
+ahead of it: 15.5 cyc/append to 6.03, from 1.89x behind to ahead of all four. It ADDED two
+instructions. Read F-147.
 
-**`gcc -O2` is not the only yardstick, and on `fib` it is the wrong one** (F-132). Against C
-compilers held to **wat's trapping semantics** we are **2.46x** faster than `clang` and **3.22x**
-faster than `gcc -ftrapv`; we beat **`clang -O2` by 1.37x** while trapping, which it does not.
-`gcc -O2`'s lead comes from reassociating the additions into a loop — 364,490 calls against the
-naive 7,049,155 — which survives `-fwrapv` and **dies under trapping**, because `(a+b)+c` traps
-where `a+(b+c)` does not.
+**`triple` has had six measured attempts and no win** (F-151, F-153, F-155, F-156, F-157). We
+issue 20 uops to gcc's 15 while retiring a slightly HIGHER fraction of issue slots. Three of the
+five extra are overflow checks on the accumulator adds; two are a separate induction variable.
+
+**Records: `rec` 6.0–6.4 cyc/it, `recflat` (same loop, accumulator in a register) 1.50.** Two
+measured endpoints, nothing claimed between them — F-158 retired the derivation that used to sit
+there.
 
 ### The three rules the measurements have settled
 
@@ -78,43 +82,45 @@ everything about the wat dialect is `compile.wat`. Neither lower module names `:
 `:c::Env`, `:c::Out`, `:c::Kids` or `:c::Bnd` — that grep returning 0 is what makes the seam real,
 so keep it at 0.
 
-### In flight (2026-09-20)
+### In flight (2026-09-21)
 
-**READING IS O(n) NOW (F-139).** The reader indexes by BYTE -- `byte-at`/`byte-length`/
-`byte-subs`, three O(1) verbs on wat-rs branch `the-little-wat`. Compiled compiler **730 -> 509
-ms**; stage 0 296 -> 286 s. In the compiler the three are ALIASES (`:c::strlen?`, `:c::subs?`,
-`:c::codeat?` take both spellings) because a String on this heap is already a byte count followed
-by its bytes.
+**Eight codegen changes landed, two reverted, and the reverts are the finding.** C-177 (tail
+argument already in place), C-178 (literal operand straight to rcx — sped the compiler up on
+ITSELF), C-179 (assoc receiver rematerialised), C-180 (counter step in its own register), C-181
+(register-vs-register compare), C-182 (**the one real win**), C-183 (field read from a register),
+C-188 (the back edge tests for itself). Reverted after measurement: C-185/C-187 (cmov, now
+settled three times over — F-153), C-189 (binding into its destination's register — F-156).
 
-**And the split turned out to be semantic.** `(wat.string/length "héllo")` is 5 interpreted and 6
-compiled; the byte family is the only one that agrees. **The byte family is PORTABLE, the char
-family is FRIENDLY** -- reach for bytes in anything that must mean one thing in both worlds, and
-for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
-char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
+**Three oracles were not checking what their names said.** `tools/emitted.sh` is NEW: nothing
+compared a build against the PREVIOUS build, so a refactor claiming purity had no oracle at all —
+`bootstrap.sh`'s "74 binaries byte-identical" compares the compiler against ITSELF. The refusal
+fixtures had drifted seven changes while still passing (F-152); `bootstrap.sh` regenerates them
+now. And `vs-c.sh` did not pin (F-149).
 
-**THE RUNTIME IS DONE. Thirty-three of thirty-three; not one hex blob left** (check with
-`for n in ...; grep -E '"[0-9a-f]{16,}"'`, or just read the file). Every routine is composed from
-`elf/lib/x86.wat`'s mnemonics, every displacement is computed from the pieces it spans, and
-`tools/rt-disasm.sh` reads the emitted bytes beside the claim each routine makes.
+**A latent bug shipped inside a green commit.** C-186 took a frame displacement from the Out
+BEFORE the initialiser instead of after; every gate passed because initialisers usually balance
+their own pushes. Found by reading the diff for intent, not by any check.
 
-**The payoff was DUPLICATION, not legibility** -- seven pieces of shared code that were
-invisible as hex: `ovf`/`oom`/`divzero` were one routine with three messages; `str_eq` and
-`str_starts` shared 32 bytes; `:c::rt-cap` (the power-of-two size) was computed at four sites;
-`:c::rt-bump` (the limit check) had four callers and three shapes; `:c::rt-digits` was 55 bytes
-identical between `print_i64` and `i64_to_str`; `:c::rt-cpath` 24 bytes between the two syscall
-routines; and `:c::rt-slurp` **108 bytes** between `io_read_file` and `prim_read_hex`.
+### The measurement hierarchy, learned the expensive way (2026-09-21)
 
-**And things nobody could have read out of the bytes**, now written down where they are used:
-`print_str` builds its result at r15 WITHOUT allocating (safe only because `buf_put` copies it
-out first, which is why it needs no `oom` check); `io_read_file` reads onto the heap top and
-allocates only afterwards, because the bytes are already where they need to be;
-`vec_conj_own` has FOUR paths and only the last copies, the third asking "is this vector the
-youngest thing on the heap?" by comparing one past its last element against r15.
+Read F-154, F-157, F-158 before trusting any number in this repo.
 
-**Cost, measured honestly**: 1.573G instructions against 1.423G when the conversion was a third
-done -- and the compiler is FASTER in wall clock than when it started, because F-137 and the
-build-once fix were found by doing this. 207,515 bytes, 69 binaries byte-identical, elf-run
-30/30 with 4 refusals and 4 traps.
+1. **uops and the retiring fraction** — stable to 1% across a thermally loaded afternoon.
+2. **cycles, pinned, same binary, repeated** — good.
+3. **cycles across two BUILDS** — only for effects above ~25%; three of today's mistakes lived here.
+4. **wall-clock within one board run** — ratios only.
+5. **wall-clock across board runs** — not comparable. gcc's own number moved 48%.
+6. **synthetic shape microbenchmarks** — ±50% from code layout. Useless below ~25% (F-154).
+
+**And `cycles = uops / (6 × retiring%)` is `slots / 6` rewritten** — an identity, not a model
+(F-157). It equals the cycles counter only when `slots/cycles` is 6, which is a property of the
+run, not the program. Report uops, retiring slots, slots and cycles separately; say so when
+`slots/cycles` is not 6.
+
+**Every wrong claim this session had the same shape:** a real dependence or a real counter, then
+a quantity derived by a subtraction or division never performed. Three reached a committed record
+because nothing stood between the strike and the commit. A peer (grok, via `pulsare`) struck all
+three, plus one over-correction where the retraction went further than the evidence.
 
 ### Next: strings and records must be shown sound, then the REPL
 
@@ -248,6 +254,25 @@ which is what an XDP driver is made of, and where a 70-byte runtime and no libc 
 
 ### Open — performance, with what each is worth
 
+* ~~**strings**~~ **CLOSED 2026-09-21, C-182 — we beat all four C builds.** `rep movsb` was
+  copying ONE byte; a `cmp $1 / jne` ahead of it took an append from 15.5 cyc to 6.03. The fix
+  ADDED two instructions, which is why five attempts at removing instructions had bought nothing.
+  Read F-147 before optimising anything else.
+* **records — 11 ms against `clang -O2`'s 3.** The dependence is a loop-carried store and reload
+  of one qword: `slot_set_own` writes `[rax+8]` one instruction before `ret`, the next iteration
+  loads `[rbx+8]`, and that value is the next call's argument. `rec1` stores without reloading.
+  **Endpoints, measured, nothing in between:** `rec` 6.0–6.4 cyc/it, `recflat` (same loop,
+  accumulator in a register) 1.50. F-158 retired the five-cycle figure that used to sit here and
+  the IPC split that produced it. Closing it means keeping the field in a register, which F-150
+  disqualified as a peephole — parameters take registers by POSITION, so a four-parameter
+  function has none spare and record speed would depend on the arity of its enclosing function.
+  **A register allocator is the prerequisite, not the follow-up.**
+* **`triple` — six measured attempts, no win** (F-151, F-153, F-155, F-156, F-157). 20 uops to
+  gcc's 15, at a slightly HIGHER retiring fraction. Three of the five extra uops are the
+  accumulator overflow checks; two are the separate induction variable. **cmov is settled three
+  times now** — C-169, then C-185 and C-187 today, each rebuilt in ignorance of the last: the
+  select is NINE uops either way, so it was never a saving, and it costs the `cmp`/`jcc`
+  macro-fusion. The comment above `:c::sel-ok?` says so; read it before touching that function.
 * **`triple`'s three surviving `+` checks.** F-130 prices all overflow checks at 32% of that loop;
   C-170 took the four an interval analysis can reach. The remaining three are **unreachable by
   intervals** — the accumulators climb 89M an iteration and never converge (probe in C-170).
@@ -292,7 +317,13 @@ that was two branches · `F-129`/`C-168` the inline cliff and the double-stored 
 of strength reduction · `C-170`/`R-006` bounds, and the crash that timed fast · `F-132`/`F-133`
 `fib` closed, floor computed · `F-134`/`C-171` the bitwise gate, packets 11.63x -> 2.35x ·
 `F-135`/`C-172` the string gate, scanning 34.83x -> 3.41x · `C-173` the instruction DSL ·
-`F-136`/`C-174` duplicate `defn` names, and the three-module split.
+`F-136`/`C-174` duplicate `defn` names, and the three-module split · `C-175`–`C-176` the record
+owning path and liveness over mention-counting · `F-139` the byte/char split · `C-177`–`C-183`
+seven peepholes and what each was worth · `F-147`/`C-182` **strings crossed over** ·
+`F-146`/`F-149` four opponents and the unpinned board · `F-152` the fixtures that drifted seven
+changes · `F-150` scalar replacement disqualified, allocator named · `C-188` the back edge ·
+`F-151`/`F-153`/`F-154` cmov falsified again and the layout noise floor · `F-155`–`F-158` the
+uop identity, the invented quantities, and the three peer strikes that retired them.
 
 ---
 
