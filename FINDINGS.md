@@ -12853,6 +12853,44 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-162: a STOP trigger caught the orchestrator, which is what they are for
+
+**Correct (the brief, not the code).** The scalarisation strike was briefed with three STOP
+triggers. Trigger 1 said: *if the escape test needs a new analysis rather than a composition
+of `:c::occ` / `:c::live-after` / `:c::none-mention?`, STOP and say what is missing; do not
+write a fourth liveness.* The executor stopped on it, and the trigger was wrong.
+
+**Why the composition cannot work, verified on this tree.** `:c::linear?` is `occ <= 1` OR
+`:c::dead-after-write?`. `:c::mut-site` returns −2 on a second write, so two hot fields do
+fail. But neither test looks at the HEAD of the form a mention sits in, and two shapes are
+"linear" while the record escapes:
+
+```clojure
+(if (= i n) s (step (assoc s :a ...) ...))  ; returned from the other arm --
+                                            ; live-after does not cross arms
+(println s) ... (assoc s :a v)              ; used BEFORE the write, so not live-after
+```
+
+Scalarising either would return a field where the caller expects a record.
+
+**The mistake was mine and it was a category error.** `:c::occ`, `:c::live-after` and
+`:c::none-mention?` answer *how many* and *where*. Scalarisable asks *what*: is every
+occurrence a field read of one `f`, or an `assoc` of that same `f`. That is a
+CLASSIFICATION, not a liveness, and no composition of counters produces it. I forbade the
+one thing the strike needed, on an assumption I had not checked against the analyses I was
+naming.
+
+**The trigger worked exactly as `examinare` specifies** -- a rejection criterion, not a
+permission slot. It surfaced the planning error instead of letting it be papered over with
+a composition that would have miscompiled two shapes silently. A brief that had merely said
+"be careful about escapes" would have produced a plausible gate built out of `linear?` and
+a bug that only appears on a record used in the other arm of an `if`.
+
+- **Class:** Correct. Re-briefed with trigger 1 replaced: write the classifier, it IS the
+  work. One check carried into v2 -- `:c::occ` MAXES the arms of an `if` because it asks
+  about the worst path; this question must UNION them, since a record escaping on either
+  arm escapes.
+
 ### F-161: "the whole 1.33x is the trapping" was false, and the records prerequisite was too strong
 
 **Correct to F-159 and F-150, from the sixth peer strike (grok, `.pulsare/SCORE-losses.md`),
