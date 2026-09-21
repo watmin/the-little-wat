@@ -177,11 +177,15 @@
 ;; The call to `oom` is a real call and not a jump: it never returns, but a `call` leaves a
 ;; return address, and that address is what a stack trace would need. It is also five bytes
 ;; whose displacement is now computed from the layout rather than counted by hand.
-(:wat::core::defn :c::rt-bump [here <- :wat::core::i64 lay <- :c::Layout] -> :wat::core::String
+;; `grow` is how r11 reaches the new top: `add %rcx,%r11` when the size was computed into rcx,
+;; or `add $imm,%r11` when it is a constant. That is the ONLY difference between the three
+;; allocators, and it was the reason each carried its own copy of the check.
+(:wat::core::defn :c::rt-bump [here <- :wat::core::i64 lay <- :c::Layout
+                               grow <- :wat::core::String] -> :wat::core::String
   (:wat::core::let
     [chk (:wat::string::concat
            (:c::mov-rr (:c::r15) (:c::r11))
-           (:c::add-rr (:c::rcx) (:c::r11))
+           grow
            (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::r11)))
      at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
      to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
@@ -195,7 +199,8 @@
     [size (:c::lea (:c::no-reg) (:c::rax) (:c::word) (:c::vec-hdr) (:c::rcx))]
     (:wat::string::concat
       size
-      (:c::rt-bump (:wat::core::+ (:c::at-vnew lay) (:c::hexlen size)) lay)
+      (:c::rt-bump (:wat::core::+ (:c::at-vnew lay) (:c::hexlen size)) lay
+        (:c::add-rr (:c::rcx) (:c::r11)))
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::rax) (:c::r10) 0)
@@ -230,7 +235,8 @@
     [size (:c::lea (:c::no-reg) (:c::rax) (:c::word) (:c::varr-hdr) (:c::rcx))]
     (:wat::string::concat
       size
-      (:c::rt-bump (:wat::core::+ (:c::at-varr lay) (:c::hexlen size)) lay)
+      (:c::rt-bump (:wat::core::+ (:c::at-varr lay) (:c::hexlen size)) lay
+        (:c::add-rr (:c::rcx) (:c::r11)))
       (:c::mov-mi (:c::r15) 0 0)
       (:c::mov-mi (:c::r15) (:c::word) 1)
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
@@ -239,11 +245,27 @@
       (:c::mov-rr (:c::r10) (:c::rax))
       (:c::ret))))
 
-(:wat::core::defn :c::rt-node-new [] -> :wat::core::String
-  (:wat::string::concat
-    "4d89fb4981c3100100004d3b5e087605e894fbffff49c707010000004d8d"
-    "570849c70220000000498d7a0848c7c1200000004831c0f348ab4d89df4c"
-    "89d0c3"))
+;; `node_new() -> rax` -- a fresh 32-way tree node, every child slot zeroed. The allocation is a
+;; constant size, which is the one thing that differs from `vec_new`: the bump adds an immediate
+;; instead of rcx.
+(:wat::core::defn :c::rt-node-new [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [slots (:wat::core::* (:c::node-arity) (:c::word))
+     bump (:c::rt-bump (:c::at-nnew lay) lay
+            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)))]
+    (:wat::string::concat
+      bump
+      (:c::mov-mi (:c::r15) 0 1)
+      (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
+      (:c::mov-mi (:c::r10) 0 (:c::node-arity))
+      ;; zero every child slot: `rep stos` writes rcx quadwords of rax at (rdi)
+      (:c::lea-at (:c::r10) (:c::node-data) (:c::rdi))
+      (:c::mov-ri (:c::rcx) (:c::node-arity))
+      (:c::xor-rr (:c::rax) (:c::rax))
+      (:c::rep-stosq)
+      (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::ret))))
 
 ;; `node_copy(rax) -> rax` -- a fresh node with the same children. **`rep movsq` is a loop the
 ;; hardware runs**: rcx quadwords from (rsi) to (rdi), which is the entire body of the copy.
@@ -261,10 +283,40 @@
       (:c::reg-pop (:c::rbx))
       (:c::ret))))
 
+;; `tree_get(rax = vec, rcx = index) -> rax`. A Vector is a 32-way trie: `shift` says how many
+;; bits of the index the current level consumes, and each level takes five bits and descends into
+;; the child at that slot. **The loop's backward jump needs no label** -- its displacement is the
+;; length of the body it jumps over, plus its own two bytes.
 (:wat::core::defn :c::rt-tree-get [] -> :wat::core::String
-  (:wat::string::concat
-    "5256574889ca488b7008488b78104885f674184889d04889f148d3e84883"
-    "e01f488b7cc7084883ee05ebe34889d04883e01f488b44c7085f5e5ac3"))
+  (:wat::core::let
+    [bits 5
+     ;; one level: index >> shift, masked to five bits, is the slot; follow it
+     step (:wat::string::concat
+            (:c::mov-rr (:c::rdx) (:c::rax))
+            (:c::mov-rr (:c::rsi) (:c::rcx))
+            (:c::shr-cl (:c::rax))
+            (:c::and-ri (:c::rax) 31)
+            (:c::rm "8b" (:c::rdi) (:c::rdi) (:c::rax) (:c::word) (:c::node-data))
+            (:c::sub-ri (:c::rsi) bits))
+     ;; the test sits at the TOP, so the body is the step plus the jump back over both
+     body (:wat::string::concat step (:c::jmp-back
+            (:wat::string::concat (:c::test-rr (:c::rsi) (:c::rsi))
+                                  (:c::jcc-rel8 (:c::cc-zero)) "00" step)))
+     leaf (:wat::string::concat
+            (:c::mov-rr (:c::rdx) (:c::rax))
+            (:c::and-ri (:c::rax) 31)
+            (:c::rm "8b" (:c::rax) (:c::rdi) (:c::rax) (:c::word) (:c::node-data))
+            (:c::reg-pop (:c::rdi)) (:c::reg-pop (:c::rsi)) (:c::reg-pop (:c::rdx))
+            (:c::ret))]
+    (:wat::string::concat
+      (:c::reg-push (:c::rdx)) (:c::reg-push (:c::rsi)) (:c::reg-push (:c::rdi))
+      (:c::mov-rr (:c::rcx) (:c::rdx))
+      (:c::mov-rm (:c::rax) (:c::vec-shift) (:c::rsi))
+      (:c::mov-rm (:c::rax) (:c::vec-root) (:c::rdi))
+      (:c::test-rr (:c::rsi) (:c::rsi))
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) body)
+      body
+      leaf)))
 
 (:wat::core::defn :c::rt-tree-push [] -> :wat::core::String
   (:wat::string::concat
@@ -526,7 +578,7 @@
     ((:wat::core::= i 17) (:c::rt-str-eq))
     ((:wat::core::= i 18) (:c::rt-vec-new lay))
     ((:wat::core::= i 19) (:c::rt-varr-new lay))
-    ((:wat::core::= i 20) (:c::rt-node-new))
+    ((:wat::core::= i 20) (:c::rt-node-new lay))
     ((:wat::core::= i 21) (:c::rt-node-copy lay))
     ((:wat::core::= i 22) (:c::rt-tree-get))
     ((:wat::core::= i 23) (:c::rt-tree-push))
@@ -642,6 +694,10 @@
 ;; and the pointer is to the len, one word in; a Vector is [0][1][len][elem...] and the pointer is
 ;; two words in. So the allocation is bigger than the object by exactly the distance skipped, and
 ;; the two numbers are written as one fact each rather than as 16 and 8 in adjacent lines.
+;; what a Vector's pointer actually addresses: the length, then the trie's shift (how many bits
+;; of an index the root level consumes), then the root node.
+(:wat::core::defn :c::vec-shift [] -> :wat::core::i64 8)
+(:wat::core::defn :c::vec-root [] -> :wat::core::i64 16)
 (:wat::core::defn :c::vec-ptr [] -> :wat::core::i64 8)
 (:wat::core::defn :c::vec-hdr [] -> :wat::core::i64 16)
 (:wat::core::defn :c::varr-ptr [] -> :wat::core::i64 16)

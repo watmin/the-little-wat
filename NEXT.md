@@ -69,12 +69,20 @@ so keep it at 0.
 
 ### In flight (2026-09-20)
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Ten done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twelve done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
-`vec-new`, `varr-new`); 23 left, biggest last (`vec-conj-own` 240 bytes, `tree-push` 199,
-`print-str` 147, `i64-to-str` 138). The encoder carries a full 16-register file, a general
-memory-operand layer (ModRM+SIB, all four addressing shapes) and `rep movsq`/`repz cmpsb`/
-`syscall`.
+`vec-new`, `varr-new`, `node-new`, `tree-get`); 21 left, biggest last (`vec-conj-own` 240 bytes,
+`tree-push` 199, `print-str` 147, `i64-to-str` 138). The encoder carries a full 16-register file,
+a general memory-operand layer (ModRM+SIB, all four addressing shapes), backward jumps, and
+`rep movsq`/`rep stosq`/`repz cmpsb`/`syscall`.
+
+**`print-bool` is the next one and it needs a layer that does not exist**: it builds `true` and
+`false` on the stack with 32-, 16- and 8-bit stores (`movl`/`movw`/`movb`), and every encoder
+here forces REX.W. Operand sizes are the next piece of vocabulary, not another routine.
+
+**TIME EACH BATCH, do not trust green.** F-137 is exactly this change regressing 5x while all 68
+binaries stayed byte-identical and the fixpoint held. `tools/bootstrap.sh --fast` prints the
+compiled compiler's own time; it was 613-643 ms across this batch.
 **The oracle is exact**: a pure encoder change must leave all 68 binaries byte-identical, and
 `tools/bootstrap.sh` checks that. Every step so far has held.
 Next after the conversion: **breadth on records and memory vs C** — strings were measured in

@@ -355,6 +355,11 @@
     (:wat::string::concat (:c::rd (:wat::core::if short? "83" "81") 7 dst)
                           (:asm::le n (:wat::core::if short? 1 4)))))
 ;; the one-operand forms: a `/digit` and nothing else
+;; `and $imm, DST` -- the mask, which is how a tree index takes its low five bits
+(:wat::core::defn :c::and-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)]
+    (:wat::string::concat (:c::rd (:wat::core::if short? "83" "81") 4 dst)
+                          (:asm::le n (:wat::core::if short? 1 4)))))
 (:wat::core::defn :c::neg-r [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "f7" 3 dst))
 (:wat::core::defn :c::idiv-r [src <- :wat::core::i64] -> :wat::core::String (:c::rd "f7" 7 src))
 (:wat::core::defn :c::test-rr [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::String
@@ -380,6 +385,13 @@
 ;; `:c::hexlen` of it is the displacement. C-169's `:c::sel` already builds its diamond this way.
 (:wat::core::defn :c::br-over [cc <- :wat::core::String body <- :wat::core::String] -> :wat::core::String
   (:wat::string::concat cc (:asm::le (:c::hexlen body) 1)))
+;; **a BACKWARD jump, where the displacement is the piece being jumped over plus the jump.**
+;; The forward case (`:c::br-over`) skips a piece that follows it, so the distance is that piece's
+;; length. A loop jumps back over a piece that PRECEDES it and over itself, so the distance is
+;; that length plus two, negated -- which is the whole of what a label table would have told us.
+(:wat::core::defn :c::jmp-back [body <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat "eb"
+    (:asm::le (:wat::core::- 0 (:wat::core::+ (:c::hexlen body) (:c::rel8-size))) 1)))
 (:wat::core::defn :c::jb-over [body <- :wat::core::String] -> :wat::core::String
   (:c::br-over (:c::jcc-rel8 (:c::cc-below)) body))
 (:wat::core::defn :c::jbe-over [body <- :wat::core::String] -> :wat::core::String
@@ -458,6 +470,8 @@
 ;; difference, leaving ZF set if it ran out first. They have no operands to encode -- the
 ;; registers are fixed by the opcode -- so these are the one place a bare literal is the whole
 ;; instruction and naming it is all there is to do.
+;; `rep stos` fills rcx quadwords at (rdi) with rax -- zeroing a fresh node's slots
+(:wat::core::defn :c::rep-stosq [] -> :wat::core::String "f348ab")
 (:wat::core::defn :c::rep-movsq [] -> :wat::core::String "f348a5")
 (:wat::core::defn :c::rep-movsb [] -> :wat::core::String "f3a4")
 (:wat::core::defn :c::repz-cmpsb [] -> :wat::core::String "f3a6")
