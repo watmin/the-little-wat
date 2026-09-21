@@ -12542,6 +12542,63 @@ write-back placement.
 - **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/` over
   `elf/out/rec.elf`, `elf/out/rec1.elf`, `elf/out/recflat.elf`.
 
+### F-150: scalar replacement for records is disqualified, and the prerequisite is a register allocator
+
+F-148 named the record gap exactly -- `slot_set_own` writes `s.a` to the heap and the next
+iteration reads it back, a store-to-load forward on the loop-carried path -- and said closing
+it means carrying the field in a register. This is the decision on whether to.
+
+**The prize is bounded, and `recflat` already measured it.** `elf/bench/recflat.wat` is the
+IDENTICAL loop with the accumulator threaded as a bare i64: no record, no allocation, no
+round trip. That is what perfect scalar replacement would reach. Pinned, four opponents:
+
+| | ms |
+|---|---|
+| ours, record assoc | 11 |
+| **ours, bare i64 (`recflat`) -- the ceiling for this optimisation** | **5** |
+| C, `gcc -O0` | 6 |
+| C, `gcc -O2` | 4 |
+| C, `clang -O2` | 3 |
+
+So the whole optimisation is worth **11 ms to 5 ms**, and 5 ms is still behind every C build
+except `gcc -O0`. It does not reach parity; it reaches the point where our ORDINARY LOOP is
+the thing that is behind, which is a different finding (sections 5 and 6: we emit 12
+instructions an iteration against gcc's 6, and 28 against 16).
+
+**There are no registers to put the field in.** The compiler assigns registers positionally
+and has no allocator: `nr = min(nparams, 4)`, and locals get `nlr = min((4 - nr) + (callfree?
+4 : 0), slots)`. `step` in `rec.wat` has three parameters, so exactly ONE callee-saved
+register is unclaimed -- and only because it has three rather than four. It calls
+`slot_set_own`, which returns, so `callfree?` is false and r8-r11 are not available either.
+**A record with two hot fields does not fit. A function with four parameters has nothing at
+all.**
+
+**The four questions:**
+
+- **Obvious?** Keeping a non-escaping record's fields in registers is what every optimising
+  compiler does, so the IDEA is obvious. Which field, in which register, out of a pool shared
+  with parameters and locals, is not -- that is register allocation, and this compiler has
+  none. **NO.**
+- **Simple?** It needs escape analysis (partly present as `:c::linear?`), a choice of which
+  field to promote, a register taken from the same four, write-back at every exit where the
+  record is used whole, and correctness across the tail-call back edge. **NO.**
+- **Honest?** A version that fires when a spare register happens to exist would make record
+  speed depend on the ARITY OF THE ENCLOSING FUNCTION. Calling that "records are fast now"
+  would not be honest.
+- **Good UX?** A 2x cliff that appears and disappears when an unrelated fourth parameter is
+  added is the F-129 shape this project has already rejected once. **NO.**
+
+Three NO. The narrow version is disqualified by the project's own rule, and the analysis names
+what is actually in the way: **a register allocator is the prerequisite, not the follow-up.**
+The same shortage explains section 6, where we issue 28 instructions an iteration against
+gcc's 16 and lose 93 ms to 68 on the one benchmark that is issue-bound rather than
+latency-bound.
+
+- **Class:** Extend, and deliberately not taken. The queue item is a register allocator; scalar
+  replacement is a thing to build ON one, and `recflat` says the pair is worth 11 ms to 5 ms
+  on this benchmark.
+- **Repro:** `tools/vs-c.sh` section 10; `elf/bench/recflat.wat` is the ceiling.
+
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74
