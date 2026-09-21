@@ -12487,6 +12487,61 @@ ours 5.88 / 6.69 / 7.61 against C's 8.16 / 8.26 / 8.79.
 - **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/
   ./elf/out/strbuild.elf` against `gcc -O2 -static elf/bench/strbuild.c`.
 
+### F-148 / C-181, C-183: the record loop is store-to-load bound, and the instruction work is spent
+
+The same decomposition F-147 did for strings, for `elf/bench/rec.wat`. Three of our own
+programs and the C control, pinned, `taskset -c 0`:
+
+| | ins/it | cyc/it | IPC |
+|---|---|---|---|
+| ours, record assoc (`rec`) | 19.0 | 6.04 | 3.15 |
+| ours, store only, no field read (`rec1`) | 15.0 | 2.99 | 5.02 |
+| ours, bare i64, nothing allocated (`recflat`) | 10.0 | 2.09 | 4.78 |
+| C, `gcc -O2`, struct in registers | 2.1 | 1.09 | 1.94 |
+
+**`rec1` runs at IPC 5.02 -- issue-bound, so instructions really are its cost.** Adding the
+field read costs four instructions and **three cycles**, where at that IPC four instructions
+should cost 0.8. The remaining ~2.25 is the **store-to-load forward**: `slot_set_own` writes
+`s.a` to the heap and the next iteration reads it back, a loop-carried dependency through
+memory. gcc never stores at all -- the struct is a local that does not escape, so its fields
+live in registers and the loop unrolls to 2.1 instructions.
+
+**C-181** takes the loop condition. `:c::if-cmp` already refused to load operands that were in
+place, but only for a register against an IMMEDIATE; every counted loop ends `(= i n)`, two
+registers, which fell through to `mov %r12,%rax ; cmp %r13,%rax`. The operand roles are
+identical, left minus right, so the condition codes needed no adjusting.
+
+**C-183** takes the field read. `:c::load-at` hardcodes rax as the base, which is right when
+the pointer arrived there and a wasted `mov` when the record is already in a register:
+`mov %rbx,%rax ; mov 0x8(%rax),%rax` is `mov 0x8(%rbx),%rax`.
+
+**And the result is the entry.** The record loop went 19 instructions to 17 and its cycles did
+not move:
+
+| | ins/it | cyc/it | IPC |
+|---|---|---|---|
+| `rec` after C-181, C-183 | **17.0** | **6.20** | 2.74 |
+| `rec1` | 15.0 | **2.67** | 5.62 |
+| `recflat` | **9.0** | **1.91** | 4.71 |
+| `strbuild` | **31.0** | **5.66** | 5.48 |
+
+Every loop that was issue-bound got faster. The one that is chain-bound did not, which is the
+same lesson F-147 paid for once already: **an instruction count is not a cost model.** The
+instruction-level work on records is now spent.
+
+What is left is structural and is one thing. `recflat` shows our loop overhead against C is
+1.75x (1.91 against 1.09); the record itself adds **4.29 cycles**, nearly all of it the
+round trip through the heap. Closing it means carrying a field that is read and written every
+iteration of a tail loop in a REGISTER, writing back only where the record escapes. The
+linearity proof that would gate it already exists -- C-176 computes it to decide whether
+`assoc` may call `slot_set_own` at all. What does not exist is the register carrying and the
+write-back placement.
+
+- **Class:** F-148 Improve, named and not taken -- scalar replacement is a compiler feature,
+  not a peephole, and it wants a decision rather than a reflex. C-181, C-183 done.
+- **Repro:** `taskset -c 0 perf stat -e cpu_core/instructions/,cpu_core/cycles/` over
+  `elf/out/rec.elf`, `elf/out/rec1.elf`, `elf/out/recflat.elf`.
+
 - **Class:** F-144 Improve (the capacity field WITHDRAWN by F-147; call/ret outstanding);
   C-177, C-178, C-179, C-180 done.
 - **Oracle:** byte-identity no longer applies -- emitted code changed. 75 binaries, 74

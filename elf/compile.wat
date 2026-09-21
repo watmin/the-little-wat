@@ -1378,8 +1378,17 @@
               o env pg rt tb slot))
           ((:wat::core::>= (:c::acc-index pg head) 0)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "field arity" a pg)
-              (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
-                (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:c::acc-index pg head)))))))
+              (:wat::core::let
+                [d (:wat::core::+ 8 (:wat::core::* 8 (:c::acc-index pg head)))
+                 r (:c::reg-of (:wat::core::nth ks 1) env pg)]
+                ;; **a field read from a register-resident record does not want the pointer
+                ;; in rax first.** `mov %rbx,%rax ; mov 0x8(%rax),%rax` is one instruction:
+                ;; `mov 0x8(%rbx),%rax`. `:c::load-at` hardcodes rax as the base, which is
+                ;; right when the pointer arrived there and a wasted `mov` when it did not.
+                ;; C-183.
+                (:wat::core::if (:wat::core::>= r 0) (:c::emit o (:c::mov-rm r d (:c::rax)))
+                  (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                    (:c::load-at d))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
           ;; `=` on two Strings must compare CONTENT. The type pass knows both operands, so
@@ -1949,12 +1958,21 @@
      ;; literal on the right is one instruction, and rax keeps whatever it was holding -- which
      ;; the `o3k`/`o6k` restores below then carry into both arms, exactly as they already do for
      ;; the right-operand fast path.
+     ;;
+     ;; **A register on BOTH sides is the same one instruction**, and it is the shape every
+     ;; counted loop ends with: `(= i n)` on two parameters. Until C-181 only the literal case
+     ;; was taken, so `(= i n)` paid `mov %r12,%rax ; cmp %r13,%rax` to say `cmp %r13,%r12`.
+     ;; The operand roles are identical -- left minus right -- so the condition codes below
+     ;; need no adjusting.
      lr (:c::reg-of (:wat::core::nth cks 1) env pg)
-     both? (:wat::core::and (:wat::core::>= lr 0) (:c::imm-cmp? (:wat::core::nth cks 2) pg))
+     rr (:c::reg-of (:wat::core::nth cks 2) env pg)
+     both? (:wat::core::and (:wat::core::>= lr 0)
+             (:wat::core::or (:c::imm-cmp? (:wat::core::nth cks 2) pg) (:wat::core::>= rr 0)))
      o1 (:wat::core::if both? o
           (:c::expr (:wat::core::nth cks 1) o env pg rt tb slot (:c::no-tail)))
      fast (:wat::core::if both?
-            (:c::reg-cmp-imm lr (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg))
+            (:wat::core::if (:wat::core::>= rr 0) (:c::cmp-rr rr lr)
+              (:c::reg-cmp-imm lr (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg)))
             (:c::cmp-only (:wat::core::nth cks 2) env pg (:c::fp-adj o1) (:c::Out/fpr o1)))
      o2 (:wat::core::if (:wat::core::not= fast "") (:c::emit o1 fast)
           (:wat::core::let
