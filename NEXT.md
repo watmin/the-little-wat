@@ -69,16 +69,25 @@ so keep it at 0.
 
 ### In flight (2026-09-20)
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twelve done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Thirteen done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
-`vec-new`, `varr-new`, `node-new`, `tree-get`); 21 left, biggest last (`vec-conj-own` 240 bytes,
-`tree-push` 199, `print-str` 147, `i64-to-str` 138). The encoder carries a full 16-register file,
-a general memory-operand layer (ModRM+SIB, all four addressing shapes), backward jumps, and
-`rep movsq`/`rep stosq`/`repz cmpsb`/`syscall`.
+`vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`); **20 left**, biggest last
+(`vec-conj-own` 240 bytes, `prim-read-hex` 227, `tree-push` 199, `io-read-file` 175,
+`prim-write-hex` 163, `print-str` 147, `i64-to-str` 138). Next by size: `str-contains` 68,
+`buf-put` 70, `slot-set` 76.
 
-**`print-bool` is the next one and it needs a layer that does not exist**: it builds `true` and
-`false` on the stack with 32-, 16- and 8-bit stores (`movl`/`movw`/`movb`), and every encoder
-here forces REX.W. Operand sizes are the next piece of vocabulary, not another routine.
+The encoder carries a full 16-register file, a general memory-operand layer (ModRM+SIB, all four
+addressing shapes), forward and backward jumps, operand sizes (32/16/8-bit stores, which needed
+a REX that can be OMITTED -- REX.W is exactly what makes a store 64-bit), and
+`rep movsq`/`rep stosq`/`repz cmpsb`/`syscall`/`leave`.
+
+**`def` was weighed and is not a speed lever** (2026-09-20). 57 zero-arg constants are spelled as
+function calls, and wat-rs HAS `:wat::core::def` -- but a `def`'d name is a SYMBOL LOOKUP, and the
+reader profile puts `env_key` + `Environment::lookup` at ~15% already, so it moves cost rather
+than removing it. Measured directly, the difference was below the noise floor (+-25% run to run).
+And `def` cannot memoize: the source is explicit that it binds an UNEVALUATED expression consumed
+at registration, so the expensive things here -- a routine's hex, the runtime block -- which
+depend on arguments, are out of its reach entirely. Worth doing for legibility, not for speed.
 
 **TIME EACH BATCH, do not trust green.** F-137 is exactly this change regressing 5x while all 68
 binaries stayed byte-identical and the fixpoint held. `tools/bootstrap.sh --fast` prints the

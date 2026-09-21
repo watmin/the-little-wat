@@ -200,6 +200,7 @@
 (:wat::core::defn :c::rdi [] -> :wat::core::i64 12)
 (:wat::core::defn :c::rsp [] -> :wat::core::i64 13)
 (:wat::core::defn :c::rbx [] -> :wat::core::i64 0)
+(:wat::core::defn :c::rbp [] -> :wat::core::i64 3)
 (:wat::core::defn :c::r8  [] -> :wat::core::i64 4)
 (:wat::core::defn :c::r9  [] -> :wat::core::i64 5)
 (:wat::core::defn :c::r10 [] -> :wat::core::i64 6)
@@ -455,6 +456,51 @@
 ;;
 ;; `movabs` is the only instruction that carries a full 64-bit immediate, and it has no ModRM at
 ;; all -- the register rides in the low three bits of the opcode, like `push`.
+;; ---------------------------------------------------------------- narrower than a word
+;;
+;; **Everything else here is 64-bit, because everything this compiler emits is.** REX.W is what
+;; makes it so, and these are the one place that must NOT set it: a short string built on the
+;; stack is written four bytes, then two, then one, and those encodings differ from their 64-bit
+;; siblings only in a prefix and an opcode. A 16-bit store adds the `66` operand-size prefix; an
+;; 8-bit store changes `c7` to `c6`; a 32-bit store is the same opcode with no REX at all.
+;;
+;; A REX byte appears only when a register needs extending -- `-0x8(%rbp)` needs none.
+(:wat::core::defn :c::rex-narrow [base <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::and (:c::reg? base) (:c::rext? base))
+    (:asm::u8 65) ""))                                   ;; 0x41 = REX.B, and no W
+(:wat::core::defn :c::mov-mi32 [base <- :wat::core::i64 disp <- :wat::core::i64
+                                n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex-narrow base) "c7"
+    (:c::mrm 0 base (:c::no-reg) 1 disp) (:asm::le n 4)))
+(:wat::core::defn :c::mov-mi16 [base <- :wat::core::i64 disp <- :wat::core::i64
+                                n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "66" (:c::rex-narrow base) "c7"
+    (:c::mrm 0 base (:c::no-reg) 1 disp) (:asm::le n 2)))
+(:wat::core::defn :c::mov-mi8 [base <- :wat::core::i64 disp <- :wat::core::i64
+                               n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex-narrow base) "c6"
+    (:c::mrm 0 base (:c::no-reg) 1 disp) (:asm::le n 1)))
+
+;; **a short string AS an immediate, computed from the string.** `movl $0x65757274` is `"true"`
+;; read little-endian, and writing the number means trusting whoever transcribed it; asking the
+;; characters means it cannot be wrong. Same rule as `:asm::code-of` and `:c::hex-gap` (C-173).
+(:wat::core::defn :c::packed [s <- :wat::core::String i <- :wat::core::i64
+                              acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< i 0) acc
+    (:c::packed s (:wat::core::- i 1)
+      (:wat::core::+ (:wat::core::* acc 256)
+        (:asm::code-of (:wat::string::subs s i (:wat::core::+ i 1)))))))
+(:wat::core::defn :c::pack [s <- :wat::core::String] -> :wat::core::i64
+  (:c::packed s (:wat::core::- (:wat::string::length s) 1) 0))
+;; the one character `:asm::code-of` cannot give, because its table starts at 32 (F-062)
+(:wat::core::defn :c::nl [] -> :wat::core::i64 10)
+
+;; `leave` -- undoes the frame `push %rbp; mov %rsp,%rbp` set up, in one byte
+(:wat::core::defn :c::leave [] -> :wat::core::String "c9")
+;; the unconditional twin of :c::br-over
+(:wat::core::defn :c::jmp-over [body <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat "eb" (:asm::le (:c::hexlen body) 1)))
+
 (:wat::core::defn :c::movabs [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat (:c::rex false false (:c::rext? dst))
                         (:asm::u8 (:wat::core::+ 184 (:c::rcode dst))) (:asm::le n 8)))

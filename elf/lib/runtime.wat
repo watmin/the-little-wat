@@ -122,13 +122,40 @@
     "ffc7c6077448ffc7eb0cc6075c48ffc7c6077248ffc748ffc649ffc3eba1"
     "c6072248ffc7c6070a48ffc74889fa4c29d24c89d6e84dfdffffc3"))
 
-;; `print_bool(rax)`, 64 bytes: `true` and `false` built on the stack a word at a time, so the
-;; routine needs no data section and no relocation.
-(:wat::core::defn :c::rt-print-bool [] -> :wat::core::String
-  (:wat::string::concat
-    "554889e54883ec104885c07414c745f874727565c645fc0a48c7c2050000"
-    "00eb14c745f866616c7366c745fc650a48c7c206000000488d75f8e825ff"
-    "ffffc9c3"))
+;; `print_bool(rax)` -- **`true` and `false` are built on the stack**, so the routine needs no data
+;; section and no relocation. Five bytes and six, written as a 4+1 and a 4+2, which is why the
+;; narrow stores exist at all. The immediates are the WORDS, read little-endian and computed from
+;; them: `"true"` is 0x65757274 and nobody has to be trusted to have transcribed it.
+(:wat::core::defn :c::rt-print-bool [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [slot -8
+     yes (:wat::string::concat
+           (:c::mov-mi32 (:c::rbp) slot (:c::pack "true"))
+           (:c::mov-mi8 (:c::rbp) (:wat::core::+ slot 4) (:c::nl))
+           (:c::mov-ri (:c::rdx) (:wat::string::length "true\n")))
+     no (:wat::string::concat
+          (:c::mov-mi32 (:c::rbp) slot (:c::pack "fals"))
+          ;; the last two characters as one 16-bit store: 'e' low, newline high
+          (:c::mov-mi16 (:c::rbp) (:wat::core::+ slot 4)
+            (:wat::core::+ (:asm::code-of "e") (:wat::core::* (:c::nl) 256)))
+          (:c::mov-ri (:c::rdx) (:wat::string::length "false\n")))
+     yes-arm (:wat::string::concat yes (:c::jmp-over no))
+     head (:wat::string::concat
+            (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
+            (:c::sub-ri (:c::rsp) 16) (:c::test-rr (:c::rax) (:c::rax)))
+     tail-at (:wat::core::+ (:c::at-bool lay)
+               (:wat::core::+ (:c::hexlen head)
+                 (:wat::core::+ (:c::rel8-size)
+                   (:wat::core::+ (:c::hexlen yes-arm) (:c::hexlen no)))))
+     lea (:c::lea-at (:c::rbp) slot (:c::rsi))]
+    (:wat::string::concat
+      head
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) yes-arm)
+      yes-arm no
+      lea
+      (:c::rt-call (:c::at-put lay)
+        (:wat::core::+ tail-at (:wat::core::+ (:c::hexlen lea) (:c::call-size))))
+      (:c::leave) (:c::ret))))
 
 ;; `buf_put(rsi = bytes, rdx = count)`, 70 bytes -- **the thing libc calls stdio.** Bytes go
 ;; into a 4 KiB buffer at r14, and the syscall happens once per buffer rather than once per
@@ -562,7 +589,7 @@
     ((:wat::core::= i 1) (:c::rt-ovf))
     ((:wat::core::= i 2) (:c::rt-buf-put))
     ((:wat::core::= i 3) (:c::rt-print-i64))
-    ((:wat::core::= i 4) (:c::rt-print-bool))
+    ((:wat::core::= i 4) (:c::rt-print-bool lay))
     ((:wat::core::= i 5) (:c::rt-oom))
     ((:wat::core::= i 6) (:c::rt-die))
     ((:wat::core::= i 7) (:c::rt-divzero))
