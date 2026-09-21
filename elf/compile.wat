@@ -383,8 +383,22 @@
 (:wat::core::defn :c::bit-not? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.i64/bit-not" ":wat::i64::bit-not"))
 
+;; ---- the byte-indexed string verbs, which COMPILE TO THE SAME INSTRUCTIONS
+;;
+;; **F-120 is the whole reason these are aliases here and distinct verbs in the interpreter.**
+;; A String on this heap is a length followed by its bytes, and the length is a BYTE count --
+;; so `length` already answers what `byte-length` asks, `subs` already slices what `byte-subs`
+;; slices, and `code-point-at` is already the `movzbq` that `byte-at` wants. The interpreter has
+;; no such luxury: it holds UTF-8 and counts characters, so there the two families genuinely
+;; differ and a character index costs a walk.
+;;
+;; That divergence is safe here for exactly one reason -- this compiler REFUSES a non-ASCII
+;; source (`elf/bad/nonascii.wat`), and for ASCII a byte index is a character index. The reader
+;; moved to the byte family because the char one made it O(n^2); see F-138.
 (:wat::core::defn :c::codeat? [s <- :wat::core::String] -> :wat::core::bool
-  (:c::is? s "wat.string/code-point-at" ":wat::string::code-point-at"))
+  (:wat::core::or
+    (:c::is? s "wat.string/code-point-at" ":wat::string::code-point-at")
+    (:c::is? s "wat.string/byte-at" ":wat::string::byte-at")))
 
 ;; ---- the compiler's INTRINSICS: verbs that become a syscall rather than a call
 ;;
@@ -458,7 +472,9 @@
 (:wat::core::defn :c::asserteq? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.test/assert-eq" ":wat::test::assert-eq"))
 (:wat::core::defn :c::subs? [s <- :wat::core::String] -> :wat::core::bool
-  (:c::is? s "wat.string/subs" ":wat::string::subs"))
+  (:wat::core::or
+    (:c::is? s "wat.string/subs" ":wat::string::subs")
+    (:c::is? s "wat.string/byte-subs" ":wat::string::byte-subs")))
 (:wat::core::defn :c::starts? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.string/starts-with?" ":wat::string::starts-with?"))
 (:wat::core::defn :c::contains? [s <- :wat::core::String] -> :wat::core::bool
@@ -466,7 +482,9 @@
 (:wat::core::defn :c::tostr? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.i64/to-string" ":wat::i64::to-string"))
 (:wat::core::defn :c::strlen? [s <- :wat::core::String] -> :wat::core::bool
-  (:c::is? s "wat.string/length" ":wat::string::length"))
+  (:wat::core::or
+    (:c::is? s "wat.string/length" ":wat::string::length")
+    (:c::is? s "wat.string/byte-length" ":wat::string::byte-length")))
 (:wat::core::defn :c::if? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.core/if" ":wat::core::if"))
 (:wat::core::defn :c::let? [s <- :wat::core::String] -> :wat::core::bool
@@ -3858,7 +3876,7 @@
         (:wat::core::or
           (:wat::core::or
             (:wat::core::or (:c::is? s "wat.core/typealias" ":wat::core::typealias") (:c::is? s "wat.core/nth" ":wat::core::nth"))
-            (:wat::core::or (:c::is? s "wat.core/length" ":wat::core::length") (:c::is? s "wat.string/length" ":wat::string::length")))
+            (:wat::core::or (:c::is? s "wat.core/length" ":wat::core::length") (:c::strlen? s)))
           (:wat::core::or
             (:wat::core::or (:c::is? s "wat/load-file!" ":wat::load-file!") (:c::is? s "wat.type/i64" ":wat::core::i64"))
             (:c::is? s "wat.type/nil" ":wat::core::nil")))))))
@@ -3912,7 +3930,7 @@
     ((:c::is? s "wat.test/assert-eq" ":wat::test::assert-eq") (:wat::core::if hs 17 6))
     ((:c::is? s "wat.type/String" ":wat::core::String") 10)
     ((:c::is? s "wat.string/concat" ":wat::string::concat") 17)
-    ((:c::is? s "wat.string/subs" ":wat::string::subs") 17)
+    ((:c::subs? s) 17)
     ((:c::is? s "wat.i64/to-string" ":wat::i64::to-string") 17)
     ((:c::is? s "wat.string/starts-with?" ":wat::string::starts-with?") 17)
     ((:c::is? s "wat.string/contains?" ":wat::string::contains?") 17)

@@ -34,43 +34,61 @@
   [arena <- :rd::Arena  pos <- :wat::core::i64  node <- :wat::core::i64  kids <- :rd::Kids])
 
 ;; ---------------------------------------------------------------- characters
+
+;; **A character is a BYTE here, not a one-character String.** It used to be the latter, because
+;; wat has no character type (F-062) -- and `(wat.string/subs src i (+ i 1))` walks to character
+;; `i` every time it is asked, so scanning was O(n^2) in the source and `perf` put
+;; `Chars::advance_by` at 14.5% of the time spent reading. `byte-at` is O(1).
 ;;
-;; wat has no character type, so a character is a one-character String and a character class is
-;; `contains?` over a literal. That is F-062 wearing its everyday clothes.
+;; **The character classes stay written as strings and are scanned as bytes.** That matters more
+;; than it looks: a literal's escapes are handled one way by the interpreter and another by the
+;; compiler (F-120 -- nothing unescapes, a literal compiles as its SOURCE TEXT), so `" \t\n\r,"`
+;; may be five bytes or seven depending on who is running. Comparing a source byte against the
+;; SET'S OWN BYTES is right either way, which is the property `wat.string/contains?` already had
+;; and the reason this is a faithful swap rather than a rewrite.
+(wat.core/defn rd/byte [src :- wat.type/String i :- wat.type/i64] :- wat.type/i64
+  (wat.string/byte-at src i))
 
-(wat.core/defn rd/ch [src :- wat.type/String i :- wat.type/i64] :- wat.type/String
-  (wat.string/subs src i (wat.core/+ i 1)))
+;; the first byte of a literal, so a delimiter is written as itself and never as a number
+(wat.core/defn rd/b1 [s :- wat.type/String] :- wat.type/i64
+  (wat.string/byte-at s 0))
 
-(wat.core/defn rd/ws? [c :- wat.type/String] :- wat.type/bool
-  (wat.string/contains? " \t\n\r," c))
+(wat.core/defn rd/in? [set :- wat.type/String c :- wat.type/i64 i :- wat.type/i64] :- wat.type/bool
+  (wat.core/cond
+    ((wat.core/>= i (wat.string/byte-length set)) false)
+    ((wat.core/= (wat.string/byte-at set i) c) true)
+    (:else (rd/in? set c (wat.core/+ i 1)))))
 
-(wat.core/defn rd/delim? [c :- wat.type/String] :- wat.type/bool
-  (wat.string/contains? "()[]{}\";" c))
+(wat.core/defn rd/ws? [c :- wat.type/i64] :- wat.type/bool
+  (rd/in? " \t\n\r," c 0))
 
-(wat.core/defn rd/digit? [c :- wat.type/String] :- wat.type/bool
-  (wat.string/contains? "0123456789" c))
+(wat.core/defn rd/delim? [c :- wat.type/i64] :- wat.type/bool
+  (rd/in? "()[]{}\";" c 0))
+
+(wat.core/defn rd/digit? [c :- wat.type/i64] :- wat.type/bool
+  (rd/in? "0123456789" c 0))
 
 ;; ---------------------------------------------------------------- scanning
 
 (wat.core/defn rd/eol [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
     ((wat.core/>= i n) i)
-    ((wat.core/= (rd/ch src i) "\n") (wat.core/+ i 1))
+    ((wat.core/= (rd/byte src i) (rd/b1 "\n")) (wat.core/+ i 1))
     (:else (rd/eol src n (wat.core/+ i 1)))))
 
 ;; whitespace and `;` comments, to the next thing that matters
 (wat.core/defn rd/skip [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
     ((wat.core/>= i n) i)
-    ((rd/ws? (rd/ch src i)) (rd/skip src n (wat.core/+ i 1)))
-    ((wat.core/= (rd/ch src i) ";") (rd/skip src n (rd/eol src n i)))
+    ((rd/ws? (rd/byte src i)) (rd/skip src n (wat.core/+ i 1)))
+    ((wat.core/= (rd/byte src i) (rd/b1 ";")) (rd/skip src n (rd/eol src n i)))
     (:else i)))
 
 (wat.core/defn rd/atom-end [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
     ((wat.core/>= i n) i)
-    ((rd/ws? (rd/ch src i)) i)
-    ((rd/delim? (rd/ch src i)) i)
+    ((rd/ws? (rd/byte src i)) i)
+    ((rd/delim? (rd/byte src i)) i)
     (:else (rd/atom-end src n (wat.core/+ i 1)))))
 
 ;; from just after the opening quote to just after the closing one; a backslash takes the next
@@ -78,23 +96,23 @@
 (wat.core/defn rd/str-end [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
     ((wat.core/>= i n) i)
-    ((wat.core/= (rd/ch src i) "\\") (rd/str-end src n (wat.core/+ i 2)))
-    ((wat.core/= (rd/ch src i) "\"") (wat.core/+ i 1))
+    ((wat.core/= (rd/byte src i) (rd/b1 "\\")) (rd/str-end src n (wat.core/+ i 2)))
+    ((wat.core/= (rd/byte src i) (rd/b1 "\"")) (wat.core/+ i 1))
     (:else (rd/str-end src n (wat.core/+ i 1)))))
 
 ;; ---------------------------------------------------------------- classifying an atom
 
 (wat.core/defn rd/digits? [t :- wat.type/String i :- wat.type/i64] :- wat.type/bool
   (wat.core/cond
-    ((wat.core/>= i (wat.string/length t)) true)
-    ((rd/digit? (rd/ch t i)) (rd/digits? t (wat.core/+ i 1)))
+    ((wat.core/>= i (wat.string/byte-length t)) true)
+    ((rd/digit? (rd/byte t i)) (rd/digits? t (wat.core/+ i 1)))
     (:else false)))
 
 (wat.core/defn rd/int? [t :- wat.type/String] :- wat.type/bool
   (wat.core/cond
-    ((wat.core/= (wat.string/length t) 0) false)
+    ((wat.core/= (wat.string/byte-length t) 0) false)
     ((wat.string/starts-with? t "-")
-      (wat.core/and (wat.core/> (wat.string/length t) 1)
+      (wat.core/and (wat.core/> (wat.string/byte-length t) 1)
                     (rd/digits? t 1)))
     (:else (rd/digits? t 0))))
 
@@ -127,15 +145,15 @@
     (wat.core/cond
       ((wat.core/>= i n)
         (:rd::St :arena a :pos i :node -1 :kids (rd/empty-kids)))
-      ((wat.core/= (rd/ch src i) "(") (rd/seq src n a i ")" "list"))
-      ((wat.core/= (rd/ch src i) "[") (rd/seq src n a i "]" "vector"))
-      ((wat.core/= (rd/ch src i) "{") (rd/seq src n a i "}" "map"))
-      ((wat.core/= (rd/ch src i) "\"")
+      ((wat.core/= (rd/byte src i) (rd/b1 "(")) (rd/seq src n a i ")" "list"))
+      ((wat.core/= (rd/byte src i) (rd/b1 "[")) (rd/seq src n a i "]" "vector"))
+      ((wat.core/= (rd/byte src i) (rd/b1 "{")) (rd/seq src n a i "}" "map"))
+      ((wat.core/= (rd/byte src i) (rd/b1 "\""))
         (wat.core/let [e (rd/str-end src n (wat.core/+ i 1))]
-          (rd/add a (wat.core/length a) "string" (wat.string/subs src i e) (rd/empty-kids) e)))
+          (rd/add a (wat.core/length a) "string" (wat.string/byte-subs src i e) (rd/empty-kids) e)))
       (:else
         (wat.core/let [e (rd/atom-end src n i)
-                       t (wat.string/subs src i e)]
+                       t (wat.string/byte-subs src i e)]
           (rd/add a (wat.core/length a) (rd/classify t) t (rd/empty-kids) e))))))
 
 ;; children up to the closing delimiter; `kids` carries the indices back out
@@ -146,7 +164,7 @@
     (wat.core/cond
       ((wat.core/>= i n)
         (:rd::St :arena a :pos i :node -1 :kids acc))
-      ((wat.core/= (rd/ch src i) close)
+      ((wat.core/= (rd/byte src i) (rd/b1 close))
         (:rd::St :arena a :pos (wat.core/+ i 1) :node -1 :kids acc))
       (:else
         (wat.core/let [r (rd/form src n (:rd::St :arena a :pos i :node -1 :kids acc))]
@@ -158,7 +176,7 @@
                                             :kids (rd/empty-kids))
                                close (rd/empty-kids))
                  ra (:rd::St/arena r)]
-    (rd/add ra (wat.core/length ra) kind (wat.string/subs src i (:rd::St/pos r))
+    (rd/add ra (wat.core/length ra) kind (wat.string/byte-subs src i (:rd::St/pos r))
             (:rd::St/kids r) (:rd::St/pos r))))
 
 (wat.core/defn rd/tops [src :- wat.type/String n :- wat.type/i64 st :- :rd::St acc :- :rd::Kids] :- :rd::St
@@ -180,7 +198,7 @@
 ;; spent reading, which made reading O(n^2) in the source size -- 4x the source was 8x the time.
 ;; The length does not change while the source is being read, so it is a parameter (F-138).
 (wat.core/defn rd/read-into [a :- :rd::Arena src :- wat.type/String] :- :rd::St
-  (rd/tops src (wat.string/length src)
+  (rd/tops src (wat.string/byte-length src)
     (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids)) (rd/empty-kids)))
 
 (wat.core/defn rd/read [src :- wat.type/String] :- :rd::St

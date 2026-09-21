@@ -69,18 +69,17 @@ so keep it at 0.
 
 ### In flight (2026-09-20)
 
-**READING IS STILL O(n^2), AND THE CONVERSION IS FEEDING IT.** Hoisting `wat.string/length` out
-of the reader (F-138) left `rd/ch` -- `(wat.string/subs src i (+ i 1))` -- which walks to
-character `i` every time, so scanning is still quadratic in the source. Measured across the
-conversion batches: source **+4.1%** (355,264 -> 369,977 bytes), compiled-compiler time **+19%**
-(613 -> ~730 ms). Time grows ~4.6x faster than source, and every routine converted adds source.
+**READING IS O(n) NOW (F-139).** The reader indexes by BYTE -- `byte-at`/`byte-length`/
+`byte-subs`, three O(1) verbs on wat-rs branch `the-little-wat`. Compiled compiler **730 -> 509
+ms**; stage 0 296 -> 286 s. In the compiler the three are ALIASES (`:c::strlen?`, `:c::subs?`,
+`:c::codeat?` take both spellings) because a String on this heap is already a byte count followed
+by its bytes.
 
-**The fix is two O(1) byte-oriented verbs in wat-rs**, not a fast path that lies:
-`:wat::string::byte-at` and `:wat::string::byte-length`. `s.as_bytes()[i]` and `s.len()` are both
-O(1) and well-defined for every string; the reader may use them because this compiler refuses
-non-ASCII outright (F-120), so a byte index IS a character index for everything it will accept.
-An ASCII *fast path* inside `length`/`subs` is the wrong shape -- `is_ascii()` is itself O(n), so
-it would cost what it saves. **Do this before converting many more routines.**
+**And the split turned out to be semantic.** `(wat.string/length "héllo")` is 5 interpreted and 6
+compiled; the byte family is the only one that agrees. **The byte family is PORTABLE, the char
+family is FRIENDLY** -- reach for bytes in anything that must mean one thing in both worlds, and
+for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
+char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
 **Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Sixteen done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,

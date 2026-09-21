@@ -11974,6 +11974,82 @@ ASCII-only by construction (F-120), so char index IS byte index; that is a subst
 is not taken here.
 
 
+### F-139: a string verb means two different things depending on how the program runs
+
+wat measures a String in CHARACTERS (clj's `count`/`subs`); **this compiler's emitted runtime
+measures it in BYTES.** So `(wat.string/length "héllo")` is **5 interpreted and 6 compiled** --
+the same source, two answers. That is F-120 seen from the other side, and F-120's remedy is a
+RESTRICTION rather than a resolution: the compiler refuses a non-ASCII source outright
+(`elf/bad/nonascii.wat`), and for ASCII the two agree.
+
+It surfaced as a performance bug, which is how a latent semantic one usually surfaces.
+
+- **The cost of the char family is invisible.** `wat.string/length` is `chars().count()` and
+  `subs s i (+ i 1)` is a walk to `i` -- both O(n), and neither looks it. `elf/lib/reader.wat` is
+  a recursive-descent scanner built on exactly those, so **reading was O(n^2) in the source**:
+  4x the source was 8x the time, and `perf` put `Chars::advance_by` at 14.5% of a read.
+  F-138 hoisted `length` out of the loops and left the character-at, which is why this is a
+  second entry and not a footnote to that one.
+- **Three O(1) verbs, on wat-rs branch `the-little-wat` (`04d18e8a4`):**
+  `:wat::string::byte-at` (`s.as_bytes()[i]`), `:wat::string::byte-length` (`s.len()`),
+  `:wat::string::byte-subs` (`s.get(a..b)`, which refuses a range off a character boundary
+  rather than returning bytes that are not a String).
+- **Not an ASCII fast path inside `length`/`subs`**, deliberately: `str::is_ascii` is itself
+  O(n), so it would cost what it saves, and a verb that is sometimes O(1) and sometimes O(n) is
+  one a caller cannot reason about.
+
+**THE SPLIT IS SEMANTIC, NOT PERFORMANCE — and that was visible only afterwards.** These three
+are the only string verbs whose answer is identical in both runtimes:
+
+| | compiled | interpreted |
+|---|---|---|
+| `wat.string/byte-length "héllo"` | 6 | 6 |
+| `wat.string/length "héllo"` | 6 | **5** |
+
+So: **the byte family is the PORTABLE one; the char family is the FRIENDLY one.** A
+self-hosting compiler's reader is exactly the code that must mean one thing in both worlds, so
+it belongs on the byte family for a reason that has nothing to do with speed. The verbs were
+built for speed and turned out to be the right ones for correctness; that ordering is worth
+recording, because the argument that would have chosen them first was available all along.
+
+**In the compiler they are aliases, and that is the proof.** `:c::strlen?`, `:c::subs?` and
+`:c::codeat?` now accept both spellings and emit the same instructions -- because a String on
+this heap already IS a length in bytes followed by its bytes. Nothing was added to the runtime.
+
+- **Measured**, full bootstrap either side of the reader's move to the byte family:
+
+  | | stage 0 (interpreted) | the compiled compiler |
+  |---|---|---|
+  | char-indexed reader | 296,274 ms | ~730 ms |
+  | **byte-indexed** | **285,828 ms** | **509 ms** |
+
+  The compiled path gains most (**-30%**): `byte-at` is a `movzbq`, where `subs` was a call into
+  `str_subs` that ALLOCATED a one-character String per character scanned. Interpreted it is only
+  -3.5%, because the character classes became a wat-level scan (`rd/in?`) where
+  `wat.string/contains?` had been one native call -- a real regression at small inputs, paid back
+  above about 80 KB and worth it at this compiler's 370 KB.
+
+- **The character classes are still written as strings and scanned as bytes**, which is the one
+  subtle thing in the change: a literal's escapes are handled one way by the interpreter and
+  another by the compiler (F-120 -- nothing unescapes; a literal compiles as its SOURCE TEXT), so
+  `" \t\n\r,"` may be five bytes or seven depending on who is running. Comparing a source byte
+  against the SET'S OWN BYTES is right either way. That is the property `contains?` already had,
+  and keeping it is what makes this a faithful swap rather than a rewrite.
+
+- **Self-hosting bites here in a way worth remembering:** the reader cannot use a verb the
+  compiler cannot compile, and `--fast` cannot bootstrap a new form at all -- the seed predates
+  it. Teaching `:c::codeat?` the new spelling and running the full bootstrap is the whole loop.
+
+- **Class:** Fix (wat-rs, done) + Fix (ours, done) + **Extend, named and not taken**:
+  `Value::String(Arc<String>)` carries no metadata -- no cached char count, no ASCII flag. With
+  them, `length` is O(1) always and the CHAR verbs are O(1) for ASCII, semantics untouched. That
+  is 414 construction sites and it fixes the invisible cost. **It does not close the divergence**
+  -- only teaching the emitted runtime UTF-8 would, and that reaches `str_cat`, `str_subs`,
+  `str_eq` and `print_str`.
+- **Repro:** `tests/resolve/probe_little_wat_bits_and_code_point.*` on the wat-rs branch, 24
+  tests; `tools/bootstrap.sh` here.
+
+
 ## Predicted, unverified
 
 Read from wat-rs's docs on 2026-09-14. Several of those docs have fallen behind the code, so
