@@ -56,7 +56,7 @@ while IFS= read -r hex; do
   python3 -c "import binascii;open('$tmp/r.bin','wb').write(binascii.unhexlify('$hex'))" || continue
   echo "=== :c::rt-$fn  ($(( ${#hex} / 2 )) bytes) ==="
   # the one-line claim the source makes about it, so it sits beside the instructions
-  grep -B6 "defn :c::rt-$fn \[" elf/lib/runtime.wat | grep -E '^;; *`' | head -1 | sed 's/^;; */  claim: /'
+  grep -B14 "defn :c::rt-$fn \[" elf/lib/runtime.wat | grep -E '^;; *`' | head -1 | sed 's/^;; */  claim: /'
   objdump -D -b binary -m i386:x86-64 "$tmp/r.bin" 2>/dev/null | tail -n +8 | sed 's/^/  /'
   echo
 done < "$tmp/hex"

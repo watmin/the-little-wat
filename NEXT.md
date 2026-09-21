@@ -81,13 +81,18 @@ family is FRIENDLY** -- reach for bytes in anything that must mean one thing in 
 for chars in anything user-facing. Still open, named in F-139: `Value::String` carries no cached
 char count or ASCII flag (414 sites), and the emitted runtime does not know UTF-8 at all.
 
-**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Twenty-eight done
+**Converting the 33 `:c::rt-*` routines from hex blobs to composed expressions.** Thirty done
 (`hexchar`, `hexval`, `i64-quot`, `i64-rem`, `flush`, `node-copy`, `str-starts`, `str-eq`,
 `vec-new`, `varr-new`, `node-new`, `tree-get`, `print-bool`, `str-contains`, `buf-put`,
 `slot-set`, `die`, `str-subs`, `str-cat-own`, `ovf`, `oom`, `divzero`, `print-i64`, `str-cat`,
 `tree-from-arr`, `vec-conj`, `print-i64`+`i64-to-str` via a shared `:c::rt-digits`,
-`print-str`); **5 left**: `prim-write-hex` 163, `io-read-file` 175, `tree-push` 199,
-`prim-read-hex` 227, `vec-conj-own` 240.
+`print-str`, `prim-write-hex`, `io-read-file`); **3 left**: `tree-push` 199, `prim-read-hex`
+227, `vec-conj-own` 240.
+
+**C-174's module boundary earned itself.** `runtime.wat` reached UP for `:c::cond-code`, which
+lives in `compile.wat`. The compiler would have been fine with it; `tools/rt-disasm.sh` loads
+only prim/asm/reader/x86/runtime and failed instantly on the unresolved reference. A grep-checkable
+seam that something actually runs against is worth more than one that is merely documented.
 
 **`print_str` is the REPL's blocker, and it is now legible.** It wraps its argument in quotes and
 escapes it -- so a PROMPT cannot go through it, which is exactly why `mal/step0_repl.wat` needs

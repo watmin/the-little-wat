@@ -201,6 +201,8 @@
 (:wat::core::defn :c::rsp [] -> :wat::core::i64 13)
 (:wat::core::defn :c::rbx [] -> :wat::core::i64 0)
 (:wat::core::defn :c::rbp [] -> :wat::core::i64 3)
+(:wat::core::defn :c::r12 [] -> :wat::core::i64 1)
+(:wat::core::defn :c::r13 [] -> :wat::core::i64 2)
 (:wat::core::defn :c::r8  [] -> :wat::core::i64 4)
 (:wat::core::defn :c::r9  [] -> :wat::core::i64 5)
 (:wat::core::defn :c::r10 [] -> :wat::core::i64 6)
@@ -351,6 +353,12 @@
 (:wat::core::defn :c::shl-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 4 dst))
 (:wat::core::defn :c::sar-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 7 dst))
 (:wat::core::defn :c::shr-cl [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d3" 5 dst))
+;; **a shift by ONE has its own opcode**, and by a constant another -- `d1` takes no immediate at
+;; all, `c1` takes one byte, and `d3` reads cl. Three encodings of one instruction, and the
+;; assembler picks by what it is shifting by.
+(:wat::core::defn :c::shr-1 [dst <- :wat::core::i64] -> :wat::core::String (:c::rd "d1" 5 dst))
+(:wat::core::defn :c::shl-ri [dst <- :wat::core::i64 n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rd "c1" 4 dst) (:asm::le n 1)))
 
 ;; `cmp $imm, %dst` and `imul $imm, %src, %rax` -- both pick a short opcode when the immediate
 ;; fits in a byte, which is the only thing that varies between their two forms
@@ -648,4 +656,6 @@
 (:wat::core::defn :c::cc-sign [] -> :wat::core::i64 8)
 ;; `jge` -- signed greater-or-equal, the pair of `jl`
 (:wat::core::defn :c::cc-ge [] -> :wat::core::i64 13)
+;; `jle` -- signed less-or-equal, which is how a `read` returning 0 or -1 ends a loop
+(:wat::core::defn :c::cc-le [] -> :wat::core::i64 14)
 (:wat::core::defn :c::cc-greater [] -> :wat::core::i64 15)

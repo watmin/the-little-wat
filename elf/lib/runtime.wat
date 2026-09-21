@@ -940,6 +940,24 @@
     (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) (:c::rt-str-body))
     (:c::rt-str-tail)))
 
+;; **a syscall needs a C string and a wat String is not one** -- it is a length and then bytes,
+;; with nothing at the end. So the path is copied to the heap top and a NUL is put after it.
+;; Nothing is allocated: r15 is scratch here exactly as in `print_str`, and r12 is left pointing
+;; PAST the NUL, which is where the caller's own scratch begins.
+;;
+;; `prim_write_hex` and `io_read_file` did this identically, differing only in which register
+;; holds the path.
+(:wat::core::defn :c::rt-cpath [src <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rr (:c::r15) (:c::r10))
+    (:c::lea-at src (:c::str-data) (:c::rsi))
+    (:c::mov-rr (:c::r10) (:c::rdi))
+    (:c::mov-rm src 0 (:c::rcx))
+    (:c::rep-movsb)
+    (:c::mov-mi8 (:c::rdi) 0 0)
+    (:c::inc-r (:c::rdi))
+    (:c::mov-rr (:c::rdi) (:c::r12))))
+
 ;; `write(fd)` with rsi and rdx already set -- the three instructions every direct write shares.
 ;; A local `fn` would say this better, but this compiler takes `defn` at the top level and
 ;; nothing else, so a helper it is.
@@ -1024,17 +1042,70 @@
       (:c::add-ri (:c::rax) (:asm::code-of "0"))
       (:c::ret))))
 
-;; `prim_write_hex(rax = path, rcx = hex) -> rax = bytes written`. Decodes the hex into a
-;; buffer above the heap top and writes it with open/write/close. **Parks its pointers in r12,
-;; not r11: `syscall` destroys rcx and r11.**
-(:wat::core::defn :c::rt-prim-write-hex [] -> :wat::core::String
-  (:wat::string::concat
-    "5341544989c04989c94d89fa498d70084c89d7498b08f3a4c6070048ffc7"
-    "4989fc498b1148d1ea4889d3498d71084885d2742b480fb606e8a6ffffff"
-    "48c1e0044889c1480fb64601e895ffffff4809c888074883c60248ffc748"
-    "ffca75d548c7c0020000004c89d748c7c64102000048c7c2ed0100000f05"
-    "4989c148c7c0010000004c89cf4c89e64889da0f054989c248c7c0030000"
-    "004c89cf0f054c89d0415c5bc3"))
+;; `prim_write_hex(rax = path, rcx = hex) -> rax = bytes written` -- decode a hex String into
+;; bytes and write them to a file. This is how the compiler emits an ELF: everything it builds is
+;; a String of hex, and this is the only thing that turns that into a file.
+;;
+;; Two characters make one byte, so the count is the length halved, and each pair is
+;; `hexval(hi) << 4 | hexval(lo)`.
+(:wat::core::defn :c::rt-prim-write-hex [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::rbx)) (:c::reg-push (:c::r12))
+           (:c::mov-rr (:c::rax) (:c::r8))
+           (:c::mov-rr (:c::rcx) (:c::r9))
+           (:c::rt-cpath (:c::r8))
+           (:c::mov-rm (:c::r9) 0 (:c::rdx))
+           (:c::shr-1 (:c::rdx))
+           (:c::mov-rr (:c::rdx) (:c::rbx))
+           (:c::lea-at (:c::r9) (:c::str-data) (:c::rsi))
+           (:c::test-rr (:c::rdx) (:c::rdx)))
+     ;; where each `hexval` call lands, as a running sum of the pieces before it
+     at-loop (:wat::core::+ (:c::at-wrhex lay)
+               (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
+     hi (:c::movzb (:c::rsi) (:c::no-reg) 0 (:c::rax))
+     at-c1 (:wat::core::+ at-loop (:c::hexlen hi))
+     mid (:wat::string::concat
+           (:c::shl-ri (:c::rax) 4)
+           (:c::mov-rr (:c::rax) (:c::rcx))
+           (:c::movzb (:c::rsi) (:c::no-reg) 1 (:c::rax)))
+     at-c2 (:wat::core::+ at-c1 (:wat::core::+ (:c::call-size) (:c::hexlen mid)))
+     body (:wat::string::concat
+            hi
+            (:c::rt-call (:c::at-hexval lay) (:wat::core::+ at-c1 (:c::call-size)))
+            mid
+            (:c::rt-call (:c::at-hexval lay) (:wat::core::+ at-c2 (:c::call-size)))
+            (:c::or-rr (:c::rcx) (:c::rax))
+            (:c::mov-mr8 (:c::rax) (:c::rdi) 0)
+            (:c::add-ri (:c::rsi) 2)
+            (:c::inc-r (:c::rdi))
+            (:c::dec-r (:c::rdx)))]
+    (:wat::string::concat
+      pre
+      (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
+        (:wat::core::+ (:c::hexlen body) (:c::rel8-size)))
+      body
+      (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)
+      ;; open, write, close -- the fd in r9 across all three
+      (:c::mov-ri (:c::rax) (:c::sys-open))
+      (:c::mov-rr (:c::r10) (:c::rdi))
+      (:c::mov-ri (:c::rsi) (:wat::core::+ (:c::o-wronly)
+                              (:wat::core::+ (:c::o-creat) (:c::o-trunc))))
+      (:c::mov-ri (:c::rdx) (:c::file-mode))
+      (:c::syscall)
+      (:c::mov-rr (:c::rax) (:c::r9))
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::mov-rr (:c::r9) (:c::rdi))
+      (:c::mov-rr (:c::r12) (:c::rsi))
+      (:c::mov-rr (:c::rbx) (:c::rdx))
+      (:c::syscall)
+      (:c::mov-rr (:c::rax) (:c::r10))
+      (:c::mov-ri (:c::rax) (:c::sys-close))
+      (:c::mov-rr (:c::r9) (:c::rdi))
+      (:c::syscall)
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::rbx))
+      (:c::ret))))
 
 ;; `prim_read_hex(rax = path) -> rax = a String of hex`.
 (:wat::core::defn :c::rt-prim-read-hex [] -> :wat::core::String
@@ -1048,15 +1119,72 @@
     "89c148c1e804e88ffeffff880748ffc74889c84883e00fe87efeffff8807"
     "48ffc748ffc648ffca75d24c89d0415cc3"))
 
-;; `io_read_file(rax = path) -> rax = a String of the file bytes`. This is `wat.io/read-file`.
-(:wat::core::defn :c::rt-io-read-file [] -> :wat::core::String
-  (:wat::string::concat
-    "41544d89fa488d70084c89d7488b08f3a4c6070048ffc74989fc48c7c002"
-    "0000004c89d74831f64831d20f054989c04d89e148c7c0000000004c89c7"
-    "4c89ce48c7c2000001000f054885c07e054901c1ebe048c7c0030000004c"
-    "89c70f054c89ca4c29e24d8d41074983e0f8488d4a0f480fbdc948c7c602"
-    "00000048d3e64c01c6493b76087605e806f6ffff4989f749c70001000000"
-    "4d8d5008498912498d7a084c89e64889d1f3a44c89d0415cc3"))
+;; `io_read_file(rax = path) -> rax = a String of the bytes`. This is `wat.io/read-file`, and it
+;; is how the compiler reads its own source.
+;;
+;; **The read loop has no size to ask for in advance**, so it reads a chunk at a time onto the
+;; heap top until `read` returns nothing, and only THEN allocates -- the bytes are already where
+;; they need to be, so the allocation just has to reach past them. `lea 7(r9)` then `and -8`
+;; rounds the end up to a word, because the String header wants alignment.
+(:wat::core::defn :c::rt-io-read-file [lay <- :c::Layout] -> :wat::core::String
+  (:wat::core::let
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::r12))
+           (:c::rt-cpath (:c::rax))
+           (:c::mov-ri (:c::rax) (:c::sys-open))
+           (:c::mov-rr (:c::r10) (:c::rdi))
+           (:c::xor-rr (:c::rsi) (:c::rsi))            ;; O_RDONLY is zero
+           (:c::xor-rr (:c::rdx) (:c::rdx))
+           (:c::syscall)
+           (:c::mov-rr (:c::rax) (:c::r8))             ;; the fd
+           (:c::mov-rr (:c::r12) (:c::r9)))            ;; the cursor
+     chunk (:wat::string::concat
+             (:c::mov-ri (:c::rax) (:c::sys-read))
+             (:c::mov-rr (:c::r8) (:c::rdi))
+             (:c::mov-rr (:c::r9) (:c::rsi))
+             (:c::mov-ri (:c::rdx) (:c::read-chunk))
+             (:c::syscall)
+             (:c::test-rr (:c::rax) (:c::rax)))
+     step (:wat::string::concat (:c::add-rr (:c::rax) (:c::r9)))
+     loop (:wat::string::concat
+            chunk
+            (:c::br-len (:c::jcc-rel8 (:c::cc-le))
+              (:wat::core::+ (:c::hexlen step) (:c::rel8-size)))
+            step)
+     post (:wat::string::concat
+            (:c::mov-ri (:c::rax) (:c::sys-close))
+            (:c::mov-rr (:c::r8) (:c::rdi))
+            (:c::syscall)
+            ;; how far the cursor moved IS the length
+            (:c::mov-rr (:c::r9) (:c::rdx))
+            (:c::sub-rr (:c::r12) (:c::rdx))
+            ;; round the end up to a word: the String header wants alignment
+            (:c::lea-at (:c::r9) 7 (:c::r8))
+            (:c::and-ri (:c::r8) -8)
+            (:c::rt-cap (:c::rdx) (:c::rcx) (:c::rsi))
+            (:c::add-rr (:c::r8) (:c::rsi))
+            (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
+     at-oom (:wat::core::+ (:c::at-rdfile lay)
+              (:wat::core::+ (:c::hexlen pre)
+                (:wat::core::+ (:c::hexlen loop)
+                  (:wat::core::+ (:c::rel8-size)
+                    (:wat::core::+ (:c::hexlen post) (:c::rel8-size))))))
+     to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-oom (:c::call-size)))]
+    (:wat::string::concat
+      pre loop (:c::jmp-back loop) post
+      (:c::jbe-over to-oom) to-oom
+      ;; the bytes are already in place; the allocation only has to reach past them
+      (:c::mov-rr (:c::rsi) (:c::r15))
+      (:c::mov-mi (:c::r8) 0 (:c::heap-arm))
+      (:c::lea-at (:c::r8) (:c::vec-ptr) (:c::r10))
+      (:c::mov-mr (:c::rdx) (:c::r10) 0)
+      (:c::lea-at (:c::r10) (:c::str-data) (:c::rdi))
+      (:c::mov-rr (:c::r12) (:c::rsi))
+      (:c::mov-rr (:c::rdx) (:c::rcx))
+      (:c::rep-movsb)
+      (:c::mov-rr (:c::r10) (:c::rax))
+      (:c::reg-pop (:c::r12))
+      (:c::ret))))
 
 (:wat::core::defn :c::rt-at [lvl <- :wat::core::i64 n <- :wat::core::i64
                              hex <- :wat::core::String] -> :wat::core::String
@@ -1110,9 +1238,9 @@
     ((:wat::core::= i 27) (:c::rt-slot-set lay))
     ((:wat::core::= i 28) (:c::rt-hexval))
     ((:wat::core::= i 29) (:c::rt-hexchar))
-    ((:wat::core::= i 30) (:c::rt-prim-write-hex))
+    ((:wat::core::= i 30) (:c::rt-prim-write-hex lay))
     ((:wat::core::= i 31) (:c::rt-prim-read-hex))
-    (:else (:c::rt-io-read-file))))
+    (:else (:c::rt-io-read-file lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
                               acc <- :wat::core::String] -> :wat::core::String
@@ -1240,7 +1368,19 @@
 (:wat::core::defn :c::buf-hiwater [] -> :wat::core::i64 4096)
 ;; the Linux calls this runtime makes, by number rather than by the `1` that means three things
 (:wat::core::defn :c::sys-write [] -> :wat::core::i64 1)
+(:wat::core::defn :c::sys-read [] -> :wat::core::i64 0)
+(:wat::core::defn :c::sys-open [] -> :wat::core::i64 2)
+(:wat::core::defn :c::sys-close [] -> :wat::core::i64 3)
 (:wat::core::defn :c::sys-exit [] -> :wat::core::i64 60)
+;; **the open flags, added rather than written.** 0x241 is three bits and saying so is the whole
+;; difference between a number and a decision.
+(:wat::core::defn :c::o-wronly [] -> :wat::core::i64 1)
+(:wat::core::defn :c::o-creat [] -> :wat::core::i64 64)
+(:wat::core::defn :c::o-trunc [] -> :wat::core::i64 512)
+(:wat::core::defn :c::o-rdonly [] -> :wat::core::i64 0)
+(:wat::core::defn :c::file-mode [] -> :wat::core::i64 493)    ;; 0o755
+;; how much `read` is asked for at a time
+(:wat::core::defn :c::read-chunk [] -> :wat::core::i64 65536)
 (:wat::core::defn :c::fd-stdout [] -> :wat::core::i64 1)
 (:wat::core::defn :c::fd-stderr [] -> :wat::core::i64 2)
 ;; the two other control characters EDN escapes, beside the newline `:c::nl` already names.
