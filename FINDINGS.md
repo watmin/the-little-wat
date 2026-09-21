@@ -12853,6 +12853,69 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-161: "the whole 1.33x is the trapping" was false, and the records prerequisite was too strong
+
+**Correct to F-159 and F-150, from the sixth peer strike (grok, `.pulsare/SCORE-losses.md`),
+verified here by disassembling both checked builds.** I asked for my own defence to be
+attacked. It did not survive.
+
+**`triple`: checked gcc flatters us; checked clang does not.**
+
+```
+CHECKED GCC                        CHECKED CLANG
+  sub  $0x7,%rdi   strength-       add $-9,%rcx   strength-
+  sub  $0x5,%r8    reduced         add $-5,%rdx   reduced
+  sub  $0x3,%rcx                   add $-3,%rax
+  add  %rcx,%rsi                   add %rax,%r9
+  seto %r9b        <- THREE uops   jo             <- ONE uop, same as ours
+  jo               (flag must      jo
+  jo                survive)       jo
+```
+
+gcc's 21.0 uops and 4.97 cycles include a `seto` + later `test`/`jne` on one of the three
+adds, because the flag has to survive the other flag-setting instructions. **That is gcc's
+check SHAPE, not a weaker guarantee**, and F-159 read our 4.86 against it as a win.
+
+**Clang traps with three `jo` -- byte-for-byte the same obligation we carry -- and strength
+reduces anyway: 19 uops, 4.51 cycles.** So a trapping compiler demonstrably CAN delete the
+multiplies. The 1.33x is not the trapping. It is three `jo` **plus** three `imul` that a
+checking compiler has already removed, and removing them is legal for us: C-170 deleted our
+multiply checks years of findings ago.
+
+**F-159 priced strength reduction as a count and called it "worth roughly one uop".** `imul`
+is three cycles and port 1 only; `sub` is one cycle on any ALU. No uop count shows that, and
+clang converts it into a real 0.35 cycles. The transform is back on the queue.
+
+**`fib`: the defence holds against unchecked gcc and overclaims elsewhere.** The reassociation
+argument is right -- 364,490 calls against the naive 7,049,155, surviving `-fwrapv` and dying
+under trapping, so it is "addition is associative", not "overflow cannot happen". But the
+3.22x against `gcc -ftrapv` does not belong in a defence: F-132 already records that `-ftrapv`
+emits a call to `__addvdi3` where ours is an inline `jo`, so that ratio is their
+implementation. The 2.46x against clang's inline trap is the real win. Against `gcc -O2` as
+people write it, fib is 1.5x and **closed as a grind, not closed because the comparison was
+the wrong language**.
+
+**`records`: the prerequisite claim was too strong.** F-150 disqualified scalar replacement
+because a transform needing a NEW register fires at three parameters and dies at four. True,
+and not the only version. The record is already parameter 0, in a register; this loop reads
+one field, writes it back in place, and never touches `b`, `c` or `d`. **The pointer is dead
+the moment the field lives in the register the pointer occupied** -- no spare required. And
+deleting the call deletes the reason the function is not `callfree?`, so r8-r11 return AFTER
+the transform, not before. Treating `callfree?` as a fixed fact about the source is what made
+the spare look like the prerequisite. The general case -- two hot fields, a record not already
+in a register, a write-back where the whole record escapes -- still wants an allocator.
+
+**Also corrected: `recflat` is not "exactly gcc's number".** That was a coincidence of two
+different programs. `gcc -O2` on `recflat`'s own shape computes the sum in closed form,
+187,410 instructions for the whole run. `recflat`'s 1.50 cyc/it is what our own loop costs
+without the round trip -- the right target for the transform, and not a ceiling derived from C.
+
+- **Class:** Correct. F-159's semantic framing narrowed; F-150's prerequisite narrowed;
+  strength reduction and one-field scalar replacement both back on the queue, both smaller
+  than an allocator.
+- **Repro:** `objdump -d` over `gcc -O2 -static elf/bench/triplechk.c` and the clang build;
+  the loops are inlined into `main`.
+
 ### F-160 / C-190: the encoder had three holes no oracle here could see, and the fix reintroduced one of them
 
 **Fix, found by a peer audit against `llvm-mc` (grok, `.pulsare/SCORE-encoder.md`), every claim
