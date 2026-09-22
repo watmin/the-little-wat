@@ -210,8 +210,31 @@ invisible in the source. There is no cheap version worth shipping.
 
 What the real one needs: a closure VALUE (code pointer plus captured environment -- `vec_new`
 already allocates), an INDIRECT call (`call *%rax`; the compiler emits direct `rel32` only),
-`:fn(A,B)->R` as a value type in the type pass, and a decision about how last-use ownership
+the function type as a value type in the type pass, and a decision about how last-use ownership
 (C-151/F-127) interacts with a captured binding.
+
+**The type is spelled `[ArgType... :-> RetType]`, and this document had it wrong.** It said
+`:fn(A,B)->R`, which is the pre-arc-109 spelling that arc 155 retired -- implementing it would
+have aimed the parser at a form wat does not have. Verified against `wat-rs/src/types.rs:4897`,
+which matches the keyword `:->`; the zero-ary form is `[:-> R]` (`types.rs:164`). Note `:-` and
+`:->` are DIFFERENT tokens: `:-` separates parametric arguments, as in
+`(:wat::core::Vector :- [T])`; `:->` is the function arrow.
+
+```clojure
+[:-> U]              ;; 0-ary
+[T :-> U]            ;; 1-ary
+[K V :-> U]          ;; 2-ary
+[A B C D E :-> Z]    ;; 5-ary
+```
+
+**Closures are NOT the fix for the walk duplication, and that framing was wrong too.** The
+composition failure F-169 measures has two layers. Layer A -- the tail-position rule
+re-derived by hand in nine walks -- is the RELIABILITY problem, it is what produced F-168, and
+it needs no new language feature: one shared structural query plus the polarity audit. Layer B
+-- the recursion-and-combine skeleton duplicated nine times, 23 functions -- is the bulk
+problem, and that one does need closures, because the walks genuinely differ in how they
+combine (`occ` maxes `if`-arms, `use-union` unions them). Build closures for the REPL and
+`mal`, which are their own justification; take Layer B as the bonus that follows.
 
 Small and separate: the refusal says `cannot compile call: (wat.core/fn ...)`. A `fn` is not a
 call. The compiler has a good named refusal for top-level forms and wants one here (F-128's family).

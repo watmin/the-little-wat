@@ -12853,7 +12853,11 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
-### F-168: the compiler miscompiles a function shape it CONTAINS — and no oracle here can see it
+### F-168 (RESOLVED by C-196): the compiler miscompiles a function shape it CONTAINS — and no oracle here can see it
+
+**Resolved.** The cause is `:c::tail-self?` being blind to `and`/`or` while the generator is
+not. See C-196. The reasoning preserved below is the state before that was known; the "one
+structural difference found" paragraph pointed at the right family for the wrong reason.
 
 **Fix, urgent, and not yet chased. This outranks the strike it was found under.** While
 building unlock 2 of the read-only strike (F-167), the executor hit a stage-1 segfault and
@@ -13669,3 +13673,66 @@ each of these stays unverified until a repro runs against the current substrate.
 | ~~Seasoned Schemer ch 19~~ | re-entrant continuations (generators) | no call/cc; state lives on services | **verified: no call/cc (R-003); generators port to lazy streams (C-017)** |
 | ~~Seasoned Schemer ch 15–17~~ | `set!`, closures carrying state | "mutation-free by construction" (CLOJURE-ROSETTA.md) | **overturned: set! ports to Cell services (C-014)** |
 | ~~Little Schemer throughout~~ | lists mixing atoms and lists | collections are monomorphic; `:Any` is banned | **resolved: quoted forms (`:wat::WatAST`) are the route, see C-004** |
+
+### C-196 / F-168: the analysis and the generator disagreed about `and`
+
+**Fix.** `:c::tail-self?` recursed into `if`, `do`, `let` and `cond` and had **no case for
+`and`/`or`**. But the last operand of an `and` IS the value of the form, and
+`:c::and-form`/`:c::or-form` (elf/compile.wat:2636) hand that operand the tail context
+**unchanged** -- so `:c::expr` has always compiled a self call there as a self tail call.
+**The generator emitted a loop while every consumer of `tail-self?` believed there was none.**
+
+Two independently fatal consequences, both confirmed in disassembly:
+
+1. `regs?` goes false, so parameters stay on the frame -- but C-188's self-testing back edge
+   still emits `cmp 0x18(%rsp),%rax`, comparing a **stale `%rax`** instead of reloading the
+   loop variable.
+2. `wrap?`'s guard is literally `(not tself?)`, so the loop test is peeled ahead of the
+   prologue and the back edge targets the else arm, **jumping past the termination test** --
+   exactly the hazard the code's own comment warns about.
+
+**The failure mode is not always a crash.** `P4` compiles, exits 0, and prints
+`false|false` where the interpreter prints `true|false`. Verified both directions against an
+unfixed driver. A program of this shape can quietly compute nonsense.
+
+**Why nothing caught it.** Green has 12 functions with a self tail call under `and`/`or`, and
+every one tests `(>= i (length ks))`; the call in the test disqualifies both fast paths.
+`:c::hoistable?` was the first code in the repository to combine that shape with a test the
+fast paths accept -- which is why F-168 appeared to be about the hoist.
+
+**Cost.** Three oracles green: bootstrap fixpoint **232,741 B** (76 binaries byte-identical),
+`tools/emitted.sh` **all 74 byte-identical**, `tools/elf-run.sh` 30 agree / 3 syscall-only /
+4 refusals / 4 traps. The only binary that moves is the compiler's own, 232,775 -> 232,741,
+**34 bytes smaller** -- `compile.wat` is the only source in the tree with the shape.
+
+### F-169: nine walks re-derive one rule, and only the polarity decided which one was a bug
+
+**Clean.** The generator propagates tail context through exactly six forms -- `if`, `cond`,
+`and`, `or`, `do`, `let`. Every position-sensitive walk must match that set, and each of the
+nine hand-enumerates it. An audit of what each does when it meets `and`/`or`:
+
+| walk | `and`/`or` | what it does instead | direction |
+|---|---|---|---|
+| `tail-self?` | missing (C-196) | falls to `:else`, answers false | **unsafe** |
+| `noret?` | missing | `scratch-safe?` rejects the subtree | conservative |
+| `occ` | missing | *sums* operands instead of maxing | conservative (over-count) |
+| `live-after` | missing | `live-seq` assumes everything right of `u` runs | conservative |
+| `use-walk`, `read-only?`, `mut-site` | missing | walk all kids uniformly | conservative |
+
+**Eight of nine were saved by polarity, not by correctness.** In those, "I do not recognise
+this form" resolves to DISABLING an optimization. In `tail-self?` alone it resolves to
+ENABLING one, because `wrap?`'s guard is `(not tself?)`. A blind spot shared by the whole
+compiler produced an infinite loop in exactly one place.
+
+`compile.wat`'s own comment already says `cond`, `and`, `or` and `not` are "`if` wearing
+different hats" -- so the nine are not re-deriving nine rules, they are re-deriving ONE
+desugaring, by hand, nine times. Two of them got it wrong the same way.
+
+**Two requirements follow**, and requirement 2 is the one that would have caught this before
+it was written:
+1. The tail-position question gets answered in ONE place.
+2. Every walk is audited for WHICH DIRECTION its unknown-form answer falls; the ones that
+   fail open must never be allowed to guess.
+
+When macros land and `cond`/`and`/`or` expand to `if` before the walks run, the class stops
+existing. The shared query is that same semantics, staged.

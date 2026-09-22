@@ -3304,6 +3304,16 @@
                               (:c::tail-self? (:wat::core::nth ks 3) name arity pg)))
             ((:wat::core::or (:c::do? head) (:c::let? head))
               (:c::tail-self? last name arity pg))
+            ;; `and` and `or` are `if` wearing a different hat, and :c::and-form / :c::or-form
+            ;; hand the LAST operand the tail context unchanged -- so a self call there is
+            ;; compiled as a self tail call, and has been all along. Without this case the
+            ;; predicate answered false for it: the generator emitted a loop while `regs?` and
+            ;; `wrap?` both believed there was none, so the parameters stayed on the frame while
+            ;; the back edge compared a stale rax, and the loop test got peeled ahead of the
+            ;; prologue with the back edge landing past it. Either way the loop never ended.
+            ;; Nothing in elf/ had the shape except the compiler itself (F-168).
+            ((:wat::core::or (:c::and? head) (:c::or? head))
+              (:c::tail-self? last name arity pg))
             ((:c::cond? head) (:c::tail-self-clauses ks 1 name arity pg))
             (:else (:wat::core::and (:wat::core::= head name)
                                     (:wat::core::= (:wat::core::- (:wat::core::length ks) 1) arity)))))))))
