@@ -12853,6 +12853,52 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-165: the read cost is the loop, not the trie — the vectors never promote
+
+**Correct to F-164, from a refused strike.** `nth` was briefed as a tree-walk problem: 37
+uops against C's 3, blamed on C-145's flat->tree promotion. The executor refused on STOP-3
+("if `conj` regresses, stop") and gave the reason: **`vecsum` and `grow2000000` never
+promote**, so a leaf cache in `tree_get` would be dead code, and forcing promotion to make
+it matter would replace the build that wins.
+
+**Verified here by disassembling the sum loop.** The arm test falls through every iteration:
+
+```
+cmpq $0x0,-0x10(%rax)          which arm -- the tag is never written
+jne  tree_get                  NOT TAKEN
+mov  0x8(%rax,%rcx,8),%rax     C's single load
+jmp  +5
+call tree_get                  cold
+```
+
+`vec_conj_own` (routine 26) extends the flat array in place; `:c::arr-max` is consulted only
+by the copying `vec_conj`, which this accumulator never reaches. A path-copy of a 32-way trie
+would retire over a hundred instructions per `conj` at 2,000,000 elements. The measured build
+is 33.00. It is one array, grown in place. `perf record` on `vecsum` lands in the extend and
+the sum loop; nothing lands in `tree_get`.
+
+**So the 36 instructions of the read are the loop around the load**, one of which is the load:
+
+- `(length v)` is **reloaded every iteration** -- `mov %rbx,%rax ; mov (%rax),%rax ; mov
+  %rax,%rcx ; pop ; cmp` -- though it is loop-invariant.
+- a **share increment per read**: `cmpq $0,-0x8(%rax) ; je ; incq -0x8(%rax)`. `nth` only
+  READS the container; the increment is `:c::share` firing on a pointer symbol that is never
+  stored.
+- the **argument shuffle** for the `nth` call convention, the same push/pop protocol C-178
+  removed for `concat`.
+
+**My diagnosis was structural rather than measured.** I read `nth`'s emission, saw it has a
+tree arm, and assumed the arm was taken. The same error as assuming `triple`'s `jo` sat on
+the `imul`s. The instruction arithmetic alone refutes it: a four-level walk is ~42
+instructions and the whole read difference is 36.
+
+- **Class:** Correct. The open item is real and bigger than it looked -- three loop costs,
+  none of them the trie, all of them shapes the compiler already knows how to fix elsewhere
+  (loop-invariant hoisting, a share that a read does not need, C-178's argument protocol).
+- **Repro:** `objdump -D -b binary -m i386:x86-64 --adjust-vma=0x400000
+  --start-address=0x40015e elf/out/vecsum.elf` -- the `jne` at `0x4001a6` is the arm test and
+  it is never taken.
+
 ### F-164: vectors, measured against C for the first time — `conj` WINS, `nth` is 3.7x behind
 
 **Improve, and the board's first vector section.** Strings and records have been measured
@@ -12887,15 +12933,16 @@ beat `gcc -O0` outright.
 uops, because C stalls on `realloc` and memory at 29.8% retiring and we do not. C-127's
 in-place path and C-145's promotion won that half outright.
 
-**`nth` costs 37 uops against C's 3.** That is precisely the bill for C-145: promoting
-flat->tree made `conj` O(log n) and closed a 1,580x cliff, and a tree indexes by walking
-levels where an array indexes by arithmetic. **The transform that fixed the build is what
-costs on the read.** It is the classic persistent-structure trade, now measured rather than
-assumed.
+**`nth` costs 37 uops against C's 3 -- and the reason given here was WRONG.** This entry said
+it was the promoted tree walking levels. **It is not. These vectors never promote.** The
+strike briefed on that diagnosis was refused on its own STOP trigger and the refusal is
+F-165: `vec_conj_own` extends the flat array in place and never writes the tag, so the arm
+test at `nth` falls through to `mov 0x8(%rax,%rcx,8),%rax` -- C's single load -- on every
+iteration, and `tree_get` is cold. The 36 instructions are the LOOP AROUND the load. Read
+F-165 before acting on anything in this paragraph.
 
-- **Class:** Improve. `conj` is closed and winning. `nth` on a promoted vector is the open
-  item -- and unlike `triple`, it is not blocked on the register allocator; it is a data
-  structure question (a flat fast path for un-promoted vectors, or an index cache).
+- **Class:** Improve. `conj` is closed and winning. The read half is open, but for the reason
+  F-165 gives, not the one above.
 - **Repro:** `tools/vs-c.sh` section 11; `taskset -c 0 perf stat -e
   '{cpu_core/instructions/,cpu_core/cycles/,cpu_core/topdown-retiring/,cpu_core/slots/}'`
   over `elf/out/vecsum.elf` and `elf/out/grow2000000.elf`.
