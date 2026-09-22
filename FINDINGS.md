@@ -13978,3 +13978,40 @@ wolf is worse than none.
 ever examine programs that EXIST. Both compiler bugs found today (F-168, F-170) were green
 across all three, because nothing in the corpus had either shape. `tools/probe.sh` is the only
 answer to that, and it only works when someone writes the program that would expose the bug.
+
+### F-174: ~28% of the compiler's own runtime is string EQUALITY, because it has no symbols
+
+**Improve, measured, not yet done.** Prompted by the builder asking "we don't have symbols
+yet?" -- and the answer is no, and it is the single largest cost in the compiler.
+
+`perf record` on a self-compile, 3K samples over 1.12 billion cycles, addresses resolved by
+disassembling the emitted binary (it carries no symbol table):
+
+| routine | share | why it runs |
+|---|---|---|
+| `rt_str_eq` | **~27.7%** | every `kind` test and every head-name predicate |
+| `rt_str_cat` | ~8.9% | building emitted hex |
+| arena node lookup | ~4.9% | `rd/kind`/`rd/text`/`rd/kids` are `(nth (St/arena st) n)` |
+| `rt_str_subs` | ~2.5% | |
+
+**18.90% of all cycles is ONE instruction** -- the `jne` after `repz cmpsb` at `0x317fc`,
+inside `rt_str_eq`.
+
+**The cause is the dispatch, not the function table.** `:rd::Node` stores `kind` and `text` as
+Strings, so nothing is interned. `:c::is?` compares a head against TWO spellings
+(`"wat.core/if"` and `":wat::core::if"`), there are 105 such predicates and 89 `kind`
+comparisons, and `:c::form` walks a cond chain of them for every list node -- on every one of
+the walks that visit it. `rt_str_eq` does short-circuit on length (one compare against the
+header), so each failure is cheap; it is the COUNT that costs.
+
+**This supersedes F-172's framing.** The 352-entry `Prog/fns` scan is real and worth halving,
+but it is not where the time goes. The time goes to deciding what form a node is, over and
+over, by comparing strings.
+
+**The fix is interning at READ time**: give `:rd::Node` an integer `kindi`, and an integer code
+for known head spellings, computed once when the node is read. Then `(= (:c::kind a pg) "list")`
+becomes an integer compare, and so does every head predicate. One pass of string comparisons
+per node replaces dozens per dispatch per walk.
+
+Do `kind` first -- 89 sites, a small closed set, self-contained -- and measure before touching
+the 105 head predicates.
