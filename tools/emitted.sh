@@ -19,7 +19,10 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 M=elf/out/.emitted-manifest
-progs () { ls elf/out/*.elf 2>/dev/null | grep -v -e 'compiler\.elf' -e 'stage[0-9]*\.elf'; }
+# seed.elf is `bootstrap.sh --fast`'s scratch copy of the compiler, not emitted code -- it was
+# missing from this list and reported as a moved program after a --fast excursion, which is a
+# false positive from a tool whose whole job is to be believed.
+progs () { ls elf/out/*.elf 2>/dev/null | grep -v -e 'compiler\.elf' -e 'stage[0-9]*\.elf' -e 'seed\.elf'; }
 case "${1:-check}" in
   save)  sha256sum $(progs) > $M; echo "emitted: saved $(wc -l < $M) programs"; ;;
   check)

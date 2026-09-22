@@ -12853,6 +12853,80 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### C-194 / F-166: `tail-direct?` was firing where it had nothing to protect — and two STOPs with substance
+
+**Fix (C-194) plus two refusals (F-166), struck by a spawned Opus executor against
+BRIEF-readloop, weighed here against my own re-run.**
+
+**C-194.** `:c::tail-direct?` required that no LATER argument mention parameter j, for every
+j. When argument j is **literally the symbol of parameter j**, the write is a self-move and
+the later mention reads the value it would have read anyway. The guard exists to stop
+`(f b a)` writing `b` over `a`; it was firing where nothing was at stake. One clause, falling
+back to `none-mention?` otherwise.
+
+**And my brief's diagnosis was half right.** `user/sum`'s call fails the guard TWICE:
+
+| j | param | argument j | later args | |
+|---|---|---|---|---|
+| 0 | `v` | `v` | `(+ acc (nth v i))` mentions `v` | relaxed by C-194 |
+| 1 | `i` | `(+ i 1)` | mentions `i` | **fails, and must** |
+
+Argument 1 is not the bare symbol, so writing `i` really does clobber what argument 2 reads.
+**So C-194 cannot improve `vecsum`**, and does not. The real unlock is assignment ORDER --
+right-to-left makes `user/sum` fully direct, acc then i then v -- which is a second emitter
+direction, not a guard tweak.
+
+**A claim I made in the brief was wrong, and I had written the refutation myself.**
+I said C-177 would make argument 0 free. `:c::selv?` opens with
+`(if (:c::ptr-ty? (:c::type-of a env pg)) false ...)` -- a POINTER never reaches the
+"emits nothing" path, so `v` costs share + mov + mov. C-177's own entry says exactly this
+("selv? refuses pointer types, so the `:c::share` the general path applies can never be one
+this path skips") and I forgot it three hours later.
+
+**Cost, measured before and after in ONE sitting against a byte-identical baseline:**
+1,781,323,252 -> 1,782,406,712 instructions compiling the corpus, **+0.061%**, stable to
+seven figures. Two emitted programs got tighter (`freed.elf`, `reader.elf`); `vecsum`,
+`grow2000000`, `strbuild`, `rec` and `triple` are byte-identical.
+
+**Kept against the executor's recommendation to revert**, on this reasoning: a guard returning
+false where the write is a self-move is an IMPRECISION IN AN ANALYSIS, not an optimisation
+that failed to pay. Everything downstream that needs `tail-direct` to fire now gets it, and
+0.061% is a millisecond on a 1.7-second compile.
+
+### F-166 — the two refusals
+
+**STOP-1 fired, and named the holder I said did not exist.** I argued that a tail call passing
+a parameter to its own slot creates no new holder, so its `:c::share` is waste. **Argument 0
+does not die at end of expression -- it becomes the next iteration's parameter.** On
+`(user/step v (conj v i) (+ i 1))`: `:c::conj` shares its VALUE (`ks[2]`) and never its
+CONTAINER (`ks[1]`); `:c::linear?` treats the read at argument 0 as harmless because it
+PRECEDES the write at argument 1; so `v` is judged linear and `vec_conj_own` fires, and the
+runtime count is the only remaining gate. The `share` on argument 0 is what holds that count
+above 1. **F-142's direction exactly.** The unbounded refcount is not a latent bug, it is the
+compensation -- it costs an optimisation, never a correctness. The safe predicate is not
+"argument j is parameter j" but **"no other argument RETAINS the container"**.
+
+**STOP-2 fired as "tell me".** C-193's `:c::use-walk` is a ten-function family whose lattice
+value IS a record field index, and every leaf is record-specific. `elf/compile.wat`'s own
+subset has no closures (C-131 removed the last one), so it cannot be parameterised by a leaf
+predicate. Reuse means duplicating nine mutually-recursive functions or generalising `:c::Use`,
+which changes record scalarisation and needs its own justification.
+
+**The finding worth acting on: strikes 2 and 3 want THE SAME MECHANISM** -- a use
+classification of a VECTOR parameter separating *reading* (`nth`, `length`) from *retaining*
+(`conj`, `assoc`, a bare mention). That is the room worth drawing, and it is bigger than the
+ordering change.
+
+**And a third oracle defect.** `elf/out/seed.elf` is `bootstrap.sh --fast`'s scratch copy of
+the compiler and was NOT excluded from `tools/emitted.sh`, so a `--fast` excursion reported it
+as a moved program. A false positive from the instrument whose whole job is to be believed --
+worse than a missing check. Excluded now, alongside `compiler.elf` and `stage*.elf`.
+
+- **Oracle:** my own re-run -- fixpoint 229,548 byte-identical, elf-run 30/30 with the same
+  refusals and traps. The executor additionally wrote a corpus scanner that PREDICTED the
+  moved programs before the build confirmed them: two independent oracles agreeing on the
+  blast radius, which is a stronger claim than a green differential.
+
 ### F-165: the read cost is the loop, not the trie — the vectors never promote
 
 **Correct to F-164, from a refused strike.** `nth` was briefed as a tree-walk problem: 37

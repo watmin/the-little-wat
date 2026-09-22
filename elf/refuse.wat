@@ -2908,13 +2908,23 @@
                      (:c::none-mention? ks (:wat::core::+ i 1) name pg))))
 
 ;; parameter j's name is `pv[3j]`, its argument `ks[j+1]`, and the arguments after it `ks[j+2..]`
+;;
+;; **passing a parameter through to its OWN slot clobbers nothing**, so the later arguments that
+;; mention it read exactly the value they would have read anyway. The guard is there to stop
+;; `(f b a)` writing `b` over `a` before `a` is read; when argument j IS parameter j -- the same
+;; symbol -- the write is `mov %rbx,%rax ; mov %rax,%rbx` and the check has nothing to protect.
+;; `elf/bench/vecsum.wat` passes `v` through and reads it again in a later argument.
 (:wat::core::defn :c::tail-direct? [pv <- :c::Kids ks <- :c::Kids j <- :wat::core::i64
                                     n <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::if (:wat::core::>= j n) true
-    (:wat::core::and
-      (:c::none-mention? ks (:wat::core::+ j 2)
-        (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))) pg)
-      (:c::tail-direct? pv ks (:wat::core::+ j 1) n pg))))
+    (:wat::core::let [name (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j)))
+                      a (:wat::core::nth ks (:wat::core::+ j 1))]
+      (:wat::core::and
+        (:wat::core::or
+          (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+                           (:wat::core::= (:c::text pg a) name))
+          (:c::none-mention? ks (:wat::core::+ j 2) name pg))
+        (:c::tail-direct? pv ks (:wat::core::+ j 1) n pg)))))
 
 ;; ---------------------------------------------------------------- the branchless select
 ;;
