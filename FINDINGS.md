@@ -14313,3 +14313,80 @@ And what THIS compiler resolves (`:c::ty-node`'s leaf arms): **four** -- `String
 The five variants that compile today -- `:Nil :I64 :Bool :Str :Vec` -- are exactly what the
 compiler can hold. `:F64`, `:Kw`, `:Map`, `:Fn` are named in the file as backlog rather than left
 as a silent omission.
+
+### C-205: the enum representation ladder -- derived, never declared
+
+**Improve.** C-203 gave every payload-carrying enum one representation: a heap object. That is
+right for the REPL's recursive `:Val` and wrong for `Option`, which is not a data structure but
+a RETURN PROTOCOL. The tier is now derived from the enum's shape, per INSTANTIATION:
+
+| shape | tier | representation |
+|---|---|---|
+| every variant unit | `enum:` | the tag in rax -- free |
+| ONE pointer payload + units | `penum:` | **the pointer itself** -- zero allocation |
+| anything else | `henum:` | `vec_new(1+n)`, tag in slot 0 |
+
+**No blessed types.** `Option` and `Result` are not special-cased; they are simply shapes that
+land on good tiers. `(Opt :- [str])` is tier 1 and `(Opt :- [i64])` is not, because an i64 has
+no spare bit pattern to spend on a tag -- which is why the tier rides in the type string, where
+every site reads the same answer.
+
+**The design flaw that made it better.** `(:Opt.None {})` carries no field, so nothing at that
+site can tell which tier the enum is at. The fix was to make the UNIT representation uniform
+across every tier -- a unit variant is always its tag as a small integer:
+
+```
+rax < 4096  ->  unit variant; rax IS the tag
+rax >= 4096 ->  payload variant (tier 1: the pointer; tier 3: object, tag at [rax+8])
+```
+
+Sound here for a reason specific to this compiler: the heap is one mmap at a high address and
+literals live at `0x400000+`, so no legitimate pointer is ever below a page. It also means
+**`None` never allocates in any tier**, which C-203 got wrong -- it built `vec_new(1)` for a
+unit variant in a payload enum.
+
+**A live bug it exposed, latent since C-203.** `henum:` is `:c::ptr-ty?`, so `:c::share`
+emitted an unguarded `cmp [rax-8],0`. With units as small integers that is a read at a NEGATIVE
+address. The threshold guard in front of it is a correctness fix, not a tuning knob, and
+nothing had noticed because no program shared a `:Val` through a variable.
+
+**Measured, 20M iterations, same payload and same work -- only the representation differs:**
+
+| | instructions |
+|---|---|
+| heap tier | 1,386,667,3xx |
+| tier 1 | 1,066,666,9xx (**-23.1%**) |
+| tier 1 + first-arm load elision | **1,046,667,0xx (-24.5%)** |
+| `gcc -O2` | 453,519,78x |
+| `clang -O2` | 426,853,12x |
+
+**We are still 2.31x behind gcc, and the remainder is nameable rather than mysterious** -- about
+30 instructions per iteration, from the disassembly: STACK ARGUMENT PASSING (we push and
+`add $16,%rsp`; C passes in rdi/rsi -- our ABI, and the biggest single item), TRAP CHECKS (`jo`
+after every arithmetic op -- wat's semantics, paid on purpose), and the REFCOUNT GUARD on the
+pointer payload (ours; C has no ownership model). Only the first is a target.
+
+**Two corrections to earlier claims in this session, both mine:**
+1. **The heap is 1.9 GB** (`:c::heap-bytes`), not the 1 MiB quoted from an `elf-run` note about
+   one specific test. A boxed `Option` in a loop is a THROUGHPUT cost, not the correctness wall
+   claimed -- it survives to ~119M allocations. Checked only after asserting it.
+2. `repz cmpsb` taught the same lesson C-202 recorded: the metric must match the mechanism.
+
+### F-178: the tier-1 ALIAS binding is refused -- correct in some shapes, silently wrong in others
+
+**Fix, not taken.** Tier 1's payload IS the value, so binding the matched name to the SUBJECT's
+own frame slot -- no load, no store, no slot consumed -- looks free. It is wrong.
+
+| shape | result |
+|---|---|
+| `[:Opt.Some {:value v} v]` | agrees |
+| `[:Opt.Some {:value v} (concat v "!")]` | agrees |
+| `[:Opt.Some {:value v} (concat "<" (concat v ">"))]` | **DIVERGES** -- `v` reads back as `"<"` |
+
+The failing shape reads the binding at a different STACK DEPTH, with an operand already pushed.
+The mechanism is not diagnosed, and **correct-in-some-shapes is the fail-open class** that
+produced F-168 and F-170 -- so it is off, with the exact failing program recorded at the site so
+the next attempt starts from a diagnosis rather than a guess.
+
+The first-arm load elision, measured separately, IS kept: the subject was just computed into rax
+and stored, so the first arm needs no reload. Worth 1.9%.
