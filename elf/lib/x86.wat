@@ -91,8 +91,6 @@
   (:c::movabs (:c::r8) n))
 (:wat::core::defn :c::mov-r9 [n <- :wat::core::i64] -> :wat::core::String
   (:c::movabs (:c::r9) n))
-(:wat::core::defn :c::mov-rcx [n <- :wat::core::i64] -> :wat::core::String
-  (:c::movabs (:c::rcx) n))
 ;; mov rax, [rax+d] -- a field read and an `nth` at a constant index are the same instruction
 (:wat::core::defn :c::load-at [d <- :wat::core::i64] -> :wat::core::String
   (:wat::string::concat "488b80" (:asm::le d 4)))
@@ -485,9 +483,6 @@
   (:wat::core::let [short? (:c::disp8? n)]
     (:wat::string::concat (:c::dm-at (:wat::core::if short? "83" "81") 7 base disp)
                           (:asm::le n (:wat::core::if short? 1 4)))))
-(:wat::core::defn :c::add-rm [base <- :wat::core::i64 disp <- :wat::core::i64
-                              reg <- :wat::core::i64] -> :wat::core::String
-  (:c::rm-at "03" reg base disp))
 ;; the other direction -- `add %rdx,(%r14)` bumps a counter that lives in memory without loading
 ;; it first. `03` reads memory into a register; `01` adds a register into memory, and `3b`/`39`
 ;; are the same pair for `cmp`. For an equality test either will do; they are not interchangeable

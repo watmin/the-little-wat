@@ -543,8 +543,6 @@
 ;; the three verbs the reader replaces. `pg` carries the arena, so a node is an index and these
 ;; are exactly `ast-kind`, `ast->source` and `ast->children` -- except that `:c::text` answers
 ;; the bytes the file actually had, where `ast->source` re-prints (C-130).
-(:wat::core::defn :c::kind [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::String
-  (rd/kind (:c::Prog/src pg) a))
 ;; the node's kind as a TAG rather than a String (F-174, C-201). Every comparison this replaces
 ;; was a call into `str_eq`; this one is a machine word compare.
 (:wat::core::defn :c::kindv [a <- :wat::core::i64 pg <- :c::Prog] -> :rd::Kind
@@ -679,9 +677,6 @@
 (:wat::core::defn :c::bnd-put [bs <- :c::Bnds name <- :wat::core::String
                                lo <- :wat::core::i64 hi <- :wat::core::i64] -> :c::Bnds
   (:wat::core::conj bs (:c::Bnd :name name :lo lo :hi hi)))
-(:wat::core::defn :c::bnd-drop [bs <- :c::Bnds name <- :wat::core::String] -> :c::Bnds
-  (:c::bnd-put bs name (:c::i64-min) (:c::i64-max)))
-
 (:wat::core::typealias :c::Env (:wat::core::Vector :- [:c::Bind]))
 
 ;; innermost first, so a `let` shadows a parameter of the same name
@@ -4524,9 +4519,6 @@
 
 (:wat::core::defn :c::load? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat/load-file!" ":wat::load-file!"))
-
-(:wat::core::defn :c::collect [tops <- :c::Kids i <- :wat::core::i64 acc <- :c::Prog] -> :c::Prog
-  (:c::collect-in tops i acc ""))
 
 (:wat::core::defn :c::collect-in [tops <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
                                   dir <- :wat::core::String] -> :c::Prog

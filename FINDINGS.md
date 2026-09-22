@@ -14148,3 +14148,92 @@ becomes the thing you trust.
 because the reader PRODUCES a closed set, while head names are source text the reader cannot
 classify without knowing the compiler's form vocabulary. Either a head-code field the reader
 fills from a table, or a per-node cache. Measure a cheap version first.
+
+### C-202: `str_eq` checks the last eight bytes first -- and four wrong hypotheses on the way
+
+**Improve.** After C-201 left ~24.5% of a self-compile in `rt_str_eq`, four hypotheses were
+tested and three died:
+
+| hypothesis | result |
+|---|---|
+| `kind` comparisons are the cost | C-201: **-0.24%** |
+| the 12-byte common prefix is the cost, fix it in `:c::is?` | **+16.4% WORSE** |
+| branch misprediction | 0.62% miss rate, under 4% of cycles |
+| no measurable win from the runtime fix | **measured the wrong binary** |
+
+**Failure 2 is the lesson the fix is built on.** Checking the last byte inside `:c::is?`, written
+in wat, cost +16.4% because `:wat::string::byte-length` and `byte-at` are CALLS -- five where
+there had been one. The work is not the bytes; it is the per-call price of asking. So the check
+went INLINE, into `rt_str_eq` itself.
+
+**Failure 4 is a two-round bootstrap trap, hit for the third time this session.** The runtime
+bytes embedded in a compiled program come from the compiler that COMPILED it, so `s1.elf`
+carries the SEED's old runtime. The new `str_eq` only appears in what `s1` compiles. Every
+measurement taken on `s1` was of code that did not contain the change. Stage 2 is the first
+binary that carries it.
+
+**And the metric itself was wrong all session.** Retired INSTRUCTIONS is a fine proxy for work
+until the thing being changed is microcode. `repz cmpsb` is one instruction and many uops:
+
+| | instructions | retired uops (3 runs) |
+|---|---|---|
+| before | 1,912,182,8xx | 2,340.8 / 2,361.5 / 2,352.6 M |
+| after | 1,916,154,3xx (**+0.21%**) | 2,313.6 / 2,269.8 / 2,280.7 M |
+| delta | +0.21% | **-2.7%**, ranges DISJOINT |
+
+F-154 puts uops at tier 1, stable to 1%; "instructions" was a convenient stand-in that was
+structurally blind to exactly the instruction under test.
+
+**The fix**: after the length check, one base-plus-index operand reads each string's last eight
+bytes (`base + len`, since data starts at `+8`) and compares them. `:wat::core::if` against
+`:wat::core::or` -- both 14 bytes, sharing a 12-byte prefix, which is why the length
+short-circuit never fired -- differs inside that window. Shorter than eight bytes skips the
+check. It is in the RUNTIME, so every emitted program gets it, not just the compiler.
+
+**Also removed: six dead functions** -- `:c::kind` (superseded by `:c::kindv`), `:c::collect`,
+`:c::bnd-drop`, `:c::o-rdonly`, `:c::add-rm`, `:c::mov-rcx`. A scan found 8 of 676 functions
+with no call site, a **1.2% cruft rate**. `:asm::le-u` is the seventh and stays: it is dead AND
+documented as deliberate (F-... , "kept deliberately"). The two dead ENCODERS are the ones most
+worth removing, for a reason beyond tidiness: **an unused encoder has never been validated by
+any oracle**, and C-190 and C-191 were both encoders that were legal-looking and wrong.
+
+**Oracles**: bootstrap fixpoint 238,020 B with 79 binaries byte-identical; `emitted.sh` 37 of 77
+moved -- every binary that compares strings, which is the change's whole point; `elf-run` 33
+agree, which is what proves those 37 moved CORRECTLY.
+
+### F-176: `partire` on compile.wat returns LEAVE -- the seams are already cut
+
+**Clean.** The builder flagged `elf/compile.wat` (5,234 lines) as possibly several modules
+wearing one name. The datamancy ward `partire` was CAST -- spawned executor, ward embedded --
+and returned **LEAVE**. Its load-bearing claims were then re-measured here rather than credited:
+
+| claim | independent check |
+|---|---|
+| the libs know nothing about wat | **0** occurrences of `:c::Prog`/`:c::Out`/`:c::Env`/`:rd::` in `asm.wat`, `x86.wat`, `runtime.wat` |
+| real seams co-change rarely | `x86.wat` 13 commits / 3 shared = **23%**; `runtime.wat` 14 / 5 = **36%** |
+| candidate seams co-change always | type pass **11 of 11 = 100%** |
+
+**The evidence is the co-change gap, measured from git rather than read off section banners.**
+Parnas's criterion is literally "changes together": the four cuts already made co-change with
+`compile.wat` at 23-36%, while every candidate cut INSIDE it co-changes at 55-100%. The knife
+is already where the gap falls, and the criterion the file states for itself -- **"knows nothing
+about wat"** -- is checkable by grep and holds.
+
+**It corrected the orchestrator's prior, which is why casting beat deciding.** The prediction
+recorded before the cast was that the binding constraint would be "no unit-test framework".
+That premise is FALSE: `elf/src/asmbits.wat` loads only `lib/prim.wat` + `lib/asm.wat` and
+asserts against them; `elf/conform.wat` does the same for the reader. The project has a working
+independent-test mechanism. The real reason no cut survives is narrower: **no sub-region of
+`compile.wat` has an entry point reachable without a populated `:c::Prog`**. The analyses do not
+return values anyone consumes -- they write into `:c::Prog`'s per-function fields that
+`:c::compile-fn` reads back on the same node in the same pass.
+
+**Refused cuts, named so they are not re-proposed**: front end / back end; optimiser / code
+generator; `:c::Buf` as a leaf (one commit in the project's history -- not a decision "likely to
+change"); the ~50 spelling predicates (15 of 17 commits also change `:c::form`, because adding a
+form means adding a predicate AND its clause); and the corpus manifest (28 of 40 commits also
+touch code, because a test program lands in the same commit as the feature it tests).
+
+**What this says about the file**: it is not long-and-tangled, it is **one decision at length** --
+how a wat form becomes x86-64. That is a different answer from "it is fine", and it is the
+answer that stops the question being re-asked every time the line count grows.

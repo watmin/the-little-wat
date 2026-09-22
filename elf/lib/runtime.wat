@@ -1128,12 +1128,42 @@
 ;; reader is the first thing that must.
 ;; `str_eq(rax, rcx) -> 0 or 1`. Different lengths are different strings, and that test is one
 ;; instruction against the header rather than a comparison that has to run.
+;; **the LAST eight bytes, before the byte walk.** `repz cmpsb` retires roughly a uop per byte,
+;; and the heads this compiler spends its life comparing are `:wat::core::*` -- which collide in
+;; LENGTH as well as prefix (`:wat::core::if`/`or`/`do` are all 14, `let`/`and`/`not` all 15).
+;; So the length short-circuit above never fires and the walk compares TWELVE IDENTICAL BYTES
+;; before reaching the one that differs, on every failing arm of every dispatch chain. F-174
+;; measured the family at ~24.5% of a self-compile.
+;;
+;; A string's data starts at `+8`, so its last eight bytes start at `base + len` -- one
+;; base-plus-index operand, no arithmetic. `:wat::core::if` against `:wat::core::or` differs
+;; inside that window and is rejected in four instructions instead of the walk.
+;;
+;; **Inline, not a call.** The same check written in wat as `:c::is?` calling `byte-at` cost
+;; +16.4%: `byte-length` and `byte-at` are calls, and the call overhead dwarfed the saving.
+;; That is the whole lesson -- the work is not the bytes, it is the per-call price of asking.
+;;
+;; Shorter than eight bytes skips the check, because `base + len` would read before the data.
+;; r9 is free: our callees treat r8-r11 as dead, and this routine already clobbers r8.
 (:wat::core::defn :c::rt-str-eq [] -> :wat::core::String
-  (:wat::string::concat
-    (:c::mov-rm (:c::rax) 0 (:c::r8))
-    (:c::cmp-rm (:c::rcx) 0 (:c::r8))
-    (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) (:c::rt-str-body))
-    (:c::rt-str-tail)))
+  (:wat::core::let
+    [body (:c::rt-str-body)
+     tail8 (:wat::string::concat
+             (:c::rm "8b" (:c::r9) (:c::rax) (:c::r8) 1 0)     ;; mov r9, [rax+r8]
+             (:c::rm "3b" (:c::r9) (:c::rcx) (:c::r8) 1 0)     ;; cmp r9, [rcx+r8]
+             (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body))
+     pre (:wat::string::concat
+           (:c::cmp-ri (:c::r8) 8)
+           (:c::br-over (:c::jcc-rel8 (:c::cc-below)) tail8)
+           tail8)]
+    (:wat::string::concat
+      (:c::mov-rm (:c::rax) 0 (:c::r8))
+      (:c::cmp-rm (:c::rcx) 0 (:c::r8))
+      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero)))
+                   (:wat::string::concat pre body))
+      pre
+      body
+      (:c::rt-str-fail))))
 
 ;; **a syscall needs a C string and a wat String is not one** -- it is a length and then bytes,
 ;; with nothing at the end. So the path is copied to the heap top and a NUL is put after it.
@@ -1654,7 +1684,6 @@
 (:wat::core::defn :c::o-wronly [] -> :wat::core::i64 1)
 (:wat::core::defn :c::o-creat [] -> :wat::core::i64 64)
 (:wat::core::defn :c::o-trunc [] -> :wat::core::i64 512)
-(:wat::core::defn :c::o-rdonly [] -> :wat::core::i64 0)
 (:wat::core::defn :c::file-mode [] -> :wat::core::i64 493)    ;; 0o755
 ;; how much `read` is asked for at a time
 (:wat::core::defn :c::read-chunk [] -> :wat::core::i64 65536)
