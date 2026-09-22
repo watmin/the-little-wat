@@ -769,7 +769,15 @@
 ;; in the source and a direct string match beats reconstructing it at every use.
 (:wat::core::defrecord :c::Enum
   [name <- :wat::core::String
-   variants <- (:wat::core::Vector :- [:wat::core::String])])
+   variants <- (:wat::core::Vector :- [:wat::core::String])
+   ;; each variant's field VECTOR node, parallel to `variants` -- the node, not the names, the
+   ;; same way `:c::Rec/fv` holds a node, so field names are read on demand rather than copied
+   vfv <- (:wat::core::Vector :- [:wat::core::i64])
+   ;; **the representation is a property of the ENUM, not the variant.** All-unit enums stay an
+   ;; i64 tag (C-200) -- that is what keeps `:rd::Kind` free. The moment ANY variant carries a
+   ;; field, every variant of that enum becomes a heap object with the tag in slot 0, because a
+   ;; value of the enum type has to have ONE representation whichever variant it holds.
+   heap <- :wat::core::bool])
 (:wat::core::typealias :c::Enums (:wat::core::Vector :- [:c::Enum]))
 
 (:wat::core::defn :c::enum-index [es <- :c::Enums name <- :wat::core::String
@@ -797,9 +805,9 @@
       (:c::Enum/name (:wat::core::nth es i))
       (:c::variant-enum es q (:wat::core::+ i 1)))))
 
-;; `(defenum :Name :purity :V1 [] :V2 [] ...)` -- variants at 3, 5, 7..., each followed by its
-;; field vector. **A payload variant is refused here rather than silently compiled as a unit**:
-;; it would need a record layout and `match` to take apart, and neither exists yet.
+;; `(defenum :Name :purity :V1 [] :V2 [...] ...)` -- variants at 3, 5, 7..., each followed by
+;; its field vector. The qualified spelling (`:user::Val.Int`) is what appears in source, so it
+;; is what gets stored.
 (:wat::core::defn :c::variant-names [ks <- :c::Kids i <- :wat::core::i64 ename <- :wat::core::String
                                      acc <- (:wat::core::Vector :- [:wat::core::String])
                                      pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
@@ -809,16 +817,52 @@
                            -1 (:wat::core::nth ks (:wat::core::+ i 1)))]
       (:wat::core::if (:wat::core::and (:wat::core::>= fv 0)
                         (:wat::core::> (:wat::core::length (:c::kidsof pg fv)) 0))
-        (:wat::kernel::assertion-failed!
-          :message (:wat::string::concat
-                     "compile: a defenum variant with fields needs `match`, which this compiler does not have yet: "
-                     vt))
+        (:c::variant-names ks (:wat::core::+ i 2) ename
+          (:wat::core::conj acc
+            (:wat::string::concat ename
+              (:wat::string::concat "."
+                (:wat::string::subs vt 1 (:wat::string::length vt)))))
+          pg)
         (:c::variant-names ks (:wat::core::+ i 2) ename
           (:wat::core::conj acc
             (:wat::string::concat ename
               (:wat::string::concat "."
                 (:wat::string::subs vt 1 (:wat::string::length vt)))))
           pg)))))
+
+;; the field VECTOR node for each variant, parallel to `:c::Enum/variants`
+(:wat::core::defn :c::variant-fvs [ks <- :c::Kids i <- :wat::core::i64
+                                   acc <- (:wat::core::Vector :- [:wat::core::i64])
+                                   pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::variant-fvs ks (:wat::core::+ i 2)
+      (:wat::core::conj acc
+        (:wat::core::if (:wat::core::>= (:wat::core::+ i 1) (:wat::core::length ks)) -1
+          (:wat::core::nth ks (:wat::core::+ i 1))))
+      pg)))
+
+;; does ANY variant carry a field? That one question picks the representation for all of them.
+(:wat::core::defn :c::any-fields? [ks <- :c::Kids i <- :wat::core::i64
+                                   pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= (:wat::core::+ i 1) (:wat::core::length ks)) false
+    (:wat::core::or
+      (:wat::core::> (:wat::core::length (:c::kidsof pg (:wat::core::nth ks (:wat::core::+ i 1)))) 0)
+      (:c::any-fields? ks (:wat::core::+ i 2) pg))))
+
+;; how many fields the variant at tag `t` of enum `e` declares
+(:wat::core::defn :c::variant-arity [es <- :c::Enums e <- :wat::core::i64 t <- :wat::core::i64
+                                     pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::let [fv (:wat::core::nth (:c::Enum/vfv (:wat::core::nth es e)) t)]
+    (:wat::core::if (:wat::core::< fv 0) 0
+      (:wat::core::/ (:wat::core::length (:c::kidsof pg fv)) 3))))
+
+;; which enum a qualified variant spelling belongs to, as an index; -1 for none
+(:wat::core::defn :c::variant-owner [es <- :c::Enums q <- :wat::core::String
+                                     i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length es)) -1
+    (:wat::core::if (:wat::core::>= (:c::index-of-str
+                                      (:c::Enum/variants (:wat::core::nth es i)) q 0) 0) i
+      (:c::variant-owner es q (:wat::core::+ i 1)))))
 
 (:wat::core::defn :c::index-of-str [v <- (:wat::core::Vector :- [:wat::core::String])
                                     q <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
@@ -971,7 +1015,10 @@
           ;; a unit-variant enum is a TAG, so its values are machine words -- which is why
           ;; `:c::ptr-ty?` must stay false for `enum:` and no ownership machinery touches it
           ((:wat::core::>= (:c::enum-index (:c::Prog/enums pg) src 0) 0)
-            (:wat::string::concat "enum:" src))
+            (:wat::string::concat
+              (:wat::core::if (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg)
+                                (:c::enum-index (:c::Prog/enums pg) src 0)))
+                "henum:" "enum:") src))
           ((:wat::core::>= ai 0)
             (:c::ty-node (:c::Alias/node (:wat::core::nth (:c::Prog/aliases pg) ai)) pg
               (:wat::core::- depth 1)))
@@ -1143,7 +1190,11 @@
           (:wat::string::concat "rec:" head))
         ((:wat::core::>= (:c::acc-index pg head) 0) (:c::acc-ty pg head))
         ((:wat::core::>= (:c::variant-tag (:c::Prog/enums pg) head 0) 0)
-          (:wat::string::concat "enum:" (:c::variant-enum (:c::Prog/enums pg) head 0)))
+          (:wat::string::concat
+            (:wat::core::if (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg)
+                              (:c::variant-owner (:c::Prog/enums pg) head 0)))
+              "henum:" "enum:")
+            (:c::variant-enum (:c::Prog/enums pg) head 0)))
         ;; calling a name that holds a function: the fn type carries what it answers. In the
         ;; `:else` rather than an arm of its own, so a form that matched anything above never
         ;; pays for the lookup.
@@ -1390,6 +1441,7 @@
           ;; cond, and, or and not are `if` wearing different hats: no new instruction between
           ;; them beyond a `sete`, and 46 of the 297 occurrences the census counts (elf/census.wat)
           ((:c::cond? head) (:c::cond-form ks 1 a o env pg rt tb slot tc))
+          ((:c::match? head) (:c::match-form ks a o env pg rt tb slot tc))
           ((:c::and? head)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "and arity" a pg)
               (:c::and-form ks 1 o env pg rt tb slot tc)))
@@ -1678,9 +1730,16 @@
           ;; one scan of the function table, not two: the guard used to ask `:c::fn-addr`
           ;; whether the name existed and then `:c::call-user` asked again for the address.
           ;; Asking `:c::fn-of` once answers both and leaves room for the arity check.
-          ;; `(:Name.Variant {})` -- a unit variant is a constant, and the constant is its tag
+          ;; `(:Name.Variant {...})` -- in an all-unit enum the value IS the tag, a constant;
+          ;; in a payload enum every variant is a heap object with the tag in slot 0
           ((:wat::core::>= (:c::variant-tag (:c::Prog/enums pg) head 0) 0)
-            (:c::emit o (:c::mov-rax-lit (:c::variant-tag (:c::Prog/enums pg) head 0))))
+            (:wat::core::let [ei (:c::variant-owner (:c::Prog/enums pg) head 0)
+                              tg (:c::variant-tag (:c::Prog/enums pg) head 0)]
+              (:wat::core::if (:wat::core::not (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg) ei)))
+                (:c::emit o (:c::mov-rax-lit tg))
+                (:c::variant-form ks a tg
+                  (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg)
+                  o env pg rt tb slot))))
           (:else
             (:wat::core::let [fi (:c::fn-of pg head 0)]
               (:wat::core::if (:wat::core::< fi 0)
@@ -2673,9 +2732,14 @@
           (:wat::core::or (:c::concat? head) (:c::subs? head) (:c::tostr? head)))))))
 
 ;; a value that lives on the heap, and therefore one whose sharing has to be counted
+;; **`henum:` is here and `enum:` is not, and that is the whole representation split.** An
+;; all-unit enum is an i64 tag and owns nothing; a payload enum is a heap object with the tag in
+;; slot 0, so it is refcounted and transferred exactly like a record.
 (:wat::core::defn :c::ptr-ty? [t <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or (:wat::core::= t "str")
-    (:wat::core::or (:wat::string::starts-with? t "vec:") (:wat::string::starts-with? t "rec:"))))
+    (:wat::core::or (:wat::string::starts-with? t "vec:")
+      (:wat::core::or (:wat::string::starts-with? t "rec:")
+                      (:wat::string::starts-with? t "henum:")))))
 
 ;; **the increment, and the only one there is.** A pointer read out of a variable and then stored
 ;; somewhere durable is now reachable twice, so the count goes up. It never comes down: this is
@@ -2841,6 +2905,186 @@
         (:c::rec-pop ks (:wat::core::- i 2) r
           (:c::popn o (:wat::string::concat (:c::pop-rcx)
             (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 fi)))) 8) a pg)))))
+
+;; ---------------------------------------------------------------- a payload variant
+;;
+;; **A payload variant is a record with the tag in slot 0.** `(:Val.Int {:n 42})` allocates
+;; `1 + nfields` slots, writes the tag into slot 0, and the fields into 1..n in the order the
+;; DECLARATION gives them -- so `{:n 42}` and a constructor that writes its keys in another
+;; order land in the same layout, exactly as `:c::rec-pop` already guarantees for records.
+;;
+;; The fields arrive in a MAP node rather than inline, which is the only shape difference from
+;; a record constructor: `(:Enum.Variant {:f v})` against `(Rec :f v)`.
+;; ---------------------------------------------------------------- match
+;;
+;; `(match subj [:Enum.V {:f binding} body] ...)`. An arm is a VECTOR whose kids are the
+;; qualified variant, a field map, and the body forms -- `wat-rs/wat/fmt.wat` and `deporder.wat`
+;; are the spelling this follows, not the USER-GUIDE's shorter `((Some v) body)`, which is not
+;; what the shipped sources use.
+;;
+;; **Exhaustiveness is checked here and refused, not trapped.** wat checks it at startup, and a
+;; `match` that silently falls off the end would answer with whatever was in rax -- the
+;; fail-open shape F-168 was. Covering every variant makes the fall-through unreachable, so
+;; there is nothing to trap.
+;;
+;; The subject is stored to a frame slot before the arms run, because every arm needs it twice:
+;; once for its tag and once per bound field. Its slot is `slot`, and the arms' bindings start
+;; one above it.
+(:wat::core::defn :c::match? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/match" ":wat::core::match"))
+
+;; the enum an arm's variant belongs to -- taken from the FIRST arm, and every later arm is
+;; checked against it
+(:wat::core::defn :c::arm-enum [pg <- :c::Prog arm <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [aks (:c::kidsof pg arm)]
+    (:wat::core::if (:wat::core::< (:wat::core::length aks) 2) -1
+      (:c::variant-owner (:c::Prog/enums pg) (:c::text pg (:wat::core::nth aks 0)) 0))))
+
+(:wat::core::defn :c::arm-tag [pg <- :c::Prog arm <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [aks (:c::kidsof pg arm)]
+    (:wat::core::if (:wat::core::< (:wat::core::length aks) 2) -1
+      (:c::variant-tag (:c::Prog/enums pg) (:c::text pg (:wat::core::nth aks 0)) 0))))
+
+;; does some arm carry tag `t`?
+(:wat::core::defn :c::tag-covered? [ks <- :c::Kids i <- :wat::core::i64 t <- :wat::core::i64
+                                    pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
+    (:wat::core::or (:wat::core::= (:c::arm-tag pg (:wat::core::nth ks i)) t)
+                    (:c::tag-covered? ks (:wat::core::+ i 1) t pg))))
+
+(:wat::core::defn :c::all-covered? [ks <- :c::Kids ei <- :wat::core::i64 t <- :wat::core::i64
+                                    pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= t (:wat::core::length
+                                      (:c::Enum/variants (:wat::core::nth (:c::Prog/enums pg) ei))))
+    true
+    (:wat::core::and (:c::tag-covered? ks 2 t pg)
+                     (:c::all-covered? ks ei (:wat::core::+ t 1) pg))))
+
+;; each `{:field binding}` pair becomes a frame slot holding that field, read out of the subject
+(:wat::core::defn :c::arm-binds [mks <- :c::Kids j <- :wat::core::i64
+                                 fields <- (:wat::core::Vector :- [:wat::core::String])
+                                 ftys <- (:wat::core::Vector :- [:wat::core::String])
+                                 sd <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                 pg <- :c::Prog a <- :wat::core::i64
+                                 slot <- :wat::core::i64] -> :c::BindR
+  (:wat::core::if (:wat::core::>= (:wat::core::+ j 1) (:wat::core::length mks))
+    (:c::BindR :o o :env env :slot slot)
+    (:wat::core::let
+      [kt (:c::text pg (:wat::core::nth mks j))
+       kw (:wat::string::subs kt 1 (:wat::string::length kt))
+       fi (:c::field-index fields kw 0)
+       nm (:c::text pg (:wat::core::nth mks (:wat::core::+ j 1)))
+       disp (:wat::core::* -8 (:wat::core::+ slot 1))]
+      (:wat::core::if (:wat::core::< fi 0) (:c::BindR :o (:c::fail "match field" a pg) :env env :slot slot)
+        (:c::arm-binds mks (:wat::core::+ j 2) fields ftys sd
+          (:wat::core::assoc
+            (:c::emit o (:wat::string::concat
+              (:c::load (:c::fp o sd) (:c::Out/fpr o))                         ;; the subject
+              (:wat::string::concat
+                (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1))))
+                (:c::store (:c::fp o disp) (:c::Out/fpr o)))))
+            :rax "")
+          (:wat::core::conj env
+            (:c::Bind :name nm :disp disp :reg -1
+                      :ty (:wat::core::if (:wat::core::< fi (:wat::core::length ftys))
+                            (:wat::core::nth ftys fi) "i64")))
+          pg a (:wat::core::+ slot 1))))))
+
+(:wat::core::defn :c::match-arms [ks <- :c::Kids i <- :wat::core::i64 ei <- :wat::core::i64
+                                  sd <- :wat::core::i64 slot <- :wat::core::i64 o <- :c::Out
+                                  env <- :c::Env pg <- :c::Prog rt <- :c::Layout
+                                  tb <- :wat::core::i64 a <- :wat::core::i64
+                                  tc <- :c::TC] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
+    (:wat::core::let
+      [arm (:wat::core::nth ks i)
+       aks (:c::kidsof pg arm)
+       tg (:c::arm-tag pg arm)
+       heap? (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg) ei))
+       fv (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg)
+       fks (:wat::core::if (:wat::core::< fv 0) (:wat::core::Vector :- [:wat::core::i64])
+             (:c::kidsof pg fv))
+       fields (:c::field-names fks 0 (:wat::core::Vector :- [:wat::core::String]) pg)
+       ftys (:c::field-types fks 0 pg (:wat::core::Vector :- [:wat::core::String]))
+       ;; load the subject, take its tag, compare
+       o1 (:c::emit o (:wat::string::concat
+            (:c::load (:c::fp o sd) (:c::Out/fpr o))
+            (:wat::core::if heap? (:c::load-at 8) "")))
+       o2 (:c::emit o1 (:c::cmp-ri (:c::rax) tg))
+       o3 (:c::emit o2 "0f8500000000")                          ;; jne -> next arm
+       jne-at (:wat::core::- (:c::codelen o3) 4)
+       br (:c::arm-binds (:c::kidsof pg (:wat::core::nth aks 1)) 0 fields ftys sd
+            o3 env pg a slot)
+       o4 (:c::seq aks 2 (:c::BindR/o br) (:c::BindR/env br) pg rt tb (:c::BindR/slot br) tc)
+       o5 (:c::emit o4 (:c::jmp-unpatched))                     ;; jmp -> end
+       jmp-at (:wat::core::- (:c::codelen o5) 4)
+       o6 (:c::patch o5 jne-at (:asm::le (:wat::core::- (:c::codelen o5)
+                                           (:wat::core::+ jne-at 4)) 4))
+       o7 (:c::match-arms ks (:wat::core::+ i 1) ei sd slot o6 env pg rt tb a tc)]
+      (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7)
+                                       (:wat::core::+ jmp-at 4)) 4)))))
+
+(:wat::core::defn :c::match-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
+                                  slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
+  (:wat::core::if (:wat::core::< (:wat::core::length ks) 3)
+    (:c::fail "match needs a subject and an arm" a pg)
+    (:wat::core::let [ei (:c::arm-enum pg (:wat::core::nth ks 2))]
+      (:wat::core::if (:wat::core::< ei 0) (:c::fail "match arm is not an enum variant" a pg)
+        (:wat::core::if (:wat::core::not (:c::all-covered? ks ei 0 pg))
+          (:c::fail "match does not cover every variant" a pg)
+          (:wat::core::let
+            [sd (:wat::core::* -8 (:wat::core::+ slot 1))
+             o1 (:wat::core::assoc
+                  (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
+                    (:c::store (:c::fp o sd) (:c::Out/fpr o))) :rax "")]
+            (:c::match-arms ks 2 ei sd (:wat::core::+ slot 1) o1 env pg rt tb a tc)))))))
+
+(:wat::core::defn :c::var-vals [mks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
+                                slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length mks)) o
+    (:c::var-vals mks (:wat::core::+ i 2)
+      (:c::push (:c::share (:wat::core::nth mks i) env pg
+                  (:c::expr (:wat::core::nth mks i) o env pg rt tb slot (:c::no-tail)))
+                (:c::push-rax) 8)
+      env pg rt tb slot)))
+
+;; popped in reverse, into the slot the declaration names -- and every slot is one past the
+;; record equivalent, because slot 0 belongs to the tag
+(:wat::core::defn :c::var-pop [mks <- :c::Kids i <- :wat::core::i64
+                               fields <- (:wat::core::Vector :- [:wat::core::String])
+                               o <- :c::Out a <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+  (:wat::core::if (:wat::core::< i 0) o
+    (:wat::core::let
+      [kt (:c::text pg (:wat::core::nth mks i))
+       kw (:wat::string::subs kt 1 (:wat::string::length kt))
+       fi (:c::field-index fields kw 0)]
+      (:wat::core::if (:wat::core::< fi 0) (:c::fail "enum variant field" a pg)
+        (:c::var-pop mks (:wat::core::- i 2) fields
+          (:c::popn o (:wat::string::concat (:c::pop-rcx)
+            (:c::store-slot (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1))))) 8) a pg)))))
+
+(:wat::core::defn :c::variant-form [ks <- :c::Kids a <- :wat::core::i64 tag <- :wat::core::i64
+                                    fv <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                    pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
+                                    slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2)
+    (:c::fail "enum variant needs one field map" a pg)
+    (:wat::core::let
+      [mks (:c::kidsof pg (:wat::core::nth ks 1))
+       fields (:wat::core::if (:wat::core::< fv 0)
+                (:wat::core::Vector :- [:wat::core::String])
+                (:c::field-names (:c::kidsof pg fv) 0
+                  (:wat::core::Vector :- [:wat::core::String]) pg))
+       n (:wat::core::length fields)
+       ;; a map node is `[:key value :key value]` -- the VALUES are the odd indices, and the
+       ;; last pair's KEY is two from the end, the same shape `:c::rec-pop` walks
+       o1 (:c::var-vals mks 1 o env pg rt tb slot)
+       o2 (:c::call (:c::emit o1 (:c::mov-rax (:wat::core::+ n 1))) (:c::at-vnew rt))
+       o3 (:c::var-pop mks (:wat::core::- (:wat::core::length mks) 2) fields o2 a pg)]
+      ;; the tag last: every pop above went through rcx, so writing it first would be undone
+      (:c::emit o3 (:wat::string::concat (:c::mov-ri (:c::rcx) tag) (:c::store-slot 8))))))
 
 (:wat::core::defn :c::rec-form [ks <- :c::Kids a <- :wat::core::i64 r <- :c::Rec o <- :c::Out
                                 env <- :c::Env pg <- :c::Prog rt <- :c::Layout
@@ -4571,7 +4815,9 @@
               (:wat::core::conj (:c::Prog/enums pg)
                 (:c::Enum :name (:c::text pg (:wat::core::nth ks 1))
                           :variants (:c::variant-names ks 3 (:c::text pg (:wat::core::nth ks 1))
-                                      (:wat::core::Vector :- [:wat::core::String]) pg))))
+                                      (:wat::core::Vector :- [:wat::core::String]) pg)
+                          :vfv (:c::variant-fvs ks 3 (:wat::core::Vector :- [:wat::core::i64]) pg)
+                          :heap (:c::any-fields? ks 3 pg))))
             dir))
         ((:c::typealias? head)
           (:c::collect-in tops (:wat::core::+ i 1)

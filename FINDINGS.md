@@ -14237,3 +14237,79 @@ touch code, because a test program lands in the same commit as the feature it te
 **What this says about the file**: it is not long-and-tangled, it is **one decision at length** --
 how a wat form becomes x86-64. That is a different answer from "it is fine", and it is the
 answer that stops the question being re-asked every time the line count grows.
+
+### C-203: payload variants and `match` -- the REPL's value type compiles
+
+**Extend.** C-200 shipped unit variants and refused payload ones by name. This lands both halves
+of the refusal: variants that carry fields, and the `match` that takes them apart.
+
+**The representation is a property of the ENUM, not the variant**, and that is what made it
+tractable. A value of an enum type must have ONE representation whichever variant it holds, so
+the choice cannot be per-variant:
+
+| | representation |
+|---|---|
+| every variant unit (`:rd::Kind`) | **i64 tag** -- C-200's path, untouched, still free |
+| any variant carries a field (`:user::Val`) | **heap**: `vec_new(1+n)`, tag in slot 0, fields 1..n |
+
+A payload variant is therefore **a record with the tag in slot 0** -- the same `vec_new`,
+push-values, pop-into-declared-slots shape `:c::rec-form` already had, offset by one. And because
+the heap form is a POINTER, the type string had to split: `"henum:"` is in `:c::ptr-ty?` and
+`"enum:"` is not, so payload enums get refcounting and last-use transfer exactly like records
+while unit enums own nothing.
+
+**Exhaustiveness is REFUSED at compile time, not trapped.** A `match` that fell off the end would
+answer with whatever was in rax -- F-168's fail-open shape exactly. Covering every variant makes
+the fall-through unreachable, so there is nothing to trap. Both the interpreter and this compiler
+now reject the same program; wat says "non-exhaustive", this says "match does not cover every
+variant".
+
+**The recursive case works, which is the whole point**: `:Vec [xs <- (Vector :- [:user::Val])]`
+-- a variant carrying a Vector of its own enum -- compiles and agrees.
+`elf/src/matchval.wat` pins it.
+
+**Three bugs, all found by PROBES and none by the gate:**
+1. `:c::field-types` takes the NAME index and reads the type at `i+2`; started at 2, read past
+   the end.
+2. a map node is `[:key value :key value]` -- pushed the KEYS instead of the values.
+3. the reverse pop must start at `length-2`, not `length`.
+
+All three were GREEN through `tools/variant.sh` and byte-neutral on the corpus, because nothing
+in `elf/` used the feature. Third instance this session of the same lesson: **the oracles only
+see what has been written.**
+
+### F-177: the REPL's value type is a SUBSET of wat, not a different language
+
+**Clean.** The first cut of the value enum was `:Int` / `:Sym` / `:List` -- which is **mal's**
+dynamically-typed Lisp, not wat. The builder caught it: *"we are doing Int not i64 .. List .. not
+Vector .. Sym is a string"*.
+
+The distinction is not cosmetic. `:Int`/`:List` is a DIFFERENT LANGUAGE wearing wat's syntax;
+`:I64`/`:Vec` is a SUBSET of wat. Both are small; only one grows into the target. `matchval.wat`
+is the file the next person copies, so it teaching the Lisp spelling would propagate quietly.
+
+**The names mirror what wat's types ARE; they do NOT chase arc 109's spelling.** That note
+(`wat-rs/docs/arc/2026/04/109-kill-std/NOTE-the-type-names-go-short-and-lowercase.md`) states its
+own status: *"A DIRECTION, not a decision -- and it REVERSES a measured position from four days
+ago."* Its mechanical half (`String`->`str`) is a codemod; its hard half is the COLLECTION
+COLLAPSE, where `Vector` and `PersistentVector` are two distinct LIVE types today, so
+`wat.type/vec` cannot be a new spelling -- one family must absorb the other, ~5,700 sites.
+Rename when it lands.
+
+**Measured, so the gap is a number rather than an impression.** What `wat.type/` resolves today:
+
+| landed | not yet |
+|---|---|
+| `i64` `f64` `bool` `nil` `u8` `String` `fn` `keyword` | `str` `string` `vec` `map` `set` `list` `tuple` `enum` `record` `symbol` |
+
+And what THIS compiler resolves (`:c::ty-node`'s leaf arms): **four** -- `String`, `bool`, `nil`,
+`i64` -- plus `Vector`, records, enums, aliases and function types. So against wat:
+
+- **`f64` is the largest single gap**, and it is not a type addition -- it is SSE, a register file
+  and instruction set this compiler has never touched.
+- `u8` and `keyword` are absent; a REPL wants `:foo` as a value.
+- map / set / tuple are absent.
+
+The five variants that compile today -- `:Nil :I64 :Bool :Str :Vec` -- are exactly what the
+compiler can hold. `:F64`, `:Kw`, `:Map`, `:Fn` are named in the file as backlog rather than left
+as a silent omission.
