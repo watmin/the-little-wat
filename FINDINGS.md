@@ -13715,8 +13715,8 @@ nine hand-enumerates it. An audit of what each does when it meets `and`/`or`:
 |---|---|---|---|
 | `tail-self?` | missing (C-196) | falls to `:else`, answers false | **unsafe** |
 | `noret?` | missing | `scratch-safe?` rejects the subtree | conservative |
-| `occ` | missing | *sums* operands instead of maxing | conservative (over-count) |
-| `live-after` | missing | `live-seq` assumes everything right of `u` runs | conservative |
+| `occ` | missing | *sums* operands instead of maxing | **exact** -- see correction below |
+| `live-after` | missing | `live-seq` assumes everything right of `u` runs | **exact** for `and`/`or` |
 | `use-walk`, `read-only?`, `mut-site` | missing | walk all kids uniformly | conservative |
 
 **Eight of nine were saved by polarity, not by correctness.** In those, "I do not recognise
@@ -13727,6 +13727,13 @@ compiler produced an infinite loop in exactly one place.
 `compile.wat`'s own comment already says `cond`, `and`, `or` and `not` are "`if` wearing
 different hats" -- so the nine are not re-deriving nine rules, they are re-deriving ONE
 desugaring, by hand, nine times. Two of them got it wrong the same way.
+
+**Correction (C-197, C-198).** The two rows marked "over-count" above were wrong. Summing an
+`and`/`or`'s operands is EXACT: the worst path through `(and a b c)` evaluates all three, so
+there is nothing to max. Neither walk was being timid about `and`/`or` -- they were right, by a
+default that happened to suit it. `occ`'s real over-approximation is elsewhere (a `cond`'s
+tests are all summed though only those up to the taken clause run), and `live-after`'s is
+laying clauses end to end as though every one runs.
 
 **Two requirements follow**, and requirement 2 is the one that would have caught this before
 it was written:
@@ -13794,3 +13801,69 @@ hazard just removed -- so it is not taken unless the 1% starts mattering.
 
 **Not done: `:c::occ` and `:c::live-after` need a DIFFERENT partition** -- alternatives versus
 sequential, not tail versus quiet -- so they are a second shared query, not this one.
+
+### F-170 / C-198: a write inside a `cond` clause's TEST was invisible, and got mutated in place
+
+**Fix.** Found by applying F-169's requirement 2 -- audit each walk for which direction its
+unknown answer falls -- to `:c::live-after`, while scoping the `occ`/`live-after` conversion.
+
+`:c::live-seq` walks kids from index **1**, which is right for `(f a b)`, where kid 0 is the
+head and is not evaluated. A `cond` clause is `(test body...)`, where kid 0 **is** evaluated.
+So a write site inside a clause test was held by no kid from 1 up: `:c::holds?` found it
+nowhere, `:c::live-after` answered false, and `:c::dead-after-write?` concluded that nothing
+reads the name after the write -- while the clause BODY was about to read it. The compiler
+then mutated in place, and the read saw the mutation.
+
+**Confirmed with three probes**, all compiled and run against the interpreter:
+
+| probe | native | interpreter |
+|---|---|---|
+| write in a `cond` clause TEST | **4** | **3** |
+| the same write in the clause BODY | 7 | 7 |
+| the same write in an `if` TEST | 3 | 3 |
+
+`if` was safe because `:c::live-after` has an explicit arm for its condition; everything else
+fell through to the sequence helper built for calls. **Exit 0, no crash, wrong answer** -- the
+same failure mode as F-168's `P4`. `elf/probe/f170-cond-test.wat` pins it.
+
+**A fourth probe ruled out the neighbouring shape I expected to break too**: a write in a
+`let`'s BINDINGS vector, where `:c::live-after` returns false for any non-list node. That one
+agrees (7 and 7). Reported as probed, not as a bug.
+
+**The fix is `:c::eval-seq`** -- the children a form evaluates, in an order safe to read left to
+right, with `cond` flattened to test, body, test, body. Deliberately conservative rather than
+exact: clauses are laid end to end as though every one runs, which over-approximates what is
+live and can only decline the optimisation.
+
+**This is the third instance of one mistake** (F-168, then `:c::noret?`, now this): a walk that
+handles `if` explicitly and sends everything else to a generic helper whose assumptions do not
+hold for `cond`. Every emitted program is unchanged -- 74 byte-identical -- so nothing in the
+corpus had the shape, which is exactly why no oracle here had ever seen it.
+
+**Cost**, pinned, three runs each, varying by ~200 in 1.8 billion:
+
+| | instructions to self-compile | binary |
+|---|---|---|
+| before F-170 | 1,841,565,6xx | 233,834 B |
+| after | 1,847,829,2xx | 234,525 B |
+| delta | **+0.34%** | +691 B |
+
+Cumulative for all of Layer A (C-197 + C-198), against the pre-Layer-A fixpoint:
+1,822,692,9xx -> 1,847,829,2xx, **+1.38%** and +1,784 bytes.
+
+**Oracles.** Bootstrap fixpoint 234,525 B, 76 binaries byte-identical; `tools/emitted.sh` all
+74 byte-identical; all three `elf/probe` shapes agree.
+
+### F-171: `:c::occ` is deliberately NOT converted, and the reason is a limit worth naming
+
+**Clean.** `:c::occ` needs a third partition -- ALTERNATIVES to max over, SEQUENTIAL to sum --
+and a `cond` branch is a RANGE of a clause's kids, not a node. The shared query would have to
+return GROUPS, and compile.wat's subset has neither nested vectors nor closures (C-131) to
+carry the combiner. The abstraction would be worse than the duplication, so it is not built.
+
+**What makes that acceptable here and not in `:c::tail-self?` is polarity.** `occ`'s default
+arm sums, so an unrecognised form is over-counted, `linear?` goes false, and the optimisation
+is declined. It cannot be wrong by omission, only timid. `:c::tail-self?` failed the other way.
+
+This is a concrete thing closures would buy in the compiler itself: the Layer B case (F-169),
+now with a named function that wants them and cannot have them.

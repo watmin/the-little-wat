@@ -2127,6 +2127,20 @@
 ;; is sequential and sums. A parameter read at most once on every path is read at most once,
 ;; full stop, so any read of it is the last one. Over-counting is safe: it only declines the
 ;; optimisation.
+;;
+;; **This one is NOT converted to `:c::tail-nodes`/`:c::eval-seq`, on purpose** (F-169, F-171).
+;; It needs a third partition -- ALTERNATIVES to max over, SEQUENTIAL to sum -- and a `cond`
+;; branch is a RANGE of a clause's kids, not a node, so the query would have to return groups.
+;; compile.wat's subset has no nested vectors and no closures (C-131) to carry the combiner, so
+;; the abstraction would be worse than the duplication.
+;;
+;; What makes that acceptable here and not in `:c::tail-self?` is POLARITY. The default arm is
+;; `occ-sum`, which SUMS -- so an unrecognised form is over-counted, `linear?` goes false, and
+;; the optimisation is declined. This walk cannot be wrong by omission; it can only be timid.
+;; `:c::tail-self?` failed the other way, which is why F-168 was an infinite loop.
+;;
+;; One correction to F-169's first table: summing an `and`/`or`'s operands is **exact, not an
+;; over-count**. The worst path through `(and a b c)` evaluates all three.
 
 (:wat::core::defn :c::occ [a <- :wat::core::i64 name <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::cond
@@ -2189,6 +2203,38 @@
 ;; is safe: it costs an optimisation, never a correctness.
 
 ;; is the node `u` somewhere inside the subtree `n`?
+;; ------------------------------------------------- the children a form EVALUATES, in order
+;;
+;; **`:c::live-seq` walked raw kids from index 1, which is right for `(f a b)` and wrong for a
+;; `cond` clause.** In a call, kid 0 is the head and is not evaluated. In a clause, kid 0 is the
+;; TEST and very much is. So a write site inside a clause test was invisible: `holds?` found it
+;; in no kid from 1 up, `:c::live-after` answered false, and `:c::dead-after-write?` concluded
+;; nothing reads the name afterwards -- while the clause BODY was about to read it. The compiler
+;; then mutated in place and the read saw the mutation. That is F-170, and like F-168 it exits 0
+;; with a wrong answer rather than crashing. `elf/probe/f170-cond-test.wat` pins it.
+;;
+;; This is the third form of the same mistake (F-169): a walk that handles `if` explicitly and
+;; sends everything else to a generic sequence helper built for calls. The order here is
+;; deliberately CONSERVATIVE rather than exact -- clauses are laid end to end as though every
+;; one runs, which over-approximates what is live and can only decline the optimisation.
+(:wat::core::defn :c::eval-seq [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
+        (:wat::core::if (:c::cond? (:c::text pg (:wat::core::nth ks 0)))
+          (:c::eval-clause-seq pg ks 1 (:wat::core::Vector :- [:wat::core::i64]))
+          (:c::conj-range pg (:wat::core::Vector :- [:wat::core::i64])
+                          ks 1 (:wat::core::length ks)))))))
+
+;; a clause contributes its test AND its body forms, in that order -- kid 0 included, which is
+;; the whole point.
+(:wat::core::defn :c::eval-clause-seq [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                       acc <- :c::Kids] -> :c::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:c::eval-clause-seq pg ks (:wat::core::+ i 1)
+        (:c::conj-range pg acc cks 0 (:wat::core::length cks))))))
+
 (:wat::core::defn :c::holds? [pg <- :c::Prog n <- :wat::core::i64 u <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::if (:wat::core::= n u) true
     (:wat::core::if (:wat::core::not= (:c::kind n pg) "list") false
@@ -2207,9 +2253,10 @@
     ((:wat::core::not= (:c::kind n pg) "list") false)
     (:else
       (:wat::core::let [ks (:c::kidsof pg n)]
-        (:wat::core::if (:wat::core::< (:wat::core::length ks) 4) (:c::live-seq pg ks 1 u name)
+        (:wat::core::if (:wat::core::< (:wat::core::length ks) 4)
+          (:c::live-seq pg (:c::eval-seq pg n) 0 u name)
           (:wat::core::if (:wat::core::not (:c::if? (:c::text pg (:wat::core::nth ks 0))))
-            (:c::live-seq pg ks 1 u name)
+            (:c::live-seq pg (:c::eval-seq pg n) 0 u name)
             ;; `(if cond then else)` -- from the CONDITION either arm may still run; from inside
             ;; an arm, the other one never does
             (:wat::core::cond
