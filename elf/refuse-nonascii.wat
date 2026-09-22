@@ -762,6 +762,9 @@
 (:wat::core::defrecord :c::Prog
   [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
    linear <- (:wat::core::Vector :- [:wat::core::String])
+   ;; the parameters of this function that are only ever READ -- see `:c::read-only?`. Parallel
+   ;; to `linear` and set the same way, once per function, just before its body is compiled.
+   ronly <- (:wat::core::Vector :- [:wat::core::String])
    pokers <- (:wat::core::Vector :- [:wat::core::String])
    ;; parameters represented by one field, in the register the parameter already has.
    ;; parallel to `sfield`: the field index within the record. empty unless scalarised.
@@ -815,6 +818,7 @@
             :nscr (:c::nscratch)
             :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
+            :ronly (:wat::core::Vector :- [:wat::core::String])
             :pokers (:wat::core::Vector :- [:wat::core::String])
             :scalar (:wat::core::Vector :- [:wat::core::String])
             :sfield (:wat::core::Vector :- [:wat::core::i64])
@@ -1141,15 +1145,15 @@
 ;; only thing that reads it is `:c::tail-store`'s first store
 (:wat::core::defn :c::push-but-last [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                      pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
-                                     slot <- :wat::core::i64] -> :c::Out
+                                     slot <- :wat::core::i64 pv <- :c::Kids] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::if (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
-      (:c::share (:wat::core::nth ks i) env pg
+      (:c::tail-share (:wat::core::nth ks i) pv (:wat::core::- i 1) env pg
         (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)))
       (:c::push-but-last ks (:wat::core::+ i 1)
-        (:c::push (:c::share (:wat::core::nth ks i)  env pg
+        (:c::push (:c::tail-share (:wat::core::nth ks i) pv (:wat::core::- i 1) env pg
                     (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) (:c::push-rax) 8)
-        env pg rt tb slot))))
+        env pg rt tb slot pv))))
 
 ;; ---------------------------------------------------------------- expressions
 
@@ -2276,6 +2280,125 @@
     ((:wat::core::= (:wat::core::nth (:c::Prog/linear pg) i) name) true)
     (:else (:c::linear? pg name (:wat::core::+ i 1)))))
 
+;; ---------------------------------------------------------------- a parameter that is only READ
+;;
+;; **One boolean over one parameter name: does it appear anywhere except as the CONTAINER of
+;; `nth` or `length`?** `(conj name x)`, `(assoc name ...)`, `(concat name ...)` and a bare
+;; `name` are not enumerated -- they all fall through to the last clause, which checks every
+;; child, and the bare symbol there is what refuses them. The conservative default is the whole
+;; design: a form this does not recognise containing the name is a RETAIN.
+;;
+;; **This is not `:c::use-walk` and does not reuse it** (F-166). That one's lattice value IS a
+;; record field index and every leaf is record-specific; this answers a boolean and needs no
+;; lattice. It is also not `:c::occ` -- occ asks HOW MANY, this asks WHAT, the same distinction
+;; F-162 drew for records.
+;;
+;; **The one exemption is the pass-through.** Argument j of a self call, when it is literally the
+;; symbol of parameter j, writes the slot with what the slot already holds (C-194's shape). That
+;; is not a mention that retains anything, so it is skipped -- and without the exemption the
+;; predicate could never hold for a loop, since every loop mentions its own parameter.
+;;
+;; What it buys: `:c::share` at that argument. The increment is there because argument 0 of a
+;; tail call BECOMES the next iteration's parameter and a LATER argument may still retain the
+;; container -- `(user/step v (conj v i) ...)` is the shape, where `:c::conj` shares its value
+;; and never its container and `:c::linear?` reads the pass-through as harmless because it
+;; precedes the write (F-166). When every occurrence is a read, there is no such later argument
+;; and nothing for the count to protect. `elf/src/freed.wat` is the canary on the other side:
+;; `user/copies` concats `s`, so `s` is not read-only and its share stays.
+(:wat::core::defn :c::pass-at [ks <- :c::Kids name <- :wat::core::String pj <- :wat::core::i64
+                               np <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  ;; the call has to have this function's arity, or position pj+1 is not parameter pj at all
+  (:wat::core::if (:wat::core::not= (:wat::core::length ks) (:wat::core::+ np 1)) -1
+    (:wat::core::let [k (:wat::core::+ pj 1)]
+      (:wat::core::if (:wat::core::and
+                        (:wat::core::= (:c::kind (:wat::core::nth ks k) pg) "symbol")
+                        (:wat::core::= (:c::text pg (:wat::core::nth ks k)) name))
+        k -1))))
+
+(:wat::core::defn :c::read-only? [a <- :wat::core::i64 name <- :wat::core::String
+                                  self <- :wat::core::String pj <- :wat::core::i64
+                                  np <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ;; a bare mention RETAINS -- this is the clause every unrecognised form arrives at
+    ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::not= (:c::text pg a) name))
+    ((:wat::core::= (:c::kind a pg) "vector")
+      (:c::read-only-all? (:c::kidsof pg a) 0 -1 name self pj np pg))
+    ((:wat::core::not= (:c::kind a pg) "list") true)
+    (:else
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::< (:wat::core::length ks) 2)
+          (:c::read-only-all? ks 0 -1 name self pj np pg)
+          (:wat::core::let
+            [head (:c::text pg (:wat::core::nth ks 0))
+             c1 (:wat::core::nth ks 1)
+             cont? (:wat::core::and (:wat::core::= (:c::kind c1 pg) "symbol")
+                     (:wat::core::= (:c::text pg c1) name))]
+            (:wat::core::cond
+              ;; `(nth name i)` -- the container is fine, the index still has to be
+              ((:wat::core::and cont?
+                 (:wat::core::and (:c::nth? head) (:wat::core::= (:wat::core::length ks) 3)))
+                (:c::read-only? (:wat::core::nth ks 2) name self pj np pg))
+              ;; `(length name)` -- a peek at the header
+              ((:wat::core::and cont?
+                 (:wat::core::and (:wat::core::or (:c::len? head) (:c::strlen? head))
+                   (:wat::core::= (:wat::core::length ks) 2)))
+                true)
+              ;; a self call: argument pj, if it is the bare symbol, writes the slot with itself
+              ((:wat::core::= head self)
+                (:c::read-only-all? ks 0 (:c::pass-at ks name pj np pg) name self pj np pg))
+              (:else (:c::read-only-all? ks 0 -1 name self pj np pg)))))))))
+
+(:wat::core::defn :c::read-only-all? [ks <- :c::Kids i <- :wat::core::i64 sk <- :wat::core::i64
+                                      name <- :wat::core::String self <- :wat::core::String
+                                      pj <- :wat::core::i64 np <- :wat::core::i64
+                                      pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::and
+      (:wat::core::or (:wat::core::= i sk)
+        (:c::read-only? (:wat::core::nth ks i) name self pj np pg))
+      (:c::read-only-all? ks (:wat::core::+ i 1) sk name self pj np pg))))
+
+;; the parameters of this function that nothing ever retains -- same shape as `:c::linear-of`
+(:wat::core::defn :c::ronly-of [pv <- :c::Kids i <- :wat::core::i64 j <- :wat::core::i64
+                                ks <- :c::Kids start <- :wat::core::i64
+                                self <- :wat::core::String np <- :wat::core::i64
+                                acc <- (:wat::core::Vector :- [:wat::core::String])
+                                pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) acc
+    (:wat::core::let [nm (:c::text pg (:wat::core::nth pv i))]
+      (:c::ronly-of pv (:wat::core::+ i 3) (:wat::core::+ j 1) ks start self np
+        ;; **the type test comes FIRST and it is not an optimisation of taste.** `:c::share`
+        ;; emits for a symbol of POINTER type and nothing else, so a machine-word parameter has
+        ;; no share to elide and the walk over its every occurrence answers a question nobody
+        ;; asks. Most parameters in this compiler are `i64`; the whole analysis costs about a
+        ;; third of what it did before this line.
+        (:wat::core::if (:wat::core::and
+                          (:c::ptr-ty? (:c::ty-of-node (:wat::core::nth pv (:wat::core::+ i 2)) pg))
+                          (:c::read-only-all? ks start -1 nm self j np pg))
+          (:wat::core::conj acc nm) acc) pg))))
+
+(:wat::core::defn :c::ronly? [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length (:c::Prog/ronly pg))) false)
+    ((:wat::core::= (:wat::core::nth (:c::Prog/ronly pg) i) name) true)
+    (:else (:c::ronly? pg name (:wat::core::+ i 1)))))
+
+;; the `:c::share` at argument j of a SELF TAIL CALL, or nothing at all. Three things have to
+;; hold, and the third is checked here rather than inferred: the argument is a symbol, it is
+;; the name of parameter j -- so the store is `mov %rN,%rax ; mov %rax,%rN` -- and nothing in
+;; the body retains it.
+(:wat::core::defn :c::tail-share [a <- :wat::core::i64 pv <- :c::Kids j <- :wat::core::i64
+                                  env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
+  (:wat::core::if
+    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+      (:wat::core::and (:wat::core::< (:wat::core::* 3 j) (:wat::core::length pv))
+        (:wat::core::and
+          (:wat::core::= (:c::text pg a) (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))))
+          (:c::ronly? pg (:c::text pg a) 0))))
+    o
+    (:c::share a env pg o)))
+
+
 ;; A SYMBOL gets the two proofs above. A non-symbol operand used to get a sentence instead:
 ;; "a non-variable operand is a temporary and always qualifies". That is false, and C-140 wrote
 ;; it down twice as a limitation without fixing it.
@@ -3065,7 +3188,8 @@
 (:wat::core::defn :c::tail-direct [ks <- :c::Kids j <- :wat::core::i64 n <- :wat::core::i64
                                    o <- :c::Out env <- :c::Env pg <- :c::Prog
                                    rt <- :c::Layout tb <- :wat::core::i64
-                                   slot <- :wat::core::i64 nr <- :wat::core::i64] -> :c::Out
+                                   slot <- :wat::core::i64 nr <- :wat::core::i64
+                                   pv <- :c::Kids] -> :c::Out
   (:wat::core::if (:wat::core::>= j n) o
     (:wat::core::cond
       ;; **an argument that is already a value goes straight into its parameter register** --
@@ -3077,30 +3201,30 @@
          (:c::selv? (:wat::core::nth ks (:wat::core::+ j 1)) env pg (:c::Prog/bnds pg)))
         (:c::tail-direct ks (:wat::core::+ j 1) n
           (:c::emit o (:c::selv (:wat::core::nth ks (:wat::core::+ j 1)) j env pg))
-          env pg rt tb slot nr))
+          env pg rt tb slot nr pv))
       ;; **an argument that is a select goes straight into its parameter register**, which is
       ;; where the diamond's last `mov` went anyway
       ((:wat::core::and (:wat::core::< j nr)
                         (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
         (:c::tail-direct ks (:wat::core::+ j 1) n
           (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
-          env pg rt tb slot nr))
+          env pg rt tb slot nr pv))
       ;; the counter step, when no bound was available to make it a `lea`
       ((:wat::core::and (:wat::core::< j nr)
                         (:c::acc-op? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
         (:c::tail-direct ks (:wat::core::+ j 1) n
           (:c::acc-op (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg rt)
-          env pg rt tb slot nr))
+          env pg rt tb slot nr pv))
       (:else
        (:wat::core::let
-        [o1 (:c::share (:wat::core::nth ks (:wat::core::+ j 1)) env pg
+        [o1 (:c::tail-share (:wat::core::nth ks (:wat::core::+ j 1)) pv j env pg
               (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
          o2 (:c::emit o1
               (:wat::core::if (:wat::core::< j nr) (:c::reg-mov-from j)
                 (:c::store (:c::fp o1 (:wat::core::+ 16
                              (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
                            (:c::Out/fpr o1))))]
-        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr))))))
+        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr pv))))))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
@@ -3114,8 +3238,8 @@
          pv (:c::kidsof pg (:wat::core::nth
               (:c::kidsof pg (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))) 2))
          o2 (:wat::core::if (:c::tail-direct? pv ks 0 n pg)
-              (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc))
-              (:c::tail-store 0 n (:c::push-but-last ks 1 o env pg rt tb slot)
+              (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc) pv)
+              (:c::tail-store 0 n (:c::push-but-last ks 1 o env pg rt tb slot pv)
                 (:c::TC/nregs tc)))]
         ;; **the back edge tests for itself** (C-188), when `if-cmp` handed down a test it
         ;; can repeat. Looping is then one taken branch instead of two, and the `jmp` to the
@@ -3952,12 +4076,22 @@
      bnds0 (:c::counted-all ks start pv 0 n (:c::text pg (:wat::core::nth ks 1))
              (:c::fn-of pg (:c::text pg (:wat::core::nth ks 1)) 0)
              (:wat::core::Vector :- [:c::Bnd]) pg)
-     pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
+     pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
           (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
             (:wat::core::assoc pg :bnds bnds0) :nscr nscr) :nlr nlr) :regbase nr)
             :scalar (:c::Sc/names sc)) :sfield (:c::Sc/fields sc))
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
+          ;; **and the parameters nothing retains** -- one walk per pointer parameter,
+          ;; answering a boolean. The only thing that reads it is `:c::tail-share`, which is
+          ;; only reachable from a SELF TAIL CALL, so a function without one skips the analysis
+          ;; entirely rather than computing an answer nothing will ask for.
+          :ronly (:wat::core::if
+                   (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
+                     (:c::text pg (:wat::core::nth ks 1)) n pg)
+                   (:c::ronly-of pv 0 0 ks start (:c::text pg (:wat::core::nth ks 1)) n
+                     (:wat::core::Vector :- [:wat::core::String]) pg)
+                   (:wat::core::Vector :- [:wat::core::String])))
      tc (:wat::core::if (:c::has-clone? node pg)
           (:c::no-tail)
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr

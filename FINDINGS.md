@@ -12853,6 +12853,110 @@ to a codegen change measured on one program in one build.**
 - **Repro:** the scratch file is not kept; the shape is four lines of inline asm and the point
   is that rebuilding it will not reproduce the same numbers, which IS the finding.
 
+### F-168: the compiler miscompiles a function shape it CONTAINS — and no oracle here can see it
+
+**Fix, urgent, and not yet chased. This outranks the strike it was found under.** While
+building unlock 2 of the read-only strike (F-167), the executor hit a stage-1 segfault and
+bisected it in five builds to something that should be impossible:
+
+**With the new code's decision forced to a constant false -- `hp` −1, `nh` 0, `lenreg` −1, so
+that NOT ONE BYTE of emitted code differs from the green build -- stage 1 still segfaults.**
+Purely because a side-effect-free mutual-recursion AST walk gets CALLED.
+
+And `wat elf/compile.wat` -- **the interpreter on that identical source** -- compiles the
+whole corpus correctly.
+
+So `elf/compile.wat`, compiled by itself, miscompiles a function shape that the interpreter
+executes correctly. The fault is always the leaf load in the runtime's `tree_get` with a
+garbage node pointer, while compiling `elf/src/four.wat` -- a **two-line program** -- so it is
+not heap exhaustion, which aborts cleanly with `wat: heap exhausted`.
+
+**The unlock-1 elision is exonerated:** it segfaults with that turned off entirely.
+
+**The one structural difference found**, not yet localised further: `:c::passes-thru?` has **no
+self tail call**, which puts it on the other side of `tself?`, `regs?`, `wrap?` and
+`callfree?` from every green member of the same family. `:c::wrappable?` was ruled out (it
+needs a 4-kid `if`; a `cond` body is not one) and `:c::noret?` was ruled out (a non-self call
+needs `scratch-safe?`).
+
+**Why this matters more than any benchmark.** Every oracle in this repo compares wat to wat:
+`bootstrap.sh` runs the same compiler both sides, `elf-run.sh` checks answers, `emitted.sh`
+compares bytes to bytes. A codegen bug that only fires on a function shape no current program
+has **cannot be seen by any of them** -- it is the same blindness F-160 found in the encoder,
+one layer up. It surfaced only because someone wrote a function of an unusual shape and the
+compiler ate itself.
+
+- **Class:** Fix, open. The reproduction is preserved at
+  `scratchpad/compile-hoist-full.wat` with the scanners beside it.
+- **Repro:** apply that file, `./tools/bootstrap.sh`, watch stage 1 fault; then
+  `wat elf/compile.wat` on the same source and watch it succeed.
+
+### C-195 / F-167: one predicate, one unlock — and the cost stated plainly
+
+**Fix.** F-166's two refusals both pointed at a missing predicate; this is it.
+`:c::read-only?` asks whether a parameter appears anywhere except as the container of `nth`
+or `length`. A bare mention RETAINS; `(nth name i)` is a read that then checks the index;
+`(length name)` is a read; everything else recurses. `conj`, `assoc`, `concat` and every
+escape fall through to the bare-symbol case without being enumerated -- the conservative
+default doing the work.
+
+**It refused to reuse `:c::use-walk` and was right to.** F-166 established why: that lattice
+value IS a record field index, `use-union` merges by comparing them, and compile.wat's subset
+has no closures (C-131) so it cannot be parameterised by a leaf predicate. This is a BOOLEAN,
+~55 lines, no lattice.
+
+**The briefed spec could not fire and the gap is load-bearing.** `user/sum`'s argument 0 is a
+bare `v`, which the last clause classifies as a RETAIN -- so whole-body `read-only?` is false
+and nothing happens. The walk carries one exemption: argument j of a self call **of this
+arity** when it is literally the symbol of parameter j (C-194's shape; the write is
+`mov %rbx,%rax ; mov %rax,%rbx`).
+
+**Unlock 1: the share on a pass-through argument is elided when nothing retains.** F-166
+proved the holder is real when something DOES retain; when the body only reads, the count has
+nothing to protect.
+
+| per element | ins | retiring slots |
+|---|---|---|
+| `vecsum` | 69.00 -> **66.00** | 67.00 -> **62.05** |
+| `grow2000000` | 33.00 -> 33.00 | 30.11 -> 30.11 |
+| **read half** | 36.00 -> **33.00** | 36.9 -> **31.94** |
+
+Three instructions removed, **five** retiring slots -- reported as measured rather than
+explained away (`incq` on memory is not one slot). Cycles moved ~9%, inside F-154's band, not
+claimed.
+
+**STOP-1 did not fire and was checked three ways, not argued.** `elf/src/freed.wat` is the
+canary -- it dies of heap exhaustion if `s` ever becomes linear -- and its binary is
+byte-identical with all five share sequences intact, verified by disassembly. Per-program
+share-byte counts match a scanner function-for-function.
+
+**Two errors in my brief, and the second makes the remaining room BIGGER.** I named
+`:c::tail-direct` as the share site; `vecsum` never reaches it (it fails at parameter 1 and
+takes the stack path, `push-but-last` + `tail-store`). And I costed `(length v)` at eight
+instructions: **only two are the length.** The other six are `:c::if-cmp`'s general protocol,
+taken because **C-181's both-operands-in-registers path needs a REGISTER on each side** and
+`(length v)` is a form. A future strike briefed on "hoist the invariant" would build it, win
+one instruction, and wrongly conclude the room was empty. The prize is making C-181
+applicable, which is six plus C-188's self-testing back edge.
+
+**STOP-2 answered, then superseded by F-168.** A register IS free -- `:c::nregs` is 4 and
+`user/sum` has three parameters -- but that is narrower luck than F-163's: four callee-saved
+TOTAL, shared with `let` bindings, so four parameters or three-plus-a-`let` leaves nothing.
+The build then segfaulted for a reason that has nothing to do with the hoist: **F-168.**
+
+**Cost, stated plainly.** Analysis alone on a fixed corpus **+0.301%**; headline **+1.868%**
+(1,787,609,025 -> 1,821,012,744), of which ~84% is `compile.wat` being 8.5 KB bigger and the
+corpus containing `compile.wat`. It was +2.93% before two provably output-neutral gates --
+skip non-pointer parameters, skip functions with no self tail call. **C-194 was +0.061%; this
+is 5x that on the analysis and 30x on the headline.** The compiler is 232,775 bytes, from
+212,030 when this session opened. No single step is unreasonable and the trend is worth
+watching.
+
+- **Class:** C-195 Fix, kept. F-167 the two brief errors.
+- **Oracle:** my own re-run -- fixpoint 232,775 byte-identical, `emitted.sh` 8 of 74 all
+  predicted before the build, `elf-run` 30/30 with the same refusals and traps, `freed.elf`
+  printing `65536 100 6553700 65536` with its shares intact under my own disassembly.
+
 ### C-194 / F-166: `tail-direct?` was firing where it had nothing to protect — and two STOPs with substance
 
 **Fix (C-194) plus two refusals (F-166), struck by a spawned Opus executor against
