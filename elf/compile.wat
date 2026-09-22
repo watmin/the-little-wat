@@ -5686,6 +5686,8 @@
     (:c::compile "elf/bench/fibreg.wat" "elf/out/fibreg.elf")
     (:c::compile "elf/bench/loopsum.wat" "elf/out/loopsum.elf")
     (:c::compile "elf/bench/rec.wat"     "elf/out/rec.elf")
+    (:c::compile "elf/bench/optm.wat"    "elf/out/optm.elf")
+    (:c::compile "elf/bench/optmh.wat"   "elf/out/optmh.elf")
     (:c::compile "elf/bench/recflat.wat" "elf/out/recflat.elf")
     (:c::compile "elf/bench/rec1.wat"    "elf/out/rec1.elf")
     (:c::compile "elf/bench/strbuild.wat" "elf/out/strbuild.elf")

@@ -259,6 +259,29 @@ else
 fi
 
 echo
+echo "== 12. enums: an Option-shaped match, 20000000 times (C-205) =="
+build4 opt elf/bench/opt.c
+# **The load-bearing pair is ours-against-ours.** optm.wat and optmh.wat are the SAME loop;
+# the only difference is a second payload variant in optmh, which forces the heap tier. So the
+# delta between those two rows is pure REPRESENTATION, with the trap checks, the refcount
+# share and the call overhead identical on both sides.
+#
+# C is an honest opponent here rather than a strawman: System V returns a 16-byte tagged union
+# in RAX:RDX, so C allocates nothing either. Our tier 1 is EIGHT bytes and one register,
+# because the payload variant simply IS its pointer -- but we still pay a trap check per add,
+# a refcount guard per share, and stack argument passing, which C pays none of.
+a=$(./elf/out/optm.elf); b2=$(./elf/out/optmh.elf); c2=$(./$B/out_opt_gcc2)
+if [ "$a" = "$b2" ] && [ "$a" = "$c2" ]; then
+  printf '  %-34s %6s ms   (answer %s)\n' "ours, tier 1 (the pointer)" "$(best 5 ./elf/out/optm.elf)" "$a"
+  printf '  %-34s %6s ms   (the same loop, heap tier)\n' "ours, tier 3 (vec_new)" "$(best 5 ./elf/out/optmh.elf)"
+  rivals best 5 opt
+  printf '  %-34s %s\n' "" "C-205: the tier is derived from the enum's shape, per"
+  printf '  %-34s %s\n' "" "instantiation -- Option and Result are not special-cased"
+else
+  echo "  FAIL: tier1 '$a', tier3 '$b2', C '$c2'"; fail=1
+fi
+
+echo
 echo "== 7. tail calls: 1000000 deep, which wat eliminates and so must we =="
 o=$(./elf/out/deep.elf); orc=$?
 i=$("$WAT" elf/src/deep.wat 2>&1); irc=$?

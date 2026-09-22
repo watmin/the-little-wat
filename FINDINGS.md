@@ -14390,3 +14390,52 @@ the next attempt starts from a diagnosis rather than a guess.
 
 The first-arm load elision, measured separately, IS kept: the subject was just computed into rax
 and stored, so the first arm needs no reload. Worth 1.9%.
+
+### F-179: retired INSTRUCTIONS understated a representation win by 70% -- allocation costs bandwidth, not instructions
+
+**Clean, and it extends the measurement hierarchy.** C-205's ladder was reported at -24.5% on
+retired instructions. On the board (`tools/vs-c.sh` section 12, best-of-5 wall clock within one
+run) the same change is worth **2.27x**:
+
+| metric | tier 3 -> tier 1 |
+|---|---|
+| retired instructions | 1,386,667,3xx -> 1,046,667,0xx = **1.33x** |
+| wall clock | 179 ms -> 79 ms = **2.27x** |
+
+**Why**: the heap tier allocates 16 bytes per `Some`, so the loop walks ~320 MB of bump-allocated
+heap and pays cache misses. A miss is not an instruction. The instruction count is structurally
+blind to the dominant cost of the thing being measured -- the same error C-202 recorded for
+`repz cmpsb`, where one microcoded instruction hid many uops. **Twice in one session, the
+metric was blind to the mechanism under test.**
+
+**The rule this adds** to F-154/F-157/F-158: retired instructions measure WORK ISSUED, not work
+DONE. They are the right instrument for a change that adds or removes instructions on a hot path
+and the wrong one for a change that moves MEMORY -- allocation, layout, locality. For those, the
+board's wall clock and cycles are the honest readings, and the ours-vs-ours control is what makes
+them comparable.
+
+**The board row, all four opponents:**
+
+```
+  ours, tier 1 (the pointer)             79 ms   (answer 80000000)
+  ours, tier 3 (vec_new)                179 ms   (the same loop, heap tier)
+  C, gcc -O0                             89 ms
+  C, gcc -O2                             26 ms
+  C, clang -O0                           81 ms
+  C, clang -O2                           38 ms
+```
+
+**Tier 1 beats both `-O0` compilers** and is 3.0x behind `gcc -O2`, 2.1x behind `clang -O2`.
+`gcc -O2` and `clang -O2` differ from each other by **1.46x on identical source**, which is
+F-145's argument for four columns rather than one: with a single-column board the same result
+reads as "3x behind" or "2.1x behind" depending on which compiler was picked.
+
+**The ours-vs-ours control is the load-bearing row.** `elf/bench/optm.wat` and
+`elf/bench/optmh.wat` are the SAME loop; the only difference is a second payload variant in the
+latter, which forces the heap tier. Trap checks, the refcount share and call overhead are
+identical on both sides and cancel, so that delta is pure representation with no C involved.
+
+**C is an honest opponent here, not a strawman**: System V returns a 16-byte tagged union in
+`RAX:RDX`, so C allocates nothing either. Our tier 1 is eight bytes and one register against
+C's sixteen and two -- and we still lose on the total, because we pay a trap check per add, a
+refcount guard per share, and stack argument passing, which C pays none of.
