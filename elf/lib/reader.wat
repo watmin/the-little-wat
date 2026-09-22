@@ -20,8 +20,49 @@
 ;; `elf/conform.wat` cross-checks it against wat's OWN reader, which is the test that says it is
 ;; a faithful replacement rather than merely self-consistent.
 
+;; ---------------------------------------------------------------- the kind, as a TAG
+;;
+;; **`kind` was a String, and comparing it cost 27.7% of the compiler's own runtime** (F-174):
+;; 18.90% of all cycles was one `jne` after a `repz cmpsb` inside `str_eq`. The kinds are a
+;; closed set of nine, which is an ENUM -- and an enum variant is a small integer, so the same
+;; comparison becomes a machine word compare with no call at all.
+;;
+;; The String stays for now and `k` is computed beside it, ONCE per node, by
+;; `rd/kind-of-str`. That classification is the only string comparison left on this path, and
+;; it runs once per node instead of once per comparison per walk.
+(:wat::core::defenum :rd::Kind :wat::enum::Pure
+  :List []
+  :Vector []
+  :Map []
+  ;; **not `:String`** -- that spelling is the retired bare primitive (arc 109 slice 1c) and
+  ;; the checker rejects it. Caught by bootstrap's stage 0, not by `tools/variant.sh`, which
+  ;; seeds from the native compiler and never runs the interpreter's type checks.
+  :Str []
+  :Keyword []
+  :Bool []
+  :Nil []
+  :Int []
+  :Symbol [])
+
+;; **the tag is the only stored form.** Keeping a String beside it was duplicate state that had
+;; to agree, and it did not: `:c::mknode` built nodes without the tag, so every inlined node
+;; read back as `:List`. The bootstrap stayed green and the fixpoint byte-identical -- only
+;; `tools/emitted.sh` caught it, as 18 of 68 programs moving. Deriving the String removes the
+;; possibility.
+(wat.core/defn rd/str-of-kind [k :- :rd::Kind] :- wat.type/String
+  (wat.core/cond
+    ((wat.core/= k (:rd::Kind.List {}))    "list")
+    ((wat.core/= k (:rd::Kind.Symbol {}))  "symbol")
+    ((wat.core/= k (:rd::Kind.Int {}))     "int")
+    ((wat.core/= k (:rd::Kind.Vector {}))  "vector")
+    ((wat.core/= k (:rd::Kind.Str {}))  "string")
+    ((wat.core/= k (:rd::Kind.Keyword {})) "keyword")
+    ((wat.core/= k (:rd::Kind.Bool {}))    "bool")
+    ((wat.core/= k (:rd::Kind.Map {}))     "map")
+    (:else                                 "nil")))
+
 (:wat::core::defrecord :rd::Node
-  [kind <- :wat::core::String
+  [k <- :rd::Kind
    text <- :wat::core::String
    kids <- (:wat::core::Vector :- [:wat::core::i64])])
 
@@ -116,14 +157,14 @@
                     (rd/digits? t 1)))
     (:else (rd/digits? t 0))))
 
-(wat.core/defn rd/classify [t :- wat.type/String] :- wat.type/String
+(wat.core/defn rd/classify [t :- wat.type/String] :- :rd::Kind
   (wat.core/cond
-    ((wat.string/starts-with? t ":") "keyword")
-    ((wat.core/= t "true") "bool")
-    ((wat.core/= t "false") "bool")
-    ((wat.core/= t "nil") "nil")
-    ((rd/int? t) "int")
-    (:else "symbol")))
+    ((wat.string/starts-with? t ":") (:rd::Kind.Keyword {}))
+    ((wat.core/= t "true")  (:rd::Kind.Bool {}))
+    ((wat.core/= t "false") (:rd::Kind.Bool {}))
+    ((wat.core/= t "nil")   (:rd::Kind.Nil {}))
+    ((rd/int? t)            (:rd::Kind.Int {}))
+    (:else                  (:rd::Kind.Symbol {}))))
 
 ;; ---------------------------------------------------------------- building
 
@@ -132,9 +173,10 @@
 ;; `n` is passed rather than taken from `arena`, so that `arena` is read exactly once here and
 ;; the compiler can extend it in place instead of copying the whole thing (C-127)
 (wat.core/defn rd/add [arena :- :rd::Arena n :- wat.type/i64
-                       kind :- wat.type/String text :- wat.type/String
+                       kind :- :rd::Kind text :- wat.type/String
                        kids :- :rd::Kids pos :- wat.type/i64] :- :rd::St
-  (:rd::St :arena (wat.core/conj arena (:rd::Node :kind kind :text text :kids kids))
+  (:rd::St :arena (wat.core/conj arena
+                    (:rd::Node :k kind :text text :kids kids))
            :pos pos :node n :kids (rd/empty-kids)))
 
 ;; ---------------------------------------------------------------- the parser
@@ -145,12 +187,12 @@
     (wat.core/cond
       ((wat.core/>= i n)
         (:rd::St :arena a :pos i :node -1 :kids (rd/empty-kids)))
-      ((wat.core/= (rd/byte src i) (rd/b1 "(")) (rd/seq src n a i ")" "list"))
-      ((wat.core/= (rd/byte src i) (rd/b1 "[")) (rd/seq src n a i "]" "vector"))
-      ((wat.core/= (rd/byte src i) (rd/b1 "{")) (rd/seq src n a i "}" "map"))
+      ((wat.core/= (rd/byte src i) (rd/b1 "(")) (rd/seq src n a i ")" (:rd::Kind.List {})))
+      ((wat.core/= (rd/byte src i) (rd/b1 "[")) (rd/seq src n a i "]" (:rd::Kind.Vector {})))
+      ((wat.core/= (rd/byte src i) (rd/b1 "{")) (rd/seq src n a i "}" (:rd::Kind.Map {})))
       ((wat.core/= (rd/byte src i) (rd/b1 "\""))
         (wat.core/let [e (rd/str-end src n (wat.core/+ i 1))]
-          (rd/add a (wat.core/length a) "string" (wat.string/byte-subs src i e) (rd/empty-kids) e)))
+          (rd/add a (wat.core/length a) (:rd::Kind.Str {}) (wat.string/byte-subs src i e) (rd/empty-kids) e)))
       (:else
         (wat.core/let [e (rd/atom-end src n i)
                        t (wat.string/byte-subs src i e)]
@@ -171,7 +213,7 @@
           (rd/kids-of src n r close (wat.core/conj acc (:rd::St/node r))))))))
 
 (wat.core/defn rd/seq [src :- wat.type/String n :- wat.type/i64 a :- :rd::Arena i :- wat.type/i64
-                       close :- wat.type/String kind :- wat.type/String] :- :rd::St
+                       close :- wat.type/String kind :- :rd::Kind] :- :rd::St
   (wat.core/let [r (rd/kids-of src n (:rd::St :arena a :pos (wat.core/+ i 1) :node -1
                                             :kids (rd/empty-kids))
                                close (rd/empty-kids))
@@ -207,7 +249,10 @@
 ;; ---------------------------------------------------------------- the surface it replaces
 
 (wat.core/defn rd/kind [st :- :rd::St n :- wat.type/i64] :- wat.type/String
-  (:rd::Node/kind (wat.core/nth (:rd::St/arena st) n)))
+  (rd/str-of-kind (:rd::Node/k (wat.core/nth (:rd::St/arena st) n))))
+;; the same question, as a tag -- see :rd::Kind above
+(wat.core/defn rd/kindv [st :- :rd::St n :- wat.type/i64] :- :rd::Kind
+  (:rd::Node/k (wat.core/nth (:rd::St/arena st) n)))
 (wat.core/defn rd/text [st :- :rd::St n :- wat.type/i64] :- wat.type/String
   (:rd::Node/text (wat.core/nth (:rd::St/arena st) n)))
 (wat.core/defn rd/kids [st :- :rd::St n :- wat.type/i64] :- :rd::Kids

@@ -544,6 +544,10 @@
 ;; the bytes the file actually had, where `ast->source` re-prints (C-130).
 (:wat::core::defn :c::kind [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::String
   (rd/kind (:c::Prog/src pg) a))
+;; the node's kind as a TAG rather than a String (F-174, C-201). Every comparison this replaces
+;; was a call into `str_eq`; this one is a machine word compare.
+(:wat::core::defn :c::kindv [a <- :wat::core::i64 pg <- :c::Prog] -> :rd::Kind
+  (rd/kindv (:c::Prog/src pg) a))
 (:wat::core::defn :c::text [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::String
   (rd/text (:c::Prog/src pg) a))
 (:wat::core::defn :c::kidsof [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
@@ -688,11 +692,11 @@
 (:wat::core::defn :c::nregs [] -> :wat::core::i64 4)
 
 (:wat::core::defn :c::reg-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "symbol") -1
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.Symbol {})) -1
     (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))))
 
 (:wat::core::defn :c::imm-cmp? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::and (:wat::core::= (:c::kind a pg) "int")
+  (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {}))
                    (:c::imm32? (:c::to-int (:c::text pg a) pg))))
 
 ;; the operand forms, when the right-hand side is one of those registers
@@ -756,7 +760,7 @@
 ;; ---------------------------------------------------------------- enums
 ;;
 ;; **wat's `kind` is an enum wearing a String, and that costs 28% of this compiler's runtime**
-;; (F-174). `:rd::Node` stores `kind` as a String, so every `(= (:c::kind a pg) "list")` is a
+;; (F-174). `:rd::Node` stores `kind` as a String, so every `(= (:c::kindv a pg) (:rd::Kind.List {}))` is a
 ;; call into `str_eq`; 18.90% of all cycles was one `jne` after a `repz cmpsb`. A `defenum`
 ;; variant is a TAG -- a small integer -- so the same comparison becomes a machine word compare
 ;; with no call at all.
@@ -953,9 +957,9 @@
     ;; `:wat::core::fn` is wat's one and only function constructor and `defn` is a macro over
     ;; `(def :name (fn ...))` (wat-rs/wat/core.wat:667), so this is not an extra shape bolted on
     ;; -- it is the general case of what every `defn` in this compiler already is.
-    (:wat::core::if (:wat::core::= (:c::kind a pg) "vector")
+    (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {}))
       (:c::ty-fn-node a pg depth)
-    (:wat::core::if (:wat::core::= (:c::kind a pg) "list")
+    (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::or (:wat::core::< (:wat::core::length ks) 3)
                           (:wat::core::not (:c::vector? (:c::text pg (:wat::core::nth ks 0)))))
@@ -1075,12 +1079,12 @@
       (:wat::core::or (:wat::core::= op "=") (:wat::core::= op "not=")))))
 
 (:wat::core::defn :c::type-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "string") "str")
-      ((:wat::core::= k "nil") "nil")
-      ((:wat::core::= k "bool") "bool")
-      ((:wat::core::= k "symbol")
+      ((:wat::core::= k (:rd::Kind.Str {})) "str")
+      ((:wat::core::= k (:rd::Kind.Nil {})) "nil")
+      ((:wat::core::= k (:rd::Kind.Bool {})) "bool")
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::let [nm (:c::text pg a)
                           ;; **the fallback is load-bearing, via the INLINER.** `:c::ty-bind`
                           ;; types a `let` binding from `:c::type-of` of its initialiser, and
@@ -1095,7 +1099,7 @@
                           ;; only then is it maybe a top-level function.
                           t (:c::lookup-ty-opt env nm (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::if (:wat::core::= t "") (:c::fn-value-ty pg nm) t)))
-      ((:wat::core::= k "list") (:c::type-of-form (:c::kidsof pg a) env pg))
+      ((:wat::core::= k (:rd::Kind.List {})) (:c::type-of-form (:c::kidsof pg a) env pg))
       (:else "i64"))))
 
 (:wat::core::defn :c::type-of-form [ks <- :c::Kids env <- :c::Env pg <- :c::Prog] -> :wat::core::String
@@ -1236,7 +1240,7 @@
   (:wat::core::if (:wat::core::> a b) a b))
 
 (:wat::core::defn :c::slots-of [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::if (:wat::core::not (:wat::core::= (:c::kind a pg) "list")) 0
+  (:wat::core::if (:wat::core::not (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))) 0
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
         (:wat::core::if (:c::let? (:c::text pg (:wat::core::nth ks 0)))
@@ -1337,10 +1341,10 @@
 
 (:wat::core::defn :c::expr [a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                             rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "int") (:c::emit o (:c::mov-rax-lit (:c::to-int (:c::text pg a) pg))))
-      ((:wat::core::= k "symbol")
+      ((:wat::core::= k (:rd::Kind.Int {})) (:c::emit o (:c::mov-rax-lit (:c::to-int (:c::text pg a) pg))))
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::let [r (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))
                           d (:c::lookup env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::cond
@@ -1372,12 +1376,12 @@
                      :rax (:c::text pg a))))))
       ;; nil is a machine zero and a bool is 0 or 1, which is already what a comparison leaves
       ;; in rax -- so both are literals, and only `println` has to know which is which
-      ((:wat::core::= k "nil") (:c::emit o (:c::mov-rax 0)))
-      ((:wat::core::= k "bool")
+      ((:wat::core::= k (:rd::Kind.Nil {})) (:c::emit o (:c::mov-rax 0)))
+      ((:wat::core::= k (:rd::Kind.Bool {}))
         (:c::emit o (:c::mov-rax
           (:wat::core::if (:wat::core::= (:c::text pg a) "true") 1 0))))
-      ((:wat::core::= k "string") (:c::str-lit a o tb pg (:c::rax)))
-      ((:wat::core::= k "list") (:c::form a o env pg rt tb slot tc))
+      ((:wat::core::= k (:rd::Kind.Str {})) (:c::str-lit a o tb pg (:c::rax)))
+      ((:wat::core::= k (:rd::Kind.List {})) (:c::form a o env pg rt tb slot tc))
       (:else (:c::fail "expression" a pg)))))
 
 (:wat::core::defn :c::form [a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
@@ -1483,7 +1487,7 @@
                 ;; the FIRST operand came from somewhere else, so it needs the same last-use
                 ;; proof `conj` does -- and a non-symbol gets it from `:c::fresh-str?`, which
                 ;; asks whether the operand was ALLOCATED here rather than borrowed
-                (:wat::core::if (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                (:wat::core::if (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                   (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0)
                   (:c::fresh-str? (:wat::core::nth ks 1) pg)))))
           ;; one instruction answers the length of a String, a Vector and a record alike,
@@ -1594,7 +1598,7 @@
                  ;; when the container is a parameter this function reads at most once on every
                  ;; path, nothing can observe a change to it afterwards -- so the runtime is
                  ;; allowed to try extending it in place instead of copying
-                 own? (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                 own? (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                         (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0))]
                 (:c::call (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
                   (:wat::core::if own? (:c::at-vconj-own rt) (:c::at-vconj rt))))))
@@ -1610,7 +1614,7 @@
                 [d (:wat::core::+ 8 (:wat::core::* 8 (:c::acc-index pg head)))
                  opnd (:wat::core::nth ks 1)
                  r (:c::reg-of opnd env pg)
-                 sf (:wat::core::if (:wat::core::= (:c::kind opnd pg) "symbol")
+                 sf (:wat::core::if (:wat::core::= (:c::kindv opnd pg) (:rd::Kind.Symbol {}))
                       (:c::scalar-field pg (:c::text pg opnd) 0) -1)]
                 ;; **a field read from a register-resident record does not want the pointer
                 ;; in rax first.** `mov %rbx,%rax ; mov 0x8(%rax),%rax` is one instruction:
@@ -1779,13 +1783,13 @@
   (:wat::core::let [ks (:c::kidsof pg a)]
     (:wat::core::cond
       ;; a leaf emits nothing
-      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kind a pg) "list"))
+      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})))
       ;; **a node with kids that is not a list is still a node with kids** -- a `let`'s binding
       ;; VECTOR is one, and keying this on "list" meant its initialisers were never looked at.
       ;; An initialiser holding a call was judged quiet, and the call then clobbered whichever
       ;; of r8-r11 the enclosing expression was holding a value in. Nothing reached that shape
       ;; until inlining turned every small call into a `let` in operand position.
-      ((:wat::core::not= (:c::kind a pg) "list") (:c::all-safe? ks 0 env pg))
+      ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:c::all-safe? ks 0 env pg))
       (:else
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
           (:wat::core::and (:c::quiet-head? h)
@@ -1811,11 +1815,11 @@
 
 ;; how many of r8..r11 evaluating this subtree will use
 (:wat::core::defn :c::scratch-need [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::if (:wat::core::and (:wat::core::not= (:c::kind a pg) "list")
+  (:wat::core::if (:wat::core::and (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
                                    (:wat::core::= (:wat::core::length (:c::kidsof pg a)) 0)) 0
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
-        (:wat::core::let [op (:wat::core::if (:wat::core::= (:c::kind a pg) "list")
+        (:wat::core::let [op (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
                                (:c::binop (:c::text pg (:wat::core::nth ks 0))) "")]
           (:wat::core::if (:wat::core::or (:wat::core::= op "") (:wat::core::= op "quot"))
             (:c::need-max ks 0 env pg 0)
@@ -1907,12 +1911,12 @@
 (:wat::core::defn :c::direct [op <- :wat::core::String a <- :wat::core::i64 env <- :c::Env
                               pg <- :c::Prog adj <- :wat::core::i64
                               fp? <- :wat::core::bool] -> :wat::core::String
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "int")
+      ((:wat::core::= k (:rd::Kind.Int {}))
         (:wat::core::let [n (:c::to-int (:c::text pg a) pg)]
           (:wat::core::if (:c::imm32? n) (:c::imm-op op n) "")))
-      ((:wat::core::= k "symbol")
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::let [r (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))
                           d (:c::lookup env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::cond
@@ -2062,7 +2066,7 @@
 ;; `mov %rbx,%rax ; push %rax ; mov %rbx,%rax` spilled rbx and reloaded rbx on the very next
 ;; instruction. C-179.
 (:wat::core::defn :c::remat? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+  (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                    (:wat::core::>= (:c::reg-of a env pg) 0)))
 
 ;; **an operand with a home of its own does not have to displace the accumulator.**
@@ -2073,13 +2077,13 @@
 ;; found three of the seventeen instructions in `strbuild`'s loop were exactly this.
 (:wat::core::defn :c::rcx-direct? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "string") true)
-    ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::>= (:c::reg-of a env pg) 0))
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Str {})) true)
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:wat::core::>= (:c::reg-of a env pg) 0))
     (:else false)))
 
 (:wat::core::defn :c::rcx-direct [a <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                   pg <- :c::Prog tb <- :wat::core::i64] -> :c::Out
-  (:wat::core::if (:wat::core::= (:c::kind a pg) "string") (:c::str-lit a o tb pg (:c::rcx))
+  (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.Str {})) (:c::str-lit a o tb pg (:c::rcx))
     (:c::emit o (:c::mov-rr (:c::reg-of a env pg) (:c::rcx)))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
@@ -2128,12 +2132,12 @@
 (:wat::core::defn :c::cmp-only [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
                                 adj <- :wat::core::i64
                                 fp? <- :wat::core::bool] -> :wat::core::String
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "int")
+      ((:wat::core::= k (:rd::Kind.Int {}))
         (:wat::core::let [n (:c::to-int (:c::text pg a) pg)]
           (:wat::core::if (:c::imm32? n) (:c::imm-only "=" n) "")))
-      ((:wat::core::= k "symbol")
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::let [r (:c::lookup-reg env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))
                           d (:c::lookup env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1))]
           (:wat::core::cond
@@ -2150,7 +2154,7 @@
 ;; and it is how this optimisation announced itself: the compiler stopped recognising its own
 ;; `defn`s the first time it compiled itself.
 (:wat::core::defn :c::cmp-cond [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") ""
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) ""
     (:wat::core::let [cks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) ""
         (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth cks 0)))]
@@ -2166,10 +2170,10 @@
 ;; `rel8` reaches -- so the encoding can be chosen when the branch is EMITTED, with no measuring
 ;; pass and no guess. `(if (< n 2) n ...)` is that shape, and so is every base case in the corpus.
 (:wat::core::defn :c::tiny-arm? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::let [k (:c::kind a pg)]
-    (:wat::core::or (:wat::core::= k "symbol")
-      (:wat::core::or (:wat::core::= k "int")
-        (:wat::core::or (:wat::core::= k "bool") (:wat::core::= k "nil"))))))
+  (:wat::core::let [k (:c::kindv a pg)]
+    (:wat::core::or (:wat::core::= k (:rd::Kind.Symbol {}))
+      (:wat::core::or (:wat::core::= k (:rd::Kind.Int {}))
+        (:wat::core::or (:wat::core::= k (:rd::Kind.Bool {})) (:wat::core::= k (:rd::Kind.Nil {})))))))
 
 ;; the short form of a conditional branch: one opcode byte, one displacement byte
 (:wat::core::defn :c::jcc-not8 [op <- :wat::core::String] -> :wat::core::String
@@ -2198,7 +2202,7 @@
 (:wat::core::defn :c::arm-free? [a <- :wat::core::i64 kept <- :wat::core::String
                                  pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:wat::core::not= kept "")
-    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+    (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                      (:wat::core::= (:c::text pg a) kept))))
 
 (:wat::core::defn :c::if-cmp [ks <- :c::Kids op <- :wat::core::String o <- :c::Out env <- :c::Env
@@ -2350,10 +2354,10 @@
 
 (:wat::core::defn :c::occ [a <- :wat::core::i64 name <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "symbol")
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
       (:wat::core::if (:wat::core::= (:c::text pg a) name) 1 0))
-    ((:wat::core::= (:c::kind a pg) "vector") (:c::occ-sum (:c::kidsof pg a) 0 name 0 pg))
-    ((:wat::core::not= (:c::kind a pg) "list") 0)
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) (:c::occ-sum (:c::kidsof pg a) 0 name 0 pg))
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) 0)
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
@@ -2424,7 +2428,7 @@
 ;; deliberately CONSERVATIVE rather than exact -- clauses are laid end to end as though every
 ;; one runs, which over-approximates what is live and can only decline the optimisation.
 (:wat::core::defn :c::eval-seq [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:wat::core::Vector :- [:wat::core::i64])
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
         (:wat::core::if (:c::cond? (:c::text pg (:wat::core::nth ks 0)))
@@ -2443,7 +2447,7 @@
 
 (:wat::core::defn :c::holds? [pg <- :c::Prog n <- :wat::core::i64 u <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::if (:wat::core::= n u) true
-    (:wat::core::if (:wat::core::not= (:c::kind n pg) "list") false
+    (:wat::core::if (:wat::core::not= (:c::kindv n pg) (:rd::Kind.List {})) false
       (:c::holds-any? pg (:c::kidsof pg n) 0 u))))
 (:wat::core::defn :c::holds-any? [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
                                   u <- :wat::core::i64] -> :wat::core::bool
@@ -2456,7 +2460,7 @@
                                   name <- :wat::core::String] -> :wat::core::bool
   (:wat::core::cond
     ((:wat::core::= n u) false)
-    ((:wat::core::not= (:c::kind n pg) "list") false)
+    ((:wat::core::not= (:c::kindv n pg) (:rd::Kind.List {})) false)
     (:else
       (:wat::core::let [ks (:c::kidsof pg n)]
         (:wat::core::if (:wat::core::< (:wat::core::length ks) 4)
@@ -2492,12 +2496,12 @@
   (:wat::core::or (:c::assoc? h) (:wat::core::or (:c::conj? h) (:c::concat? h))))
 (:wat::core::defn :c::mut-site [pg <- :c::Prog n <- :wat::core::i64 name <- :wat::core::String
                                 acc <- :wat::core::i64] -> :wat::core::i64
-  (:wat::core::if (:wat::core::not= (:c::kind n pg) "list") acc
+  (:wat::core::if (:wat::core::not= (:c::kindv n pg) (:rd::Kind.List {})) acc
     (:wat::core::let
       [ks (:c::kidsof pg n)
        hit? (:wat::core::and (:wat::core::>= (:wat::core::length ks) 2)
               (:wat::core::and (:c::write-head? (:c::text pg (:wat::core::nth ks 0)))
-                (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                   (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))))
        acc1 (:wat::core::if hit?
               (:wat::core::if (:wat::core::= acc -1) n -2) acc)]
@@ -2564,7 +2568,7 @@
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) (:wat::core::+ np 1)) -1
     (:wat::core::let [k (:wat::core::+ pj 1)]
       (:wat::core::if (:wat::core::and
-                        (:wat::core::= (:c::kind (:wat::core::nth ks k) pg) "symbol")
+                        (:wat::core::= (:c::kindv (:wat::core::nth ks k) pg) (:rd::Kind.Symbol {}))
                         (:wat::core::= (:c::text pg (:wat::core::nth ks k)) name))
         k -1))))
 
@@ -2573,10 +2577,10 @@
                                   np <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
     ;; a bare mention RETAINS -- this is the clause every unrecognised form arrives at
-    ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::not= (:c::text pg a) name))
-    ((:wat::core::= (:c::kind a pg) "vector")
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:wat::core::not= (:c::text pg a) name))
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {}))
       (:c::read-only-all? (:c::kidsof pg a) 0 -1 name self pj np pg))
-    ((:wat::core::not= (:c::kind a pg) "list") true)
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) true)
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::< (:wat::core::length ks) 2)
@@ -2584,7 +2588,7 @@
           (:wat::core::let
             [head (:c::text pg (:wat::core::nth ks 0))
              c1 (:wat::core::nth ks 1)
-             cont? (:wat::core::and (:wat::core::= (:c::kind c1 pg) "symbol")
+             cont? (:wat::core::and (:wat::core::= (:c::kindv c1 pg) (:rd::Kind.Symbol {}))
                      (:wat::core::= (:c::text pg c1) name))]
             (:wat::core::cond
               ;; `(nth name i)` -- the container is fine, the index still has to be
@@ -2643,7 +2647,7 @@
 (:wat::core::defn :c::tail-share [a <- :wat::core::i64 pv <- :c::Kids j <- :wat::core::i64
                                   env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
   (:wat::core::if
-    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+    (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
       (:wat::core::and (:wat::core::< (:wat::core::* 3 j) (:wat::core::length pv))
         (:wat::core::and
           (:wat::core::= (:c::text pg a) (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))))
@@ -2667,7 +2671,7 @@
 ;; on every path, with no early return of an argument. Everything else -- a field read, an `nth`,
 ;; a user call, an `if` -- can hand back something older than itself.
 (:wat::core::defn :c::fresh-str? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
         (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))]
@@ -2684,7 +2688,7 @@
 ;; conservative. A freshly computed value is not incremented -- the slot takes the count of 1
 ;; that the allocator already gave it.
 (:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
-  (:wat::core::if (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+  (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                     (:c::ptr-ty? (:c::type-of a env pg)))
     ;; **guarded, because a string LITERAL lives in the read-only segment.** Its count is zero
     ;; by construction, which already means "never eligible for in-place" -- so skipping the
@@ -2743,7 +2747,7 @@
                                   pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                   slot <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) (:c::fail "assoc arity" a pg)
-    (:wat::core::if (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "keyword")
+    (:wat::core::if (:wat::core::= (:c::kindv (:wat::core::nth ks 2) pg) (:rd::Kind.Keyword {}))
       (:wat::core::let
         [rt-ty (:c::rec-name-of (:c::type-of (:wat::core::nth ks 1) env pg))
          ri (:c::rec-index (:c::Prog/recs pg) rt-ty 0)
@@ -2753,7 +2757,7 @@
                 (:wat::string::subs kws 1 (:wat::string::length kws)) 0))]
         (:wat::core::if (:wat::core::< fi 0) (:c::fail "assoc field" a pg)
           (:wat::core::if
-            (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+            (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
               (:wat::core::= (:c::scalar-field pg (:c::text pg (:wat::core::nth ks 1)) 0) fi))
             ;; the value is computed while the register still holds the old field.
             ;; rax keeps the new one; the tail call writes it into the parameter
@@ -2769,7 +2773,7 @@
              o2 (:c::share (:wat::core::nth ks 3) env pg
                   (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))
              ;; the same proof `conj` requires of its container (elf/compile.wat, `:c::conj?`)
-             own? (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+             own? (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                     (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0))]
             ;; **The static test is LOAD-BEARING, not a hint** -- measured, F-142. Calling the
             ;; owning path unconditionally and letting the runtime share count decide made the
@@ -2983,7 +2987,7 @@
 ;; is WORSE than the accumulator path it replaces: measured, 28 instructions an iteration in
 ;; `triple` became 31.
 (:wat::core::defn :c::imul3? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
         (:wat::core::and (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth ks 0))) "*")
@@ -3000,7 +3004,7 @@
 
 (:wat::core::defn :c::to-dst? [a <- :wat::core::i64 dst <- :wat::core::i64 env <- :c::Env
                                pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
         (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))
@@ -3104,8 +3108,8 @@
 ;; that merely contained the word.
 (:wat::core::defn :c::has-clone? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "vector") (:c::any-clone? (:c::kidsof pg a) 0 pg))
-    ((:wat::core::not= (:c::kind a pg) "list") false)
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) (:c::any-clone? (:c::kidsof pg a) 0 pg))
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false)
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
@@ -3125,8 +3129,8 @@
 
 (:wat::core::defn :c::calls-poke? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "vector") (:c::any-poke? (:c::kidsof pg a) 0 pg))
-    ((:wat::core::not= (:c::kind a pg) "list") false)
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) (:c::any-poke? (:c::kidsof pg a) 0 pg))
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false)
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
@@ -3214,7 +3218,7 @@
                       ty (:c::type-of arg env pg)]
       (:wat::core::cond
         ;; a literal is its own EDN rendering, so it goes out as bytes with no runtime at all
-        ((:wat::core::= (:c::kind arg pg) "string") (:c::print-string arg o tb rt pg))
+        ((:wat::core::= (:c::kindv arg pg) (:rd::Kind.Str {})) (:c::print-string arg o tb rt pg))
         ((:wat::core::= ty "str") (:c::call (:c::expr arg o env pg rt tb slot (:c::no-tail)) (:c::at-str rt)))
         ;; `(println (> 3 2))` prints `true`, not `1`. The type pass is the only thing standing
         ;; between the compiler and a SILENT disagreement with the interpreter here, which is why
@@ -3298,7 +3302,7 @@
                       a (:wat::core::nth ks (:wat::core::+ j 1))]
       (:wat::core::and
         (:wat::core::or
-          (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol")
+          (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                            (:wat::core::= (:c::text pg a) name))
           (:c::none-mention? ks (:wat::core::+ j 2) name pg))
         (:c::tail-direct? pv ks (:wat::core::+ j 1) n pg)))))
@@ -3329,15 +3333,15 @@
                              bs <- :c::Bnds] -> :wat::core::bool
   (:wat::core::if (:c::ptr-ty? (:c::type-of a env pg)) false
     (:wat::core::cond
-      ((:wat::core::= (:c::kind a pg) "int") (:c::imm32? (:c::to-int (:c::text pg a) pg)))
-      ((:wat::core::= (:c::kind a pg) "symbol") (:wat::core::>= (:c::reg-of a env pg) 0))
-      ((:wat::core::not= (:c::kind a pg) "list") false)
+      ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {})) (:c::imm32? (:c::to-int (:c::text pg a) pg)))
+      ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:wat::core::>= (:c::reg-of a env pg) 0))
+      ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false)
       (:else
         (:wat::core::let [ks (:c::kidsof pg a)]
           (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
             (:wat::core::and (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth ks 0))) "-")
               (:wat::core::and (:wat::core::>= (:c::reg-of (:wat::core::nth ks 1) env pg) 0)
-                (:wat::core::and (:wat::core::= (:c::kind (:wat::core::nth ks 2) pg) "int")
+                (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 2) pg) (:rd::Kind.Int {}))
                   (:wat::core::and (:c::imm32? (:wat::core::- 0
                                      (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)))
                     ;; **the arm must not trap**, because a `lea` carries no check -- and the
@@ -3348,8 +3352,8 @@
 (:wat::core::defn :c::selv [a <- :wat::core::i64 dst <- :wat::core::i64 env <- :c::Env
                             pg <- :c::Prog] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "int") (:c::mov-ri dst (:c::to-int (:c::text pg a) pg)))
-    ((:wat::core::= (:c::kind a pg) "symbol")
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {})) (:c::mov-ri dst (:c::to-int (:c::text pg a) pg)))
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
       (:wat::core::let [r (:c::reg-of a env pg)]
         ;; already there: the `mov` would be `mov %r12,%r12`
         (:wat::core::if (:wat::core::= r dst) "" (:c::mov-rr r dst))))
@@ -3359,7 +3363,7 @@
           (:wat::core::- 0 (:c::to-int (:c::text pg (:wat::core::nth ks 2)) pg)) dst)))))
 
 (:wat::core::defn :c::sel-ok? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::not= (:wat::core::length ks) 4) false
         (:wat::core::if (:wat::core::not (:c::if? (:c::text pg (:wat::core::nth ks 0)))) false
@@ -3392,7 +3396,7 @@
 ;; BEFORE the check is safe because the check aborts -- there is no path on which the
 ;; clobbered register is read again. C-180.
 (:wat::core::defn :c::acc-op? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) false
         (:wat::core::let [op (:c::binop (:c::text pg (:wat::core::nth ks 0)))]
@@ -3593,7 +3597,7 @@
 ;; When macros land and `cond`/`and`/`or` expand to `if` before any walk runs, this collapses
 ;; to the `if` case alone -- the same semantics, staged.
 (:wat::core::defn :c::tail-nodes [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:wat::core::Vector :- [:wat::core::i64])
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
         (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
@@ -3637,7 +3641,7 @@
 ;; reading `:c::tail-nodes` for a decision that fails OPEN has to be read with that in mind.
 (:wat::core::defn :c::tail-self? [a <- :wat::core::i64 name <- :wat::core::String
                                   arity <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
         (:wat::core::let [tn (:c::tail-nodes pg a)]
@@ -3664,7 +3668,7 @@
 ;; form that reaches emitted code is well formed, and these two functions can be faithful to
 ;; the LANGUAGE instead of replicating nine different guards against input that never arrives.
 (:wat::core::defn :c::quiet-nodes [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:wat::core::Vector :- [:wat::core::i64])
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
         (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
@@ -3725,8 +3729,8 @@
                               env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
     (:wat::core::cond
-      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kind a pg) "list"))
-      ((:wat::core::not= (:c::kind a pg) "list") (:c::all-safe? ks 0 env pg))
+      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})))
+      ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:c::all-safe? ks 0 env pg))
       (:else
         ;; **one rule, not five.** Whatever carries this form's value gets the same question
         ;; with its tail position intact; everything else it evaluates has to be quiet. The
@@ -3801,10 +3805,10 @@
 ;; a literal is itself, a name is what the branch proved, and arithmetic composes.
 (:wat::core::defn :c::bnd-expr [a <- :wat::core::i64 pg <- :c::Prog bs <- :c::Bnds] -> :c::Bnd
   (:wat::core::cond
-    ((:wat::core::= (:c::kind a pg) "int")
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {}))
       (:wat::core::let [n (:c::to-int (:c::text pg a) pg)] (:c::bnd-at n n)))
-    ((:wat::core::= (:c::kind a pg) "symbol") (:c::bnd-for bs (:c::text pg a)))
-    ((:wat::core::not= (:c::kind a pg) "list") (:c::bnd-any))
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:c::bnd-for bs (:c::text pg a)))
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:c::bnd-any))
     (:else
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::bnd-any)
@@ -3851,8 +3855,8 @@
                                 pg <- :c::Prog bs <- :c::Bnds] -> :c::Bnds
   (:wat::core::if (:wat::core::not= (:wat::core::length cks) 3) bs
     (:wat::core::let [x (:wat::core::nth cks 1) k (:wat::core::nth cks 2)]
-      (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kind x pg) "symbol")
-                                      (:wat::core::not= (:c::kind k pg) "int")) bs
+      (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kindv x pg) (:rd::Kind.Symbol {}))
+                                      (:wat::core::not= (:c::kindv k pg) (:rd::Kind.Int {}))) bs
         (:wat::core::let [n (:c::to-int (:c::text pg k) pg)
                           was (:c::bnd-for bs (:c::text pg x))
                           lo (:c::imax (:c::Bnd/lo was) (:c::cmp-lo op n then?))
@@ -3884,7 +3888,7 @@
 ;; condition that does not hold returns top and the checks stay: every way of failing to
 ;; recognise the shape fails toward keeping the check.
 (:wat::core::defn :c::lit-arg [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::= (:c::kind a pg) "int"))
+  (:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {})))
 
 ;; does every call to `name` inside node `a` pass a literal in `[0,..]` divisible by `K` at
 ;; position `j`? Returns the largest such literal, or -1 the moment one does not qualify.
@@ -3892,7 +3896,7 @@
                                  j <- :wat::core::i64 k <- :wat::core::i64
                                  best <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::< best 0) -1
-    (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+    (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
       (:c::entry-kids (:c::kidsof pg a) 0 name j k best pg)
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) best
@@ -3931,7 +3935,7 @@
                                p <- :wat::core::String j <- :wat::core::i64
                                k <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::= k 0) 0
-    (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+    (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
       (:c::step-kids (:c::kidsof pg a) 0 name p j k pg)
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) k
@@ -3939,7 +3943,7 @@
             (:c::step-kids ks 0 name p j k pg)
             (:wat::core::if (:wat::core::<= (:wat::core::length ks) (:wat::core::+ j 1)) 0
               (:wat::core::let [arg (:wat::core::nth ks (:wat::core::+ j 1))]
-                (:wat::core::if (:wat::core::not= (:c::kind arg pg) "list") 0
+                (:wat::core::if (:wat::core::not= (:c::kindv arg pg) (:rd::Kind.List {})) 0
                   (:wat::core::let [aks (:c::kidsof pg arg)]
                     (:wat::core::if (:wat::core::not= (:wat::core::length aks) 3) 0
                       (:wat::core::if
@@ -3948,7 +3952,7 @@
                             (:wat::core::= (:c::binop (:c::text pg (:wat::core::nth aks 0))) "-")
                             (:wat::core::and
                               (:wat::core::= (:c::text pg (:wat::core::nth aks 1)) p)
-                              (:wat::core::= (:c::kind (:wat::core::nth aks 2) pg) "int")))) 0
+                              (:wat::core::= (:c::kindv (:wat::core::nth aks 2) pg) (:rd::Kind.Int {}))))) 0
                         (:wat::core::let [d (:c::to-int (:c::text pg (:wat::core::nth aks 2)) pg)]
                           (:wat::core::if (:wat::core::or (:wat::core::<= d 0)
                                             (:wat::core::and (:wat::core::not= k -1)
@@ -3967,12 +3971,12 @@
                                    p <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:wat::core::= start (:wat::core::- (:wat::core::length ks) 1))
     (:wat::core::let [a (:wat::core::nth ks start)]
-      (:wat::core::and (:wat::core::= (:c::kind a pg) "list")
+      (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
         (:wat::core::let [bs (:c::kidsof pg a)]
           (:wat::core::and (:wat::core::= (:wat::core::length bs) 4)
             (:wat::core::and (:c::if? (:c::text pg (:wat::core::nth bs 0)))
               (:wat::core::let [c (:wat::core::nth bs 1)]
-                (:wat::core::and (:wat::core::= (:c::kind c pg) "list")
+                (:wat::core::and (:wat::core::= (:c::kindv c pg) (:rd::Kind.List {}))
                   (:wat::core::let [cks (:c::kidsof pg c)]
                     (:wat::core::and (:wat::core::= (:wat::core::length cks) 3)
                       (:wat::core::and
@@ -3980,7 +3984,7 @@
                         (:wat::core::and
                           (:wat::core::= (:c::text pg (:wat::core::nth cks 1)) p)
                           (:wat::core::and
-                            (:wat::core::= (:c::kind (:wat::core::nth cks 2) pg) "int")
+                            (:wat::core::= (:c::kindv (:wat::core::nth cks 2) pg) (:rd::Kind.Int {}))
                             (:wat::core::= (:c::to-int (:c::text pg (:wat::core::nth cks 2)) pg)
                                            0)))))))))))))))
 
@@ -4065,8 +4069,8 @@
 
 ;; a value the early return can produce with nothing but the incoming stack
 (:wat::core::defn :c::wrap-val? [a <- :wat::core::i64 pv <- :c::Kids pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::or (:wat::core::= (:c::kind a pg) "int")
-    (:wat::core::and (:wat::core::= (:c::kind a pg) "symbol") (:c::param-of? a pv 0 pg))))
+  (:wat::core::or (:wat::core::= (:c::kindv a pg) (:rd::Kind.Int {}))
+    (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:c::param-of? a pv 0 pg))))
 
 ;; the whole body is one `if`, its test is a machine-word comparison, and its THEN arm is a value
 ;; the early return can produce. `env0` is the parameters addressed from the frame, which is what
@@ -4075,7 +4079,7 @@
                                   env0 <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:wat::core::= start (:wat::core::- (:wat::core::length ks) 1))
     (:wat::core::let [a (:wat::core::nth ks start)]
-      (:wat::core::and (:wat::core::= (:c::kind a pg) "list")
+      (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
         (:wat::core::let [bs (:c::kidsof pg a)]
           (:wat::core::and (:wat::core::= (:wat::core::length bs) 4)
             (:wat::core::and (:c::if? (:c::text pg (:wat::core::nth bs 0)))
@@ -4155,15 +4159,15 @@
 (:wat::core::defn :c::use-walk [pg <- :c::Prog a <- :wat::core::i64 name <- :wat::core::String
                                 fname <- :wat::core::String rname <- :wat::core::String
                                 in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "symbol")
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::if (:wat::core::= (:c::text pg a) name)
           (:wat::core::if as-arg (:c::use-none) (:c::use-other))
           (:c::use-none)))
-      ((:wat::core::= k "vector")
+      ((:wat::core::= k (:rd::Kind.Vector {}))
         (:c::use-fold pg (:c::kidsof pg a) 0 name fname rname false false))
-      ((:wat::core::not= k "list") (:c::use-none))
+      ((:wat::core::not= k (:rd::Kind.List {})) (:c::use-none))
       (:else (:c::use-form pg (:c::kidsof pg a) name fname rname in-tail as-arg)))))
 
 (:wat::core::defn :c::use-fold [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
@@ -4208,7 +4212,7 @@
 (:wat::core::defn :c::use-clause [pg <- :c::Prog a <- :wat::core::i64 name <- :wat::core::String
                                   fname <- :wat::core::String rname <- :wat::core::String
                                   in-tail <- :wat::core::bool as-arg <- :wat::core::bool] -> :c::Use
-  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list")
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
     (:c::use-walk pg a name fname rname false false)
     (:wat::core::let [cks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::< (:wat::core::length cks) 1) (:c::use-none)
@@ -4229,7 +4233,7 @@
   (:wat::core::let [ri (:c::rec-index (:c::Prog/recs pg) rname 0)
                     tx (:c::text pg kw)]
     (:wat::core::if (:wat::core::or (:wat::core::< ri 0)
-                      (:wat::core::not= (:c::kind kw pg) "keyword")) -1
+                      (:wat::core::not= (:c::kindv kw pg) (:rd::Kind.Keyword {}))) -1
       (:c::field-index (:c::Rec/fields (:wat::core::nth (:c::Prog/recs pg) ri))
         (:wat::string::subs tx 1 (:wat::string::length tx)) 0))))
 
@@ -4242,7 +4246,7 @@
         ;; `(:R/f name)` -- the operand is the parameter, so it is not a bare mention
         ((:wat::core::and (:wat::core::>= (:c::acc-index pg head) 0)
                           (:wat::core::= (:wat::core::length ks) 2)
-                          (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                          (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                           (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))
           (:wat::core::let [at (:c::slash-at head (:wat::core::- (:wat::string::length head) 1))]
             (:wat::core::if (:wat::core::or (:wat::core::< at 0)
@@ -4253,7 +4257,7 @@
         ;; anywhere else the result is a record, and the register no longer holds one.
         ((:wat::core::and (:c::assoc? head)
                           (:wat::core::= (:wat::core::length ks) 4)
-                          (:wat::core::= (:c::kind (:wat::core::nth ks 1) pg) "symbol")
+                          (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                           (:wat::core::= (:c::text pg (:wat::core::nth ks 1)) name))
           (:wat::core::if (:wat::core::not as-arg) (:c::use-other)
             (:wat::core::let [fi (:c::kw-field pg rname (:wat::core::nth ks 2))]
@@ -4529,7 +4533,7 @@
     (:wat::core::let
       [t (:wat::core::nth tops i)
        ks (:c::kidsof pg t)
-       head (:wat::core::if (:wat::core::= (:c::kind t pg) "list")
+       head (:wat::core::if (:wat::core::= (:c::kindv t pg) (:rd::Kind.List {}))
               (:c::text pg (:wat::core::nth ks 0)) "")]
       (:wat::core::cond
         ;; `load-file!` is a compile-time include: read that file, collect ITS top level, and
@@ -4718,14 +4722,19 @@
 (:wat::core::defrecord :c::NodeR [pg <- :c::Prog  node <- :wat::core::i64])
 (:wat::core::defrecord :c::KidsR [pg <- :c::Prog  kids <- :rd::Kids  same <- :wat::core::bool])
 
-(:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :wat::core::String text <- :wat::core::String
+(:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :rd::Kind text <- :wat::core::String
                               kids <- :rd::Kids] -> :c::NodeR
   (:wat::core::let [st (:c::Prog/src pg)]
     (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
                :pg (:wat::core::assoc pg :src
                      (:wat::core::assoc st :arena
                        (:wat::core::conj (:rd::St/arena st)
-                         (:rd::Node :kind kind :text text :kids kids)))))))
+                         ;; **`:k` must be set here too, and forgetting it was silent.** The
+                         ;; inliner builds nodes, and a Node without `:k` reads back as tag 0
+                         ;; -- `:List` -- so `:c::kindv` lied about every inlined node. The
+                         ;; bootstrap stayed GREEN and the fixpoint byte-identical; only
+                         ;; `tools/emitted.sh` saw it, as 18 of 68 programs moving.
+                         (:rd::Node :k kind :text text :kids kids)))))))
 
 ;; **how many parameters a user function declares, or -1 if there is no such function.**
 ;; `:c::inl-ok?` has always compared this against the call's argument count before inlining;
@@ -4829,7 +4838,7 @@
                                  d <- :wat::core::i64 acc <- :rd::Kids] -> :c::KidsR
   (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
     (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks (:wat::core::+ i 1)) d false)
-                      t (:c::mknode (:c::NodeR/pg r) "symbol" (:c::inl-tmp i)
+                      t (:c::mknode (:c::NodeR/pg r) (:rd::Kind.Symbol {}) (:c::inl-tmp i)
                           (:wat::core::Vector :- [:wat::core::i64]))]
       (:c::inl-temps (:c::NodeR/pg t) ks (:wat::core::+ i 1) n d
         (:wat::core::conj (:wat::core::conj acc (:c::NodeR/node t)) (:c::NodeR/node r))))))
@@ -4837,7 +4846,7 @@
 (:wat::core::defn :c::inl-params [pg <- :c::Prog pv <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
                                   acc <- :rd::Kids] -> :c::KidsR
   (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
-    (:wat::core::let [t (:c::mknode pg "symbol" (:c::inl-tmp i)
+    (:wat::core::let [t (:c::mknode pg (:rd::Kind.Symbol {}) (:c::inl-tmp i)
                           (:wat::core::Vector :- [:wat::core::i64]))]
       (:c::inl-params (:c::NodeR/pg t) pv (:wat::core::+ i 1) n
         (:wat::core::conj (:wat::core::conj acc (:wat::core::nth pv (:wat::core::* i 3)))
@@ -4884,13 +4893,13 @@
      fks (:c::kidsof pg nd)
      pv (:c::kidsof pg (:wat::core::nth fks 2))
      br (:c::inl-binds pg pv ks 0 d (:wat::core::Vector :- [:wat::core::i64]))
-     vr (:c::mknode (:c::KidsR/pg br) "vector" "[]" (:c::KidsR/kids br))
+     vr (:c::mknode (:c::KidsR/pg br) (:rd::Kind.Vector {}) "[]" (:c::KidsR/kids br))
      bo (:c::inl-body (:c::NodeR/pg vr) fks (:c::body-start fks 3 (:c::NodeR/pg vr))
           (:c::imin (:wat::core::- d 1) (:c::inl-depth-for pg head))
           (:wat::core::Vector :- [:wat::core::i64]))
-     lr (:c::mknode (:c::KidsR/pg bo) "symbol" ":wat::core::let"
+     lr (:c::mknode (:c::KidsR/pg bo) (:rd::Kind.Symbol {}) ":wat::core::let"
           (:wat::core::Vector :- [:wat::core::i64]))]
-    (:c::mknode (:c::NodeR/pg lr) "list" (:c::text pg a)
+    (:c::mknode (:c::NodeR/pg lr) (:rd::Kind.List {}) (:c::text pg a)
       (:c::inl-cons (:c::NodeR/node lr) (:c::NodeR/node vr) (:c::KidsR/kids bo) 0
         (:wat::core::Vector :- [:wat::core::i64])))))
 
@@ -4906,7 +4915,7 @@
 (:wat::core::defn :c::inl-node [pg <- :c::Prog a <- :wat::core::i64 d <- :wat::core::i64
                                 tail? <- :wat::core::bool] -> :c::NodeR
   (:wat::core::let [ks (:c::kidsof pg a)]
-    (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kind a pg) "list")
+    (:wat::core::if (:wat::core::or (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
                                     (:wat::core::= (:wat::core::length ks) 0))
       (:c::NodeR :pg pg :node a)
       (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))]
@@ -4920,13 +4929,13 @@
                                    (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
                                                      (:wat::core::nth ks 0)) true)]
               (:wat::core::if (:c::KidsR/same cr) (:c::NodeR :pg (:c::KidsR/pg cr) :node a)
-                (:c::mknode (:c::KidsR/pg cr) "list" (:c::text pg a) (:c::KidsR/kids cr))))
+                (:c::mknode (:c::KidsR/pg cr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids cr))))
           (:wat::core::let
             [kr (:c::inl-kids pg ks 0 d
                   (:wat::core::and tail? (:c::tail-through? head))
                   (:wat::core::Vector :- [:wat::core::i64]) true)]
             (:wat::core::if (:c::KidsR/same kr) (:c::NodeR :pg (:c::KidsR/pg kr) :node a)
-              (:c::mknode (:c::KidsR/pg kr) "list" (:c::text pg a) (:c::KidsR/kids kr))))))))))
+              (:c::mknode (:c::KidsR/pg kr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids kr))))))))))
 
 ;; each clause is `(test body...)`: the test is never in tail position and every body form is in
 ;; whatever position the `cond` itself was. elf/src/logic.wat's `gcd` is a tail call in one.
@@ -4949,7 +4958,7 @@
                                                (:c::NodeR/node r))
                              (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks 0)))]
         (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node a)
-          (:c::mknode (:c::KidsR/pg br) (:c::kind a pg) (:c::text pg a) (:c::KidsR/kids br)))))))
+          (:c::mknode (:c::KidsR/pg br) (:c::kindv a pg) (:c::text pg a) (:c::KidsR/kids br)))))))
 
 ;; every function's `defn` rewritten, with the Fn pointing at the new one
 (:wat::core::defn :c::inl-fns [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::FnV] -> :c::Prog
@@ -4962,7 +4971,7 @@
          br (:c::inl-body-tail pg ks start (:c::inl-depth)
               (:wat::core::Vector :- [:wat::core::i64]) true)
          nr (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node (:c::Fn/node f))
-              (:c::mknode (:c::KidsR/pg br) "list" (:c::text pg (:c::Fn/node f))
+              (:c::mknode (:c::KidsR/pg br) (:rd::Kind.List {}) (:c::text pg (:c::Fn/node f))
                 (:c::inl-head ks start 0 (:c::KidsR/kids br)
                   (:wat::core::Vector :- [:wat::core::i64]))))]
         (:c::inl-fns (:c::NodeR/pg nr) (:wat::core::+ i 1)
@@ -5088,14 +5097,14 @@
     (:else 0)))
 
 (:wat::core::defn :c::lvl-node [pg <- :c::Prog a <- :wat::core::i64 hs <- :wat::core::bool] -> :wat::core::i64
-  (:wat::core::let [k (:c::kind a pg)]
+  (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
-      ((:wat::core::= k "string") 10)
+      ((:wat::core::= k (:rd::Kind.Str {})) 10)
       ;; **both spellings**: `wat.core/assoc` reads as a symbol and `:wat::core::assoc` as a
       ;; KEYWORD, and reading only symbols skipped every name this compiler writes about itself
-      ((:wat::core::= k "symbol") (:c::lvl-head (:c::text pg a) hs pg))
-      ((:wat::core::= k "keyword") (:c::lvl-head (:c::text pg a) hs pg))
-      ((:wat::core::= k "bool") 4)
+      ((:wat::core::= k (:rd::Kind.Symbol {})) (:c::lvl-head (:c::text pg a) hs pg))
+      ((:wat::core::= k (:rd::Kind.Keyword {})) (:c::lvl-head (:c::text pg a) hs pg))
+      ((:wat::core::= k (:rd::Kind.Bool {})) 4)
       (:else 0))))
 
 (:wat::core::defn :c::lvl-scan [pg <- :c::Prog i <- :wat::core::i64 n <- :wat::core::i64

@@ -14088,3 +14088,63 @@ Whoever does this work should expect to DELETE them, not extend them. Long term 
 changes are worth their disruption. Moves the needle hard -> this is worth more, since it
 touches three routines instead of one. Barely moves -> the 105 head predicates are the real
 cost and both representation projects drop down the list.
+
+### C-201: `kind` is an enum -- and the speed case it was built on did NOT hold
+
+**Clean.** `:rd::Node`'s `kind` was a String from a closed set of nine. It is now `:rd::Kind`,
+a `defenum` (C-200), and all 90 comparison sites in `compile.wat` compare tags.
+
+**The prediction failed, and that is the headline.** F-174 measured 27.7% of a self-compile in
+`rt_str_eq` and named `kind` as the first thing to convert. Converting all 90 sites bought:
+
+| | before | after |
+|---|---|---|
+| instructions | 1,916,765,5xx | 1,912,154,5xx (**-0.24%**) |
+| binary | 240,462 B | **237,910 B** (-2,552) |
+| `rt_str_eq` share | ~27.7% | ~24.5% |
+
+**Why**: `rt_str_eq` short-circuits on length, and kind strings are SHORT and mostly differ in
+length -- `"int"`(3) against `"list"`(4) against `"symbol"`(6) resolves in about four
+instructions and never enters `repz cmpsb`. Head names are LONG and COLLIDE in length --
+`"wat.core/if"` and `"wat.core/or"` are both 11 -- so the byte loop actually runs. **The cost
+is the 105 head predicates, not the 89 kind comparisons**, which is the branch F-175's last
+paragraph named in advance.
+
+**Read the number narrowly.** It says `rt_str_eq`'s length short-circuit already made
+short-string comparison cheap. It does NOT say representation work is not worth doing, and it
+does not transfer to the head predicates or to F-175's type strings, where the strings are long
+and collide.
+
+**Kept anyway, on grounds the speed claim was obscuring:**
+- a typo was SILENTLY FALSE before -- `(= k "symbl")` compiles and is simply never true, which
+  is F-168's fail-open polarity in miniature. `(:rd::Kind.Symbl {})` is a compile error.
+- the kind set now has ONE declaration. It used to be implicit across `rd/classify`, `rd/form`
+  and 90 comparison sites, so adding a tenth kind meant finding all of them -- F-169's
+  duplication in another costume.
+- `match` will be exhaustiveness-checked on `:rd::Kind`; a `cond` over strings never can be.
+
+**The additive route caused a silent bug, and only ONE oracle saw it.** Keeping `kind` (String)
+beside `k` (tag) meant two fields that had to agree, and `:c::mknode` set only one -- so every
+node the INLINER built read back as tag 0, `:List`. Bootstrap was GREEN and the fixpoint
+BYTE-IDENTICAL. `tools/emitted.sh` caught it as 18 of 68 programs moving. **A compiler that
+reproduces itself byte for byte can still be quietly wrong about everything it compiles.**
+The duplicate is now gone: the tag is the only stored form and `rd/kind`'s String is derived.
+
+**Three oracles, three disjoint blind spots**, all exercised in this one change:
+
+| oracle | answers | missed here |
+|---|---|---|
+| `tools/variant.sh` | does the compiled compiler run? | a type error -- it seeds from the native compiler and never type-checks |
+| `tools/bootstrap.sh` | does it reproduce itself? | the `mknode` bug -- green and byte-identical throughout |
+| `tools/emitted.sh` | did the bytes move? | cannot see type errors |
+
+`variant.sh` was green on a variant whose stage 0 fails: **`:String` is a retired bare
+primitive** (arc 109 slice 1c) and cannot be an enum variant name, which only the interpreter's
+type check knows. Renamed `:Str`. That is why `variant.sh`'s own header says it is a bisecting
+tool and nothing lands on its word alone -- a two-second loop used eight times in a row quietly
+becomes the thing you trust.
+
+**Next is the head predicates**, and the fix is a DIFFERENT shape: `kind` could be an enum
+because the reader PRODUCES a closed set, while head names are source text the reader cannot
+classify without knowing the compiler's form vocabulary. Either a head-code field the reader
+fills from a table, or a per-node cache. Measure a cheap version first.
