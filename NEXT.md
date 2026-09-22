@@ -7,15 +7,58 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-21, HEAD 21ccaf7)
+## elf/ — the live queue (2026-09-22, HEAD 06a8497)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `21ccaf7`**. `git log --oneline -1` must print that
+**Freshness probe:** written against **HEAD `06a8497`**. `git log --oneline -1` must print that
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
+
+### NEXT STRIKE — the register ABI (designed, not started)
+
+**Why**: `tools/vs-c.sh` section 12 has us at 79 ms against `gcc -O2` 26 ms on enums. The
+disassembly splits our ~21 extra instructions per iteration into ~6 SAFETY (overflow trap,
+refcount share, tier discriminator — paid on purpose) and ~12 WASTE. The largest waste item is
+stack argument passing: we `push` each argument AND the callee loads it back from `+16+8k`, so
+every argument costs two memory ops plus an `add $N,%rsp`. C pays neither. See F-179, C-205.
+
+**Design, grounded this session — read these before writing code:**
+- the register numbering is the compiler's OWN, not hardware (`elf/lib/x86.wat:196-210`):
+  `rbx`=0 `r12`=1 `r13`=2 `rbp`=3 are the callee-saved parameter registers; `r8`-`r11`=4-7 are
+  scratch; **`rdx`=10 `rsi`=11 `rdi`=12 are free** and are the argument registers to use.
+- `:c::param-env` (`:disp (+ 16 (* 8 (- (- n 1) i)))`) is where a parameter's home is decided.
+  `Bind/disp` is read in exactly ONE place, the symbol case of `:c::expr`.
+- 23 sites mention `push-args` / `call-user` / `tail-store` / `tail-direct`.
+
+**The convention must be per-FUNCTION, not per-call-site** — callers compile independently of
+callees. A function with <= 3 parameters takes them in `rdi`/`rsi`/`rdx`.
+
+**Two caller paths**, and the predicate for the fast one already exists and is already trusted:
+- every argument `:c::scratch-safe?` (no call in any of them) -> evaluate DIRECTLY into the
+  argument registers, no stack traffic at all;
+- otherwise -> push as today, then pop into the registers before the `call`. Roughly neutral:
+  adds pops, removes the callee's loads.
+
+**Expected**: `user/pick s i` in `elf/bench/optm.wat` is two call-free symbol arguments, so it
+takes the fast path — 2 pushes + `add $16,%rsp` + 2 callee loads gone, ~5 instructions an
+iteration.
+
+**Why this and not the share elision.** The share elision looked free and is not. The mechanism
+is confirmed — `[ptr-8]` is the ownership marker (`elf/lib/runtime.wat:630`,
+`movabs r9, arm-own ; cmp [rax-8], r9`), `:c::share` increments it past `arm-own`, and a SECOND
+increment is provably dead because the only question ever asked is `== arm-own`. But knowing the
+first share happened ON THIS PATH needs a shared-names set threaded through `:c::Out` and
+invalidated wherever control could have arrived another way — and the two shares in the
+benchmark have a `jo` trap branch between them. Eliding a NEEDED share lets a still-referenced
+value be mutated in place: silent corruption, the same fail-open shape as F-168, F-170 and the
+refused alias in F-178. The ABI's risk is SCOPE; the elision's is unsoundness. Take scope.
+
+**Also open, smaller**: F-178's tier-1 alias binding (3 instructions an iteration) is blocked on
+diagnosing why reading the binding at a different stack depth, with an operand already pushed,
+returns the wrong value. Do not re-attempt it without that diagnosis.
 
 **THE TOOLCHAIN MOVED.** `elf/` now measures against wat-rs branch **`the-little-wat`** (commit
 `7dee55858`), not `main` — it carries clj's seven bitwise ops, which C-171 needed and which do not
