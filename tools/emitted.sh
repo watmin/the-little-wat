@@ -30,10 +30,24 @@ case "${1:-check}" in
     n=$(wc -l < $M); d=0
     while read -r want f; do
       got=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-      [ "$got" = "$want" ] || { echo "   MOVED: $f"; d=$((d+1)); }
+      if [ -z "$got" ]; then echo "   GONE:  $f"; d=$((d+1))
+      elif [ "$got" != "$want" ]; then echo "   MOVED: $f"; d=$((d+1)); fi
     done < $M
-    if [ $d -eq 0 ]; then echo "emitted: ok -- all $n programs byte-identical to the manifest"
-    else echo "emitted: $d of $n programs changed"; fi
+    # **A program the manifest has never heard of used to be invisible here**, which is the
+    # same class of hole as the seed.elf false positive above: a tool whose whole job is to be
+    # believed was silently not checking two of the programs it had just built. NEW is not a
+    # failure -- adding a program is legitimate -- but it has to be SAID, so that "ok" always
+    # means "everything on disk was compared", never "everything I happened to know about".
+    new=0
+    for f in $(progs); do
+      grep -q "  $f\$" $M || { echo "   NEW:   $f  (not in the manifest -- run 'save' to adopt)"; new=$((new+1)); }
+    done
+    if [ $d -eq 0 ] && [ $new -eq 0 ]; then
+      echo "emitted: ok -- all $n programs byte-identical to the manifest"
+    elif [ $d -eq 0 ]; then
+      echo "emitted: $n byte-identical, $new not yet in the manifest"
+    else echo "emitted: $d of $n programs changed${new:+, $new new}"; fi
+    [ $d -eq 0 ] || exit 1
     ;;
   *) echo "usage: tools/emitted.sh [save|check]"; exit 2 ;;
 esac

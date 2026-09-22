@@ -871,6 +871,12 @@
 
 (:wat::core::defn :c::ty-node [a <- :wat::core::i64 pg <- :c::Prog depth <- :wat::core::i64] -> :wat::core::String
   (:wat::core::if (:wat::core::<= depth 0) "i64"
+    ;; `[ArgType... :-> RetType]` -- a FUNCTION type, and a vector node rather than a list.
+    ;; `:wat::core::fn` is wat's one and only function constructor and `defn` is a macro over
+    ;; `(def :name (fn ...))` (wat-rs/wat/core.wat:667), so this is not an extra shape bolted on
+    ;; -- it is the general case of what every `defn` in this compiler already is.
+    (:wat::core::if (:wat::core::= (:c::kind a pg) "vector")
+      (:c::ty-fn-node a pg depth)
     (:wat::core::if (:wat::core::= (:c::kind a pg) "list")
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::if (:wat::core::or (:wat::core::< (:wat::core::length ks) 3)
@@ -899,7 +905,77 @@
           ((:c::is? src "wat.type/i64" ":wat::core::i64") "i64")
           (:else
             (:wat::kernel::assertion-failed!
-              :message (:wat::string::concat "compile: unknown type: " src))))))))
+              :message (:wat::string::concat "compile: unknown type: " src)))))))))
+
+;; ---------------------------------------------------------------- function types
+;;
+;; `[A B :-> R]` is encoded `"fn:2:R"`. The arity is carried because an indirect call has no
+;; declaration to check against -- without it, `(f 1 2)` on a `[i64 :-> i64]` would compile and
+;; answer nonsense. **There is no `index-of` in the subset this compiler can compile** (C-131),
+;; and `:wat::string::to-i64` answers an Option, which needs `match` -- so the separator scan
+;; and the digit fold are by hand, exactly as `:c::digit-val` already is.
+;; like `:c::lookup-ty`, but "" for a name the environment does not hold -- which
+;; `:c::lookup-ty` cannot say, since it answers "i64" for both "absent" and "an i64".
+(:wat::core::defn :c::lookup-ty-opt [env <- :c::Env name <- :wat::core::String
+                                     i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::< i 0) "")
+    ((:wat::core::= (:c::Bind/name (:wat::core::nth env i)) name)
+      (:c::Bind/ty (:wat::core::nth env i)))
+    (:else (:c::lookup-ty-opt env name (:wat::core::- i 1)))))
+
+;; the type of a top-level function used as a value: `[A B :-> R]` as `"fn:2:R"`
+(:wat::core::defn :c::fn-value-ty [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [fi (:c::fn-of pg name 0)]
+    (:wat::core::if (:wat::core::< fi 0) "i64"
+      (:wat::string::concat "fn:" (:wat::string::concat
+        (:wat::i64::to-string (:c::arity-at pg fi))
+        (:wat::string::concat ":" (:c::fn-ret pg name 0)))))))
+
+(:wat::core::defn :c::fn-ty? [t <- :wat::core::String] -> :wat::core::bool
+  (:wat::string::starts-with? t "fn:"))
+
+(:wat::core::defn :c::colon-from [t <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::string::length t)) -1)
+    ((:wat::core::= (:wat::string::subs t i (:wat::core::+ i 1)) ":") i)
+    (:else (:c::colon-from t (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::digits-int [t <- :wat::core::String i <- :wat::core::i64 stop <- :wat::core::i64
+                                  acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i stop) acc
+    (:c::digits-int t (:wat::core::+ i 1) stop
+      (:wat::core::+ (:wat::core::* acc 10)
+                     (:c::digit-val (:wat::string::subs t i (:wat::core::+ i 1)))))))
+
+(:wat::core::defn :c::fn-arity [t <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::let [c (:c::colon-from t 3)]
+    (:wat::core::if (:wat::core::< c 0) -1 (:c::digits-int t 3 c 0))))
+
+(:wat::core::defn :c::fn-ret-ty [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [c (:c::colon-from t 3)]
+    (:wat::core::if (:wat::core::< c 0) "i64"
+      (:wat::string::subs t (:wat::core::+ c 1) (:wat::string::length t)))))
+
+;; the `:->` marker splits arguments from the single return type; its index IS the arity
+(:wat::core::defn :c::arrow-at [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length ks)) -1)
+    ((:wat::core::= (:c::text pg (:wat::core::nth ks i)) ":->") i)
+    (:else (:c::arrow-at pg ks (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::ty-fn-node [a <- :wat::core::i64 pg <- :c::Prog depth <- :wat::core::i64]
+    -> :wat::core::String
+  (:wat::core::let [ks (:c::kidsof pg a)
+                    m (:c::arrow-at pg ks 0)]
+    (:wat::core::if (:wat::core::< m 0)
+      (:wat::kernel::assertion-failed!
+        :message "compile: a function type needs a `:->` arrow: [ArgType... :-> RetType]")
+      (:wat::string::concat "fn:" (:wat::string::concat (:wat::i64::to-string m)
+        (:wat::string::concat ":"
+          (:wat::core::if (:wat::core::>= (:wat::core::+ m 1) (:wat::core::length ks)) "nil"
+            (:c::ty-node (:wat::core::nth ks (:wat::core::+ m 1)) pg
+                         (:wat::core::- depth 1)))))))))
 
 ;; the element type of a vector type, and the declared type of a record's field
 (:wat::core::defn :c::elem-ty [t <- :wat::core::String] -> :wat::core::String
@@ -922,8 +998,21 @@
       ((:wat::core::= k "string") "str")
       ((:wat::core::= k "nil") "nil")
       ((:wat::core::= k "bool") "bool")
-      ((:wat::core::= k "symbol") (:c::lookup-ty env (:c::text pg a)
-                                    (:wat::core::- (:wat::core::length env) 1)))
+      ((:wat::core::= k "symbol")
+        (:wat::core::let [nm (:c::text pg a)
+                          ;; **the fallback is load-bearing, via the INLINER.** `:c::ty-bind`
+                          ;; types a `let` binding from `:c::type-of` of its initialiser, and
+                          ;; `:c::inl-call` rewrites `(user/go user/add)` into
+                          ;; `(let [op user/add] (op 6 7))`. Without a function type for the
+                          ;; bare name, `op` binds as "i64" and the call refuses -- measured,
+                          ;; by taking the fallback out and watching fnref.wat stop compiling.
+                          ;;
+                          ;; **One scan, not two.** Asking `bound?` and then `lookup-ty` walked
+                          ;; the environment twice for every symbol in every program, and this
+                          ;; is a hot path. "" means the environment does not hold the name;
+                          ;; only then is it maybe a top-level function.
+                          t (:c::lookup-ty-opt env nm (:wat::core::- (:wat::core::length env) 1))]
+          (:wat::core::if (:wat::core::= t "") (:c::fn-value-ty pg nm) t)))
       ((:wat::core::= k "list") (:c::type-of-form (:c::kidsof pg a) env pg))
       (:else "i64"))))
 
@@ -972,7 +1061,13 @@
         ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) head 0) 0)
           (:wat::string::concat "rec:" head))
         ((:wat::core::>= (:c::acc-index pg head) 0) (:c::acc-ty pg head))
-        (:else "i64")))))
+        ;; calling a name that holds a function: the fn type carries what it answers. In the
+        ;; `:else` rather than an arm of its own, so a form that matched anything above never
+        ;; pays for the lookup.
+        (:else
+          (:wat::core::let [ht (:c::lookup-ty env head
+                                 (:wat::core::- (:wat::core::length env) 1))]
+            (:wat::core::if (:c::fn-ty? ht) (:c::fn-ret-ty ht) "i64")))))))
 
 ;; the declared type of the field an accessor reads
 (:wat::core::defn :c::acc-ty [pg <- :c::Prog head <- :wat::core::String] -> :wat::core::String
@@ -1174,7 +1269,21 @@
             ;; keeps this honest across a branch.
             ((:wat::core::>= r 0)
               (:wat::core::assoc (:c::emit o (:c::reg-mov-to r)) :rax (:c::text pg a)))
-            ((:wat::core::= d 999999) (:c::fail "name" a pg))
+            ;; **a bare function name is a VALUE**: its address. `defn` is a macro over
+            ;; `(def :name (fn ...))`, so `user/inc1` in operand position is the fn it was
+            ;; bound to, and passing it is what makes `(map user/f xs)` mean anything. It is a
+            ;; CODE address, never heap, so `:c::ptr-ty?` is false for `fn:` and no ownership
+            ;; or refcount machinery touches it.
+            ;;
+            ;; `:c::mov-rax` is `movabs` -- ten bytes whatever the address. That is deliberate:
+            ;; `:c::mov-rax-lit` shrinks to seven for an imm32, and if the address landed
+            ;; differently between pass 1 and pass 2 the two passes would disagree on length
+            ;; and trip `:c::same-lens`.
+            ((:wat::core::= d 999999)
+              (:wat::core::let [fa (:c::fn-addr pg (:c::text pg a) 0)]
+                (:wat::core::if (:wat::core::>= fa 0)
+                  (:wat::core::assoc (:c::emit o (:c::mov-rax fa)) :rax (:c::text pg a))
+                  (:c::fail "name" a pg))))
             (:else (:wat::core::assoc (:c::emit o (:c::load (:c::fp o d) (:c::Out/fpr o)))
                      :rax (:c::text pg a))))))
       ;; nil is a machine zero and a bool is 0 or 1, which is already what a comparison leaves
@@ -1488,7 +1597,18 @@
           ;; Asking `:c::fn-of` once answers both and leaves room for the arity check.
           (:else
             (:wat::core::let [fi (:c::fn-of pg head 0)]
-              (:wat::core::if (:wat::core::< fi 0) (:c::fail "call" a pg)
+              (:wat::core::if (:wat::core::< fi 0)
+                ;; no top-level function by that name -- but the head may EVALUATE to one.
+                ;; Asking `:c::type-of` rather than the environment covers both shapes at once:
+                ;; a bare name bound to a function, and a computed head like
+                ;; `((wat.core/nth ops i) v)`. A head that IS a top-level function never reaches
+                ;; here -- `fn-of` answered above -- so the direct call keeps its `call rel32`.
+                (:wat::core::let [ht (:c::type-of (:wat::core::nth ks 0) env pg)]
+                  (:wat::core::if (:wat::core::not (:c::fn-ty? ht)) (:c::fail "call" a pg)
+                    (:wat::core::if (:wat::core::not= (:c::fn-arity ht)
+                                      (:wat::core::- (:wat::core::length ks) 1))
+                      (:c::fail "wrong number of arguments" a pg)
+                      (:c::call-indirect ks o env pg rt tb slot))))
                 (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
                                   (:wat::core::- (:wat::core::length ks) 1))
                   (:c::fail "wrong number of arguments" a pg)
@@ -3271,6 +3391,26 @@
                              (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
                            (:c::Out/fpr o1))))]
         (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr pv))))))
+
+;; **the same call, through a register.** Arguments go on the stack exactly as `:c::call-user`
+;; puts them there, so a function reached this way is ordinary compiled code with no special
+;; entry -- which is the whole point: `defn` is `(def :name (fn ...))`, so a direct call and an
+;; indirect one differ only in how the target is named.
+;;
+;; The ORDER matters. The arguments are pushed first and the target loaded second, because
+;; evaluating an argument goes through rax and would destroy a target loaded ahead of it.
+;;
+;; No tail-call path here on purpose: a self tail call is recognised by NAME (`:c::tail-call?`),
+;; and a value in a register has no name to recognise. An indirect call is always a real call.
+(:wat::core::defn :c::call-indirect [ks <- :c::Kids o <- :c::Out env <- :c::Env pg <- :c::Prog
+                                     rt <- :c::Layout tb <- :wat::core::i64
+                                     slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
+                    o1 (:c::push-args ks 1 o env pg rt tb slot)
+                    o2 (:c::expr (:wat::core::nth ks 0) o1 env pg rt tb slot (:c::no-tail))
+                    o3 (:c::emit o2 "ffd0")]                          ;; call *rax
+    (:wat::core::if (:wat::core::= n 0) o3
+      (:c::popn o3 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))
 
 (:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64

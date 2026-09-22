@@ -57,8 +57,18 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
   printf '%s\n' "$out"; return $rc
 }
 
-for name in four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn \
-            memory linear moved freed strverbs strown extremes nnegsub select counted bits codeat reader diag fileio asmbits; do
+# **This list used to be written inline, and it went stale the moment a program was added.**
+# The header above already says that happened once. It happened AGAIN when elf/src/fnref.wat
+# and elf/src/fnvec.wat arrived: both compiled, neither compared, and the summary still said
+# "30 agree" while building two more binaries. So the list is a variable now, and the coverage
+# guard below fails when anything in elf/src is not accounted for.
+COMPARED="four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn
+          memory linear moved freed strverbs strown extremes nnegsub select counted bits codeat
+          reader diag fileio asmbits fnref fnvec"
+# collapsed to single spaces: the guard below matches with a glob on " $n ", and a name that
+# happened to sit at the end of a line was followed by a NEWLINE, so it read as uncovered.
+COMPARED=$(echo $COMPARED)
+for name in $COMPARED; do
   src="elf/src/$name.wat"; bin="elf/out/$name.elf"
   interp=$(oracle "$src"); irc=$?
   # **a timeout, because a miscompiled program does not fail -- it SPINS.** One of these ran
@@ -76,6 +86,19 @@ for name in four arith greet branch fib bench strings shadow churn deep logic ve
     fail=1
   fi
 done
+
+# **the coverage guard**: every program in elf/src must be compared, or named here as to why
+# not. A program that is compiled but never checked is worse than one that does not exist --
+# it inflates the binary count while proving nothing, which is exactly what fnref and fnvec
+# did on the build that added them.
+uncovered=0
+for f in elf/src/*.wat; do
+  n=$(basename "$f" .wat)
+  case " $COMPARED " in *" $n "*) continue ;; esac
+  echo "   UNCOVERED: elf/src/$n.wat is compiled but never compared -- add it to COMPARED"
+  uncovered=$((uncovered+1))
+done
+[ $uncovered -eq 0 ] || fail=1
 
 # churn allocates 2.4 MB out of a 1 MiB heap and gives all of it back; before the compiler
 # learned to release at statement boundaries it died here with a segmentation fault.

@@ -13857,9 +13857,20 @@ Cumulative for all of Layer A (C-197 + C-198), against the pre-Layer-A fixpoint:
 ### F-171: `:c::occ` is deliberately NOT converted, and the reason is a limit worth naming
 
 **Clean.** `:c::occ` needs a third partition -- ALTERNATIVES to max over, SEQUENTIAL to sum --
-and a `cond` branch is a RANGE of a clause's kids, not a node. The shared query would have to
-return GROUPS, and compile.wat's subset has neither nested vectors nor closures (C-131) to
-carry the combiner. The abstraction would be worse than the duplication, so it is not built.
+and a `cond` branch is a RANGE of a clause's kids, not a node, so the shared query would have
+to return GROUPS. It is not built, but **the reason first given here was wrong and is corrected
+below.**
+
+**CORRECTION (C-199).** This said compile.wat's subset "has neither nested vectors nor
+closures". The closures half is right; the nested-container half is FALSE, and was never
+checked. `elf/probe/nested-vec.wat` compiles a `(Vector :- [(Vector :- [i64])])`, builds it
+with `conj` and reads it with nested `nth`, and agrees with the interpreter. So groups ARE
+expressible, and `occ`'s combiner is fixed (sum within a branch, max across) rather than
+parameterised -- meaning `occ` does not need closures either. The conversion is POSSIBLE.
+
+It is still not done, on the honest grounds rather than the false ones: `occ` fails closed, so
+it buys no correctness, and it would add functions to a file already growing (328 -> 352 in
+eight commits). That is a judgement about cost, not a limit of the language.
 
 **What makes that acceptable here and not in `:c::tail-self?` is polarity.** `occ`'s default
 arm sums, so an unrecognised form is over-counted, `linear?` goes false, and the optimisation
@@ -13867,3 +13878,103 @@ is declined. It cannot be wrong by omission, only timid. `:c::tail-self?` failed
 
 This is a concrete thing closures would buy in the compiler itself: the Layer B case (F-169),
 now with a named function that wants them and cannot have them.
+
+### C-199: function references -- `[ArgType... :-> RetType]`, a name as a value, and `call *%rax`
+
+**Extend.** Step 1 of three toward anonymous `fn`. The premise came from the builder and is
+verbatim in `wat-rs/wat/core.wat:667`: *"`defn` macro just binds a function value to a name:
+`(:wat::core::def :name (:wat::core::fn ...))`. `:wat::core::fn` is the one and only function
+constructor."* So this is not a feature bolted on beside `defn` -- **`defn` is its special
+case**, and what was missing was the general one.
+
+**The gap was live, not merely absent.** `(user/apply2 user/inc1 40)` prints 42 in the
+interpreter and could not compile here. Nothing in `elf/` tried, so no oracle had ever noticed.
+
+Three things were written: parse `[A :-> R]` (encoded `"fn:2:R"`), load a function's address,
+emit `ff d0`. **Everything else worked untouched**, which is the type-as-string-prefix
+discipline compounding:
+
+| worked with no new code | because |
+|---|---|
+| `conj`/`nth` of functions in a Vector | `:c::ptr-ty?` is one predicate and `"fn:"` is not `vec:`/`rec:`/`str`, so refcounting and last-use transfer correctly ignore it -- a code address is not heap |
+| a function RETURNED from a function | `:c::type-of-form` already types a body by its return |
+| a function chosen by `if` | already typed by the consequent |
+| `typealias` of a function type | `:c::ty-node` already recurses through aliases |
+
+**Deliberate boundaries**, both in the code: no tail-call path for an indirect call
+(`:c::tail-call?` recognises a self call by NAME, and a value in a register has none), and
+`:c::mov-rax` rather than `:c::mov-rax-lit` for the address, because the latter shrinks to
+seven bytes for an imm32 and would let the two passes disagree on length.
+
+**The dispatch got simpler by getting more general.** The first cut asked the environment
+whether the HEAD SYMBOL was bound to a function, and failed on `((wat.core/nth ops i) v)` where
+the head is computed. Asking `:c::type-of` of the head NODE covers both in one line; a real
+top-level function never reaches it, because `:c::fn-of` answers first and keeps `call rel32`.
+
+**`:c::type-of`'s fallback is load-bearing via the INLINER, which took removing it to learn.**
+`:c::ty-bind` types a `let` binding from `type-of` of its initialiser, and `:c::inl-call`
+rewrites `(user/go user/add)` into `(let [op user/add] (op 6 7))`. Without a function type for
+the bare name, `op` binds as `"i64"` and the call refuses.
+
+**Cost, and two wrong guesses on the way.** Measured pinned, three runs each, on a variant with
+the two new test programs excluded so it is the feature alone:
+
+| | instructions | binary |
+|---|---|---|
+| before | 1,847,829,2xx | 234,525 B |
+| first cut | 1,881,035,4xx (+1.80%) | 237,816 B |
+| after merging a double environment scan | **1,877,094,7xx (+1.58%)** | 237,827 B |
+
+Two further attempts FAILED and were reverted: typing arithmetic with a `binop` arm to keep it
+out of the `:else` made it *worse* (`:c::binop` is itself a string-comparison chain), and
+removing the `type-of` fallback broke the build. Both were hypotheses, both were measured,
+neither survived.
+
+**Not chased further, with the real target named:** the remaining cost is spread over hot paths
+(`ty-node` gaining a `"vector"` branch, `type-of` gaining a string compare). The larger prize is
+elsewhere -- see F-172.
+
+### F-172: the compiler scans a 352-entry table by string, twice, per call site
+
+**Improve, not yet done.** `:c::Prog/fns` is a Vector scanned linearly by name, and several
+sites scan it TWICE to resolve one call: `:c::type-of-form` does `fn-addr` then `fn-ret`;
+`:c::form` computes `fn-of` and then `:c::call-user` re-scans with `fn-addr`; `:c::fn-value-ty`
+does `fn-of` then `fn-ret`. Each scan is up to 352 `rt-str-eq` calls, so one call site can cost
+~700 string comparisons, and compile.wat has thousands.
+
+**The cheap half needs no map at all**: `fn-of` already returns an INDEX, so index the record
+instead of re-scanning by name. A straight halving, three small edits.
+
+**The other half is now open**, because F-171's nested-container claim was false: a bucket table
+is `(Vector :- [(Vector :- [:c::Fn])])`, which compiles today with no new runtime primitive and
+no dependency on wat-rs's map surface -- which matters, since `HashMap` there is being retired
+for `wat.type/map` backed by rpds. Measure the halving first; the table only earns its place if
+something large is still left.
+
+### F-173: three oracles, three ways of reporting on only what they were told about
+
+**Fix, done for two of them.** Adding two programs to the corpus exposed the same hole twice in
+one session:
+
+| tool | what it iterated | what it said |
+|---|---|---|
+| `tools/emitted.sh` | the MANIFEST | "ok -- all 74" while building 76 |
+| `tools/elf-run.sh` | a hardcoded NAME LIST | "30 agree" while building 79 binaries |
+
+`elf-run.sh`'s own header already documented this happening once before ("it went stale the
+moment a probe was added"). It happened again anyway, and the summary line was reported here as
+coverage that did not exist.
+
+Both now name what they did NOT check -- `NEW`/`GONE` in `emitted.sh`, `UNCOVERED` in
+`elf-run.sh` -- so "ok" means everything on disk was examined rather than everything the tool
+had a list for. `elf-run` went 30 -> **32 agree** once the two programs were actually compared.
+
+**The guard's first act was a false positive**, worth recording: `COMPARED` is a multi-line
+string, and a name at a line end is followed by a newline rather than a space, so the `case`
+glob read `assocn` and `codeat` as uncovered. Collapsed to single spaces. A guard that cries
+wolf is worse than none.
+
+**The third hole is the one still open**, and neither fix touches it: all three oracles only
+ever examine programs that EXIST. Both compiler bugs found today (F-168, F-170) were green
+across all three, because nothing in the corpus had either shape. `tools/probe.sh` is the only
+answer to that, and it only works when someone writes the program that would expose the bug.
