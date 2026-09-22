@@ -769,6 +769,12 @@
 ;; in the source and a direct string match beats reconstructing it at every use.
 (:wat::core::defrecord :c::Enum
   [name <- :wat::core::String
+   ;; the TYPE PARAMETERS, `[T]` in `(defenum :Option :- [T] ...)`. Empty for a plain enum.
+   ;; **Layout needs none of this** -- every value in this compiler is one machine word, so a
+   ;; generic enum has the same shape for every instantiation. What the parameters are FOR is
+   ;; the type of a bound field: `:Some [value <- :T]` binds at whatever `T` was instantiated to,
+   ;; and getting that wrong would put a pointer in a slot `:c::ptr-ty?` calls flat.
+   params <- (:wat::core::Vector :- [:wat::core::String])
    variants <- (:wat::core::Vector :- [:wat::core::String])
    ;; each variant's field VECTOR node, parallel to `variants` -- the node, not the names, the
    ;; same way `:c::Rec/fv` holds a node, so field names are read on demand rather than copied
@@ -831,6 +837,66 @@
           pg)))))
 
 ;; the field VECTOR node for each variant, parallel to `:c::Enum/variants`
+;; `:-` at index 2 is the marker that a parameter vector follows, so the variants start two
+;; later. Its absence is the plain case.
+;; the instantiation argument carried in a parametric enum type, or "" -- `henum:Option;i64`
+;; answers `i64`. Hand-rolled because the subset has no index-of (C-199).
+(:wat::core::defn :c::semi-from [t <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::string::length t)) -1)
+    ((:wat::core::= (:wat::string::subs t i (:wat::core::+ i 1)) ";") i)
+    (:else (:c::semi-from t (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::enum-arg [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [c (:c::semi-from t 0)]
+    (:wat::core::if (:wat::core::< c 0) ""
+      (:wat::string::subs t (:wat::core::+ c 1) (:wat::string::length t)))))
+
+;; a variant's field types, with any TYPE PARAMETER replaced by the instantiation's argument.
+;; `:c::field-types` cannot be used: it resolves through `:c::ty-of-node`, which refuses an
+;; unknown type -- and `:T` is exactly that until this substitution happens.
+(:wat::core::defn :c::variant-ftys [fks <- :c::Kids i <- :wat::core::i64
+                                    params <- (:wat::core::Vector :- [:wat::core::String])
+                                    arg <- :wat::core::String pg <- :c::Prog
+                                    acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= (:wat::core::+ i 2) (:wat::core::length fks)) acc
+    (:wat::core::let [tn (:wat::core::nth fks (:wat::core::+ i 2))
+                      raw (:c::text pg tn)
+                      ;; **the parameter is declared bare and referenced as a keyword**:
+                      ;; `(defenum :Option :- [T] ... :Some [value <- :T])` has `T` in the
+                      ;; parameter vector and `:T` at the use. Strip the colon before comparing,
+                      ;; or the substitution silently never fires and `:T` reaches
+                      ;; `:c::ty-of-node`, which refuses it.
+                      tt (:wat::core::if (:wat::string::starts-with? raw ":")
+                           (:wat::string::subs raw 1 (:wat::string::length raw)) raw)]
+      (:c::variant-ftys fks (:wat::core::+ i 3) params arg pg
+        (:wat::core::conj acc
+          (:wat::core::if (:wat::core::>= (:c::index-of-str params tt 0) 0)
+            (:wat::core::if (:wat::core::= arg "") "i64" arg)
+            (:c::ty-of-node tn pg)))))))
+
+(:wat::core::defn :c::enum-generic? [ks <- :c::Kids pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::>= (:wat::core::length ks) 4)
+                   (:wat::core::= (:c::text pg (:wat::core::nth ks 2)) ":-")))
+
+(:wat::core::defn :c::enum-vstart [ks <- :c::Kids pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:c::enum-generic? ks pg) 5 3))
+
+(:wat::core::defn :c::enum-params [ks <- :c::Kids pg <- :c::Prog]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::not (:c::enum-generic? ks pg))
+    (:wat::core::Vector :- [:wat::core::String])
+    (:c::param-name-list (:c::kidsof pg (:wat::core::nth ks 3)) 0
+      (:wat::core::Vector :- [:wat::core::String]) pg)))
+
+(:wat::core::defn :c::param-name-list [pv <- :c::Kids i <- :wat::core::i64
+                                       acc <- (:wat::core::Vector :- [:wat::core::String])
+                                       pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) acc
+    (:c::param-name-list pv (:wat::core::+ i 1)
+      (:wat::core::conj acc (:c::text pg (:wat::core::nth pv i))) pg)))
+
 (:wat::core::defn :c::variant-fvs [ks <- :c::Kids i <- :wat::core::i64
                                    acc <- (:wat::core::Vector :- [:wat::core::i64])
                                    pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::i64])
@@ -1000,13 +1066,30 @@
       (:c::ty-fn-node a pg depth)
     (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
       (:wat::core::let [ks (:c::kidsof pg a)]
-        (:wat::core::if (:wat::core::or (:wat::core::< (:wat::core::length ks) 3)
-                          (:wat::core::not (:c::vector? (:c::text pg (:wat::core::nth ks 0)))))
-          "i64"
+        (:wat::core::cond
+          ((:wat::core::< (:wat::core::length ks) 3) "i64")
           ;; (Vector :- [T]) -- the element type is the type vector's first child
-          (:wat::core::let [tv (:c::kidsof pg (:wat::core::nth ks 2))]
-            (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
-              (:wat::string::concat "vec:" (:c::ty-node (:wat::core::nth tv 0) pg (:wat::core::- depth 1)))))))
+          ((:c::vector? (:c::text pg (:wat::core::nth ks 0)))
+            (:wat::core::let [tv (:c::kidsof pg (:wat::core::nth ks 2))]
+              (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
+                (:wat::string::concat "vec:" (:c::ty-node (:wat::core::nth tv 0) pg
+                                               (:wat::core::- depth 1))))))
+          ;; `(Option :- [i64])` -- a parametric ENUM. The argument rides in the type after a
+          ;; `;`, because a bound field declared `<- :T` has to become `i64` HERE and nowhere
+          ;; else knows the instantiation.
+          ((:wat::core::>= (:c::enum-index (:c::Prog/enums pg)
+                             (:c::text pg (:wat::core::nth ks 0)) 0) 0)
+            (:wat::core::let [en (:c::text pg (:wat::core::nth ks 0))
+                              ei (:c::enum-index (:c::Prog/enums pg) en 0)
+                              tv (:c::kidsof pg (:wat::core::nth ks 2))]
+              (:wat::string::concat
+                (:wat::core::if (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg) ei))
+                  "henum:" "enum:")
+                (:wat::string::concat en
+                  (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) ""
+                    (:wat::string::concat ";"
+                      (:c::ty-node (:wat::core::nth tv 0) pg (:wat::core::- depth 1))))))))
+          (:else "i64")))
       (:wat::core::let [src (:c::text pg a)
                         ri (:c::rec-index (:c::Prog/recs pg) src 0)
                         ai (:c::alias-index (:c::Prog/aliases pg) src 0)]
@@ -2994,6 +3077,7 @@
                                   sd <- :wat::core::i64 slot <- :wat::core::i64 o <- :c::Out
                                   env <- :c::Env pg <- :c::Prog rt <- :c::Layout
                                   tb <- :wat::core::i64 a <- :wat::core::i64
+                                  sarg <- :wat::core::String
                                   tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
@@ -3005,7 +3089,9 @@
        fks (:wat::core::if (:wat::core::< fv 0) (:wat::core::Vector :- [:wat::core::i64])
              (:c::kidsof pg fv))
        fields (:c::field-names fks 0 (:wat::core::Vector :- [:wat::core::String]) pg)
-       ftys (:c::field-types fks 0 pg (:wat::core::Vector :- [:wat::core::String]))
+       ftys (:c::variant-ftys fks 0
+              (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei)) sarg pg
+              (:wat::core::Vector :- [:wat::core::String]))
        ;; load the subject, take its tag, compare
        o1 (:c::emit o (:wat::string::concat
             (:c::load (:c::fp o sd) (:c::Out/fpr o))
@@ -3020,7 +3106,7 @@
        jmp-at (:wat::core::- (:c::codelen o5) 4)
        o6 (:c::patch o5 jne-at (:asm::le (:wat::core::- (:c::codelen o5)
                                            (:wat::core::+ jne-at 4)) 4))
-       o7 (:c::match-arms ks (:wat::core::+ i 1) ei sd slot o6 env pg rt tb a tc)]
+       o7 (:c::match-arms ks (:wat::core::+ i 1) ei sd slot o6 env pg rt tb a sarg tc)]
       (:c::patch o7 jmp-at (:asm::le (:wat::core::- (:c::codelen o7)
                                        (:wat::core::+ jmp-at 4)) 4)))))
 
@@ -3038,7 +3124,11 @@
              o1 (:wat::core::assoc
                   (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                     (:c::store (:c::fp o sd) (:c::Out/fpr o))) :rax "")]
-            (:c::match-arms ks 2 ei sd (:wat::core::+ slot 1) o1 env pg rt tb a tc)))))))
+            (:c::match-arms ks 2 ei sd (:wat::core::+ slot 1) o1 env pg rt tb a
+              ;; the instantiation is known only at the SUBJECT: `(Option :- [i64])` carries
+              ;; `i64` in its type, and every arm's `<- :T` field binds at that
+              (:c::enum-arg (:c::type-of (:wat::core::nth ks 1) env pg))
+              tc)))))))
 
 (:wat::core::defn :c::var-vals [mks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                 pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
@@ -4813,11 +4903,16 @@
           (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc pg :enums
               (:wat::core::conj (:c::Prog/enums pg)
-                (:c::Enum :name (:c::text pg (:wat::core::nth ks 1))
-                          :variants (:c::variant-names ks 3 (:c::text pg (:wat::core::nth ks 1))
-                                      (:wat::core::Vector :- [:wat::core::String]) pg)
-                          :vfv (:c::variant-fvs ks 3 (:wat::core::Vector :- [:wat::core::i64]) pg)
-                          :heap (:c::any-fields? ks 3 pg))))
+                ;; `(defenum :Name :purity ...)` puts the variants at 3; a GENERIC
+                ;; `(defenum :Name :- [T] :purity ...)` pushes them to 5 and the parameter
+                ;; vector sits at 3. One question decides both.
+                (:wat::core::let [vs (:c::enum-vstart ks pg)]
+                  (:c::Enum :name (:c::text pg (:wat::core::nth ks 1))
+                            :params (:c::enum-params ks pg)
+                            :variants (:c::variant-names ks vs (:c::text pg (:wat::core::nth ks 1))
+                                        (:wat::core::Vector :- [:wat::core::String]) pg)
+                            :vfv (:c::variant-fvs ks vs (:wat::core::Vector :- [:wat::core::i64]) pg)
+                            :heap (:c::any-fields? ks vs pg)))))
             dir))
         ((:c::typealias? head)
           (:c::collect-in tops (:wat::core::+ i 1)
