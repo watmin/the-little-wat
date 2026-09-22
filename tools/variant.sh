@@ -12,12 +12,21 @@
 # tools/bootstrap.sh before committing.
 #
 #   tools/variant.sh scratch/try-this.wat
+#   tools/variant.sh --emitted elf/compile.wat     also diff the bytes it emits
 #
-# Exit: 0 the variant built and ran itself, 1 it faulted or failed, 2 setup is wrong.
+# --emitted compares every program stage 1 produced against elf/out/.emitted-manifest and
+# names any whose bytes moved. **This is the gate for a refactor**: a change that claims to
+# be pure must report zero. It covers the 65 programs compile.wat's own driver builds, not
+# the 9 that tools/gen-scan.sh and friends produce -- bootstrap.sh remains the full check.
+#
+# Exit: 0 the variant built and ran itself (and, with --emitted, moved nothing),
+#       1 it faulted, failed, or moved bytes; 2 setup is wrong.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 REPO=$PWD
-SRC="${1:?usage: tools/variant.sh <compiler-variant.wat> [label]}"
+EMITTED=
+if [ "${1:-}" = "--emitted" ]; then EMITTED=1; shift; fi
+SRC="${1:?usage: tools/variant.sh [--emitted] <compiler-variant.wat> [label]}"
 [ -f "$SRC" ] || { echo "variant: no such source: $SRC"; exit 2; }
 SRC=$(realpath "$SRC")
 LABEL="${2:-$(basename "$SRC" .wat)}"
@@ -51,7 +60,28 @@ last=$(tail -1 "$BOX/stage1.log")
 cp "$BOX/stage1.log" "$REPO/elf/out/.variant-$LABEL.stage1.log" 2>/dev/null
 
 if [ $s1 -eq 0 ]; then
-  echo "$LABEL: GREEN   size=$sz  stage1 exit=0  compiled=$nok"; exit 0
+  echo "$LABEL: GREEN   size=$sz  stage1 exit=0  compiled=$nok"
+  [ -n "$EMITTED" ] || exit 0
+  M="$REPO/elf/out/.emitted-manifest"
+  [ -f "$M" ] || { echo "        (no manifest -- run tools/emitted.sh save)"; exit 0; }
+  sha256sum $(ls elf/out/*.elf 2>/dev/null | grep -v -e 'compiler\.elf' -e 'stage[0-9]*\.elf' -e 'seed\.elf') > "$BOX/box.sha"
+  MANIFEST="$M" BOXSHA="$BOX/box.sha" python3 -c '
+import os,sys
+ref={}; box={}
+for l in open(os.environ["MANIFEST"]):
+    h,p=l.split(); ref[p]=h
+for l in open(os.environ["BOXSHA"]):
+    h,p=l.split(); box[p]=h
+common=sorted(set(ref)&set(box))
+moved=[p for p in common if ref[p]!=box[p]]
+skip=len(set(ref)-set(box))
+if moved:
+    print(f"        EMITTED: {len(moved)} of {len(common)} MOVED")
+    for p in moved: print("           ",p)
+    sys.exit(1)
+print(f"        emitted: {len(common)} byte-identical ({skip} built by other tools, not checked)")
+'
+  exit $?
 elif [ $s1 -ge 128 ]; then
   echo "$LABEL: FAULT   size=$sz  stage1 signal=$((s1-128))  compiled=$nok"
   echo "        NOTE: the runtime buffers stdout and flushes at exit, so the last line is"

@@ -3298,42 +3298,135 @@
 ;; So the registers go to functions that LOOP -- ones with a self call in tail position, which
 ;; is exactly the shape that pays -- and everything else keeps its frame.
 
+;; ---------------------------------------------------------- where a form's value comes from
+;;
+;; **`cond`, `and`, `or` and `not` are `if` wearing different hats.** This compiler says so in
+;; its own comment above `:c::form`, and the GENERATOR acts on it: `:c::and-form` and
+;; `:c::or-form` hand their LAST operand the tail context unchanged, exactly as `:c::seq` does
+;; for `do`. Six forms carry tail position -- `if`, `cond`, `and`, `or`, `do`, `let` -- and that
+;; is one desugaring, not six rules.
+;;
+;; It used to be re-derived by hand in nine separate walks, and two of them got it wrong the
+;; same way (F-169). `:c::tail-self?` answered false for a self call under an `and` while the
+;; generator emitted the loop anyway: the parameters stayed on the frame while the back edge
+;; compared a stale rax, and `wrap?` -- guarded on `(not tself?)` -- peeled the loop test ahead
+;; of the prologue with the back edge landing past it. That is F-168, an infinite loop, and in
+;; one shape a program that exits 0 with the wrong answer.
+;;
+;; So the rule lives HERE, once: the nodes whose value IS the value of `a`. Add a form to this
+;; function and every position-sensitive walk learns it. `elf/probe/f168-and-tail.wat` pins it.
+;;
+;; When macros land and `cond`/`and`/`or` expand to `if` before any walk runs, this collapses
+;; to the `if` case alone -- the same semantics, staged.
+(:wat::core::defn :c::tail-nodes [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
+        (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
+                          n (:wat::core::length ks)]
+          (:wat::core::cond
+            ;; both arms carry it; the condition does not
+            ((:wat::core::and (:c::if? head) (:wat::core::= n 4))
+              (:wat::core::conj (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
+                                                  (:wat::core::nth ks 2))
+                                (:wat::core::nth ks 3)))
+            ;; every clause BODY carries it; the tests do not
+            ((:c::cond? head)
+              (:c::tail-clause-nodes pg ks 1 (:wat::core::Vector :- [:wat::core::i64])))
+            ;; the last form IS the value -- `do` and `let` by sequence, `and` and `or` by
+            ;; short circuit. Four spellings, one rule.
+            ((:wat::core::or (:c::do? head)
+               (:wat::core::or (:c::let? head)
+                 (:wat::core::or (:c::and? head) (:c::or? head))))
+              (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
+                                (:wat::core::nth ks (:wat::core::- n 1))))
+            ;; a call, a literal, or a head this does not take apart: the form's value is its
+            ;; own. **The conservative answer is the EMPTY one** -- see the polarity note on
+            ;; `:c::tail-self?`.
+            (:else (:wat::core::Vector :- [:wat::core::i64]))))))))
+
+;; a `cond` clause is `(test body...)`; its last kid is the body's value. Clauses too short to
+;; have a body contribute nothing, which is what `:c::tail-self-clauses` did by hand.
+(:wat::core::defn :c::tail-clause-nodes [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                         acc <- :c::Kids] -> :c::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:c::tail-clause-nodes pg ks (:wat::core::+ i 1)
+        (:wat::core::if (:wat::core::>= (:wat::core::length cks) 2)
+          (:wat::core::conj acc (:wat::core::nth cks (:wat::core::- (:wat::core::length cks) 1)))
+          acc)))))
+
+;; **Polarity is why this one was a bug and the other eight were not** (F-169). In every other
+;; walk, "I do not recognise this form" resolves to DISABLING an optimization. Here a false
+;; answer ENABLES one, because `:c::wrap?`'s guard is literally `(not tself?)`. A blind spot
+;; the whole compiler shared produced an infinite loop in exactly this function. Anything
+;; reading `:c::tail-nodes` for a decision that fails OPEN has to be read with that in mind.
 (:wat::core::defn :c::tail-self? [a <- :wat::core::i64 name <- :wat::core::String
                                   arity <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") false
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
-        (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
-                          last (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))]
-          (:wat::core::cond
-            ((:wat::core::and (:c::if? head) (:wat::core::= (:wat::core::length ks) 4))
-              (:wat::core::or (:c::tail-self? (:wat::core::nth ks 2) name arity pg)
-                              (:c::tail-self? (:wat::core::nth ks 3) name arity pg)))
-            ((:wat::core::or (:c::do? head) (:c::let? head))
-              (:c::tail-self? last name arity pg))
-            ;; `and` and `or` are `if` wearing a different hat, and :c::and-form / :c::or-form
-            ;; hand the LAST operand the tail context unchanged -- so a self call there is
-            ;; compiled as a self tail call, and has been all along. Without this case the
-            ;; predicate answered false for it: the generator emitted a loop while `regs?` and
-            ;; `wrap?` both believed there was none, so the parameters stayed on the frame while
-            ;; the back edge compared a stale rax, and the loop test got peeled ahead of the
-            ;; prologue with the back edge landing past it. Either way the loop never ended.
-            ;; Nothing in elf/ had the shape except the compiler itself (F-168).
-            ((:wat::core::or (:c::and? head) (:c::or? head))
-              (:c::tail-self? last name arity pg))
-            ((:c::cond? head) (:c::tail-self-clauses ks 1 name arity pg))
-            (:else (:wat::core::and (:wat::core::= head name)
-                                    (:wat::core::= (:wat::core::- (:wat::core::length ks) 1) arity)))))))))
+        (:wat::core::let [tn (:c::tail-nodes pg a)]
+          (:wat::core::if (:wat::core::> (:wat::core::length tn) 0)
+            (:c::any-tail-self? tn 0 name arity pg)
+            ;; no tail node: this form's value is its own, so it is the self call or nothing
+            (:wat::core::and (:wat::core::= (:c::text pg (:wat::core::nth ks 0)) name)
+                             (:wat::core::= (:wat::core::- (:wat::core::length ks) 1) arity))))))))
 
-(:wat::core::defn :c::tail-self-clauses [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
-                                         arity <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
+(:wat::core::defn :c::any-tail-self? [tn <- :c::Kids i <- :wat::core::i64
+                                      name <- :wat::core::String arity <- :wat::core::i64
+                                      pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length tn)) false
+    (:wat::core::or (:c::tail-self? (:wat::core::nth tn i) name arity pg)
+                    (:c::any-tail-self? tn (:wat::core::+ i 1) name arity pg))))
+
+;; the other half of the partition: the subexpressions a form EVALUATES that are not its value.
+;; `:c::tail-nodes` and this one together cover every evaluated child, so a walk that recurses
+;; on the first and demands quiet of the second never has to enumerate a form itself.
+;;
+;; **Every malformed shape is someone else's problem, on purpose.** `:c::cond-form` fails on a
+;; clause with fewer than two kids, `:c::let-form` on arity below 3, `:c::and-form` and
+;; `:c::or-form` on arity below 2 -- and `:c::fail` is `assertion-failed!`, a hard stop. So a
+;; form that reaches emitted code is well formed, and these two functions can be faithful to
+;; the LANGUAGE instead of replicating nine different guards against input that never arrives.
+(:wat::core::defn :c::quiet-nodes [pg <- :c::Prog a <- :wat::core::i64] -> :c::Kids
+  (:wat::core::if (:wat::core::not= (:c::kind a pg) "list") (:wat::core::Vector :- [:wat::core::i64])
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:wat::core::Vector :- [:wat::core::i64])
+        (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
+                          n (:wat::core::length ks)]
+          (:wat::core::cond
+            ;; the condition, and only the condition
+            ((:wat::core::and (:c::if? head) (:wat::core::= n 4))
+              (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64]) (:wat::core::nth ks 1)))
+            ;; every test, and every body form that is not the clause's value
+            ((:c::cond? head)
+              (:c::quiet-clause-nodes pg ks 1 (:wat::core::Vector :- [:wat::core::i64])))
+            ;; the bindings vector, then every body form but the last
+            ((:c::let? head)
+              (:c::conj-range pg
+                (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64]) (:wat::core::nth ks 1))
+                ks 2 (:wat::core::- n 1)))
+            ;; every form but the last -- `do` by sequence, `and`/`or` by short circuit
+            ((:wat::core::or (:c::do? head)
+               (:wat::core::or (:c::and? head) (:c::or? head)))
+              (:c::conj-range pg (:wat::core::Vector :- [:wat::core::i64]) ks 1 (:wat::core::- n 1)))
+            (:else (:wat::core::Vector :- [:wat::core::i64]))))))))
+
+(:wat::core::defn :c::conj-range [pg <- :c::Prog acc <- :c::Kids ks <- :c::Kids
+                                  i <- :wat::core::i64 stop <- :wat::core::i64] -> :c::Kids
+  (:wat::core::if (:wat::core::>= i stop) acc
+    (:c::conj-range pg (:wat::core::conj acc (:wat::core::nth ks i)) ks (:wat::core::+ i 1) stop)))
+
+(:wat::core::defn :c::quiet-clause-nodes [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                          acc <- :c::Kids] -> :c::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
     (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
-      (:wat::core::or
-        (:wat::core::and (:wat::core::>= (:wat::core::length cks) 2)
-          (:c::tail-self? (:wat::core::nth cks (:wat::core::- (:wat::core::length cks) 1))
-                          name arity pg))
-        (:c::tail-self-clauses ks (:wat::core::+ i 1) name arity pg)))))
+      (:c::quiet-clause-nodes pg ks (:wat::core::+ i 1)
+        (:wat::core::if (:wat::core::>= (:wat::core::length cks) 2)
+          (:c::conj-range pg (:wat::core::conj acc (:wat::core::nth cks 0))
+                          cks 1 (:wat::core::- (:wat::core::length cks) 1))
+          acc)))))
 
 ;; ---------------------------------------------------------------- who gets r8-r11
 ;;
@@ -3361,26 +3454,36 @@
       ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kind a pg) "list"))
       ((:wat::core::not= (:c::kind a pg) "list") (:c::all-safe? ks 0 env pg))
       (:else
-        (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))
-                          nk (:wat::core::length ks)]
-          (:wat::core::cond
-            ((:wat::core::and (:c::if? h) (:wat::core::= nk 4))
-              (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks 1) env pg)
-                (:wat::core::and (:c::noret? (:wat::core::nth ks 2) tail? name arity env pg)
-                                 (:c::noret? (:wat::core::nth ks 3) tail? name arity env pg))))
-            ((:c::do? h) (:c::noret-seq? ks 1 tail? name arity env pg))
-            ((:wat::core::and (:c::let? h) (:wat::core::>= nk 3))
-              (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks 1) env pg)
-                               (:c::noret-seq? ks 2 tail? name arity env pg)))
-            ((:c::cond? h) (:c::noret-clauses? ks 1 tail? name arity env pg))
+        ;; **one rule, not five.** Whatever carries this form's value gets the same question
+        ;; with its tail position intact; everything else it evaluates has to be quiet. The
+        ;; five hand-written cases this replaces agreed with `:c::tail-self?` on `if`, `do`,
+        ;; `let` and `cond` and disagreed on `and`/`or`, which neither of them had (F-169).
+        (:wat::core::let [tn (:c::tail-nodes pg a)]
+          (:wat::core::if (:wat::core::> (:wat::core::length tn) 0)
+            (:wat::core::and (:c::all-quiet? (:c::quiet-nodes pg a) 0 env pg)
+                             (:c::all-noret? tn 0 tail? name arity env pg))
             ;; a call, or a head this does not take apart: quiet subtrees pass, and the one
             ;; call that passes is the self tail call with its arguments quiet
-            (:else
+            (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))
+                              nk (:wat::core::length ks)]
               (:wat::core::or (:c::scratch-safe? a env pg)
                 (:wat::core::and tail?
                   (:wat::core::and (:wat::core::= h name)
                     (:wat::core::and (:wat::core::= (:wat::core::- nk 1) arity)
                                      (:c::all-safe? ks 1 env pg))))))))))))
+
+(:wat::core::defn :c::all-quiet? [qn <- :c::Kids i <- :wat::core::i64 env <- :c::Env
+                                  pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length qn)) true
+    (:wat::core::and (:c::scratch-safe? (:wat::core::nth qn i) env pg)
+                     (:c::all-quiet? qn (:wat::core::+ i 1) env pg))))
+
+(:wat::core::defn :c::all-noret? [tn <- :c::Kids i <- :wat::core::i64 tail? <- :wat::core::bool
+                                  name <- :wat::core::String arity <- :wat::core::i64
+                                  env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length tn)) true
+    (:wat::core::and (:c::noret? (:wat::core::nth tn i) tail? name arity env pg)
+                     (:c::all-noret? tn (:wat::core::+ i 1) tail? name arity env pg))))
 
 ;; a sequence of forms: the last one inherits the tail position, the rest cannot have one
 (:wat::core::defn :c::noret-seq? [ks <- :c::Kids i <- :wat::core::i64 tail? <- :wat::core::bool
@@ -3391,16 +3494,6 @@
       (:c::noret? (:wat::core::nth ks i) tail? name arity env pg)
       (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks i) env pg)
                        (:c::noret-seq? ks (:wat::core::+ i 1) tail? name arity env pg)))))
-
-(:wat::core::defn :c::noret-clauses? [ks <- :c::Kids i <- :wat::core::i64 tail? <- :wat::core::bool
-                                      name <- :wat::core::String arity <- :wat::core::i64
-                                      env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
-    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
-      (:wat::core::and (:wat::core::>= (:wat::core::length cks) 2)
-        (:wat::core::and (:c::scratch-safe? (:wat::core::nth cks 0) env pg)
-          (:wat::core::and (:c::noret-seq? cks 1 tail? name arity env pg)
-                           (:c::noret-clauses? ks (:wat::core::+ i 1) tail? name arity env pg)))))))
 
 ;; the whole body, as one sequence whose last form is in tail position
 (:wat::core::defn :c::callfree? [ks <- :c::Kids start <- :wat::core::i64 name <- :wat::core::String
@@ -4420,7 +4513,18 @@
           (:wat::core::and (:wat::core::<= (:c::nodes-of pg nd) (:c::inl-limit))
                            (:wat::core::<= (:c::pure-max pg nd) (:c::lvl-pure))))))))
 
-;; tail position propagates through exactly the forms that pass `tc` down
+;; tail position propagates through exactly the forms that pass `tc` down.
+;;
+;; **This list was right when `:c::tail-self?`'s was wrong** -- it has had `and`/`or` all along,
+;; in this same file, while the walk two thousand lines up did not. That is F-169's whole point,
+;; and the reason the rule now lives in `:c::tail-nodes`.
+;;
+;; This one stays a predicate on a HEAD because the inliner has only the head here, and it is
+;; deliberately COARSER than `:c::tail-nodes`: `:c::inl-kids` hands the answer to every kid, so
+;; an `if` condition and an `and`'s first operand are marked tail when they are not. That
+;; over-marking only ever SUPPRESSES inlining -- the guard is `(not tail?)` -- so it is safe,
+;; and sharpening it would be a performance change, not a refactor. If you sharpen it, measure
+;; it; do not quietly align it with `:c::tail-nodes` and call that a cleanup.
 (:wat::core::defn :c::tail-through? [h <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or
     (:wat::core::or (:c::if? h) (:c::cond? h))

@@ -13736,3 +13736,61 @@ it was written:
 
 When macros land and `cond`/`and`/`or` expand to `if` before the walks run, the class stops
 existing. The shared query is that same semantics, staged.
+
+### C-197 / F-169: the tail-position rule, written once
+
+**Clean.** F-169 measured nine walks re-deriving one desugaring by hand and two of them
+getting it wrong the same way. This is the rule extracted:
+
+- `:c::tail-nodes pg a` -- the nodes whose value IS the value of `a`. `if` gives both arms,
+  `cond` every clause body, `do`/`let`/`and`/`or` the last form. Everything else, nothing.
+- `:c::quiet-nodes pg a` -- the complement: what the form evaluates that is not its value.
+
+Together they cover every evaluated child, so a walk that recurses on the first and demands
+quiet of the second **never enumerates a form itself**.
+
+`:c::tail-self?` went from a five-arm `cond` to a lookup plus a base case (`tail-self-clauses`
+deleted). `:c::noret?`'s five-arm dispatch became ONE rule -- tail nodes get the same question
+with their tail position intact, everything else must be `scratch-safe?` (`noret-clauses?`
+deleted).
+
+**Every malformed shape is deliberately someone else's problem.** `:c::cond-form` fails on a
+clause under two kids, `:c::let-form` on arity under 3, `:c::and-form`/`:c::or-form` on arity
+under 2 -- and `:c::fail` is `assertion-failed!`, a hard stop. A form that reaches emitted code
+is well formed, so these two functions are faithful to the LANGUAGE instead of replicating nine
+guards against input that never arrives.
+
+**`:c::noret?` gaining `and`/`or` changed nothing, and the reason is the interesting part.**
+The `and`'s first operand is now a QUIET node, and in all 12 green cases it holds the
+`(length ks)` call that fails `scratch-safe?` anyway. Same answer, reached by the shared rule
+rather than by omission. The missed optimization F-169 predicted **does not exist** -- that
+prediction was wrong.
+
+**A tenth site already had the right list.** `:c::tail-through?` enumerates all six forms
+including `and`/`or`, with the comment "tail position propagates through exactly the forms that
+pass `tc` down" -- in the same file, two thousand lines from the walk that had it wrong. It is
+left alone on purpose: the inliner hands its answer to EVERY kid, so an `if` condition is
+marked tail when it is not, and that over-marking only ever SUPPRESSES inlining. Sharpening it
+is a performance change wearing a refactor's clothes.
+
+**Cost, measured properly.** Bootstrap's stage-1 wall clock read 633 ms before and 704 ms
+after, which looked like +11% and is **noise** -- tier 5 of F-154/F-157/F-158, not comparable
+across builds. Instruction counts, pinned, three runs each, varying by under 500 in 1.8
+billion:
+
+| | instructions to self-compile | binary |
+|---|---|---|
+| before | 1,822,692,9xx | 232,741 B |
+| after | 1,841,565,7xx | 233,834 B |
+| delta | **+1.04%** | +1,093 B |
+
+That is the price of the shared queries allocating a small vector per node visited. The
+allocation-free alternative is a count/at pair -- two functions that must agree, which is the
+hazard just removed -- so it is not taken unless the 1% starts mattering.
+
+**Oracles.** Bootstrap fixpoint 233,834 B, 76 binaries byte-identical; `tools/emitted.sh` all
+74 byte-identical; both `elf/probe` shapes agree. Each conversion step was gated on the
+65-program byte check in `tools/variant.sh --emitted`, a two-second loop.
+
+**Not done: `:c::occ` and `:c::live-after` need a DIFFERENT partition** -- alternatives versus
+sequential, not tail versus quiet -- so they are a second shared query, not this one.
