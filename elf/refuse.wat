@@ -442,6 +442,8 @@
 
 (:wat::core::defn :c::println? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.kernel/println" ":wat::kernel::println"))
+(:wat::core::defn :c::defenum? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/defenum" ":wat::core::defenum"))
 (:wat::core::defn :c::defrecord? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.core/defrecord" ":wat::core::defrecord"))
 (:wat::core::defn :c::typealias? [s <- :wat::core::String] -> :wat::core::bool
@@ -751,6 +753,81 @@
    fv <- :wat::core::i64])
 (:wat::core::typealias :c::Recs (:wat::core::Vector :- [:c::Rec]))
 
+;; ---------------------------------------------------------------- enums
+;;
+;; **wat's `kind` is an enum wearing a String, and that costs 28% of this compiler's runtime**
+;; (F-174). `:rd::Node` stores `kind` as a String, so every `(= (:c::kind a pg) "list")` is a
+;; call into `str_eq`; 18.90% of all cycles was one `jne` after a `repz cmpsb`. A `defenum`
+;; variant is a TAG -- a small integer -- so the same comparison becomes a machine word compare
+;; with no call at all.
+;;
+;; **Unit variants only, for now.** `(:Name.Variant {})` with an empty field map is what
+;; `kind` and a head classifier need, and it is a constant: the tag. Variants WITH payload are
+;; a record with a tag in front, and they need `match` to take apart -- neither is built here,
+;; and a payload variant is refused by name rather than miscompiled.
+;;
+;; `variants` holds the QUALIFIED spellings (`:user::Kind.Sym`), because that is what appears
+;; in the source and a direct string match beats reconstructing it at every use.
+(:wat::core::defrecord :c::Enum
+  [name <- :wat::core::String
+   variants <- (:wat::core::Vector :- [:wat::core::String])])
+(:wat::core::typealias :c::Enums (:wat::core::Vector :- [:c::Enum]))
+
+(:wat::core::defn :c::enum-index [es <- :c::Enums name <- :wat::core::String
+                                  i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length es)) -1)
+    ((:wat::core::= (:c::Enum/name (:wat::core::nth es i)) name) i)
+    (:else (:c::enum-index es name (:wat::core::+ i 1)))))
+
+;; which enum, and which variant within it -- encoded as one i64 so the caller needs no record:
+;; -1 for "not a variant", otherwise the TAG. The enum a variant belongs to is answered
+;; separately by `:c::variant-enum`.
+(:wat::core::defn :c::variant-tag [es <- :c::Enums q <- :wat::core::String
+                                   i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length es)) -1
+    (:wat::core::let [t (:c::index-of-str (:c::Enum/variants (:wat::core::nth es i)) q 0)]
+      (:wat::core::if (:wat::core::>= t 0) t
+        (:c::variant-tag es q (:wat::core::+ i 1))))))
+
+(:wat::core::defn :c::variant-enum [es <- :c::Enums q <- :wat::core::String
+                                    i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length es)) ""
+    (:wat::core::if (:wat::core::>= (:c::index-of-str
+                                      (:c::Enum/variants (:wat::core::nth es i)) q 0) 0)
+      (:c::Enum/name (:wat::core::nth es i))
+      (:c::variant-enum es q (:wat::core::+ i 1)))))
+
+;; `(defenum :Name :purity :V1 [] :V2 [] ...)` -- variants at 3, 5, 7..., each followed by its
+;; field vector. **A payload variant is refused here rather than silently compiled as a unit**:
+;; it would need a record layout and `match` to take apart, and neither exists yet.
+(:wat::core::defn :c::variant-names [ks <- :c::Kids i <- :wat::core::i64 ename <- :wat::core::String
+                                     acc <- (:wat::core::Vector :- [:wat::core::String])
+                                     pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:wat::core::let [vt (:c::text pg (:wat::core::nth ks i))
+                      fv (:wat::core::if (:wat::core::>= (:wat::core::+ i 1) (:wat::core::length ks))
+                           -1 (:wat::core::nth ks (:wat::core::+ i 1)))]
+      (:wat::core::if (:wat::core::and (:wat::core::>= fv 0)
+                        (:wat::core::> (:wat::core::length (:c::kidsof pg fv)) 0))
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat
+                     "compile: a defenum variant with fields needs `match`, which this compiler does not have yet: "
+                     vt))
+        (:c::variant-names ks (:wat::core::+ i 2) ename
+          (:wat::core::conj acc
+            (:wat::string::concat ename
+              (:wat::string::concat "."
+                (:wat::string::subs vt 1 (:wat::string::length vt)))))
+          pg)))))
+
+(:wat::core::defn :c::index-of-str [v <- (:wat::core::Vector :- [:wat::core::String])
+                                    q <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length v)) -1)
+    ((:wat::core::= (:wat::core::nth v i) q) i)
+    (:else (:c::index-of-str v q (:wat::core::+ i 1)))))
+
 ;; a `typealias` is a name standing for a type expression; the compiler only ever needs the
 ;; type STRING it resolves to, so that is what is stored
 (:wat::core::defrecord :c::Alias [name <- :wat::core::String  node <- :wat::core::i64])
@@ -759,7 +836,7 @@
 ;; everything the compiler knows about the program it is compiling, threaded as one value so
 ;; that adding a table does not mean another parameter on every function
 (:wat::core::defrecord :c::Prog
-  [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases
+  [fns <- :c::FnV  recs <- :c::Recs  aliases <- :c::Aliases  enums <- :c::Enums
    linear <- (:wat::core::Vector :- [:wat::core::String])
    ;; the parameters of this function that are only ever READ -- see `:c::read-only?`. Parallel
    ;; to `linear` and set the same way, once per function, just before its body is compiled.
@@ -814,6 +891,7 @@
   (:c::Prog :fns (:wat::core::Vector :- [:c::Fn])
             :recs (:wat::core::Vector :- [:c::Rec])
             :aliases (:wat::core::Vector :- [:c::Alias])
+            :enums (:wat::core::Vector :- [:c::Enum])
             :nscr (:c::nscratch)
             :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
@@ -891,6 +969,10 @@
                         ai (:c::alias-index (:c::Prog/aliases pg) src 0)]
         (:wat::core::cond
           ((:wat::core::>= ri 0) (:wat::string::concat "rec:" src))
+          ;; a unit-variant enum is a TAG, so its values are machine words -- which is why
+          ;; `:c::ptr-ty?` must stay false for `enum:` and no ownership machinery touches it
+          ((:wat::core::>= (:c::enum-index (:c::Prog/enums pg) src 0) 0)
+            (:wat::string::concat "enum:" src))
           ((:wat::core::>= ai 0)
             (:c::ty-node (:c::Alias/node (:wat::core::nth (:c::Prog/aliases pg) ai)) pg
               (:wat::core::- depth 1)))
@@ -1061,6 +1143,8 @@
         ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) head 0) 0)
           (:wat::string::concat "rec:" head))
         ((:wat::core::>= (:c::acc-index pg head) 0) (:c::acc-ty pg head))
+        ((:wat::core::>= (:c::variant-tag (:c::Prog/enums pg) head 0) 0)
+          (:wat::string::concat "enum:" (:c::variant-enum (:c::Prog/enums pg) head 0)))
         ;; calling a name that holds a function: the fn type carries what it answers. In the
         ;; `:else` rather than an arm of its own, so a form that matched anything above never
         ;; pays for the lookup.
@@ -1595,6 +1679,9 @@
           ;; one scan of the function table, not two: the guard used to ask `:c::fn-addr`
           ;; whether the name existed and then `:c::call-user` asked again for the address.
           ;; Asking `:c::fn-of` once answers both and leaves room for the arity check.
+          ;; `(:Name.Variant {})` -- a unit variant is a constant, and the constant is its tag
+          ((:wat::core::>= (:c::variant-tag (:c::Prog/enums pg) head 0) 0)
+            (:c::emit o (:c::mov-rax-lit (:c::variant-tag (:c::Prog/enums pg) head 0))))
           (:else
             (:wat::core::let [fi (:c::fn-of pg head 0)]
               (:wat::core::if (:wat::core::< fi 0)
@@ -4482,6 +4569,14 @@
                            :fields (:c::field-names fv 0 (:wat::core::Vector :- [:wat::core::String]) pg)
                            :ftypes (:wat::core::Vector :- [:wat::core::String]))))
               dir)))
+        ((:c::defenum? head)
+          (:c::collect-in tops (:wat::core::+ i 1)
+            (:wat::core::assoc pg :enums
+              (:wat::core::conj (:c::Prog/enums pg)
+                (:c::Enum :name (:c::text pg (:wat::core::nth ks 1))
+                          :variants (:c::variant-names ks 3 (:c::text pg (:wat::core::nth ks 1))
+                                      (:wat::core::Vector :- [:wat::core::String]) pg))))
+            dir))
         ((:c::typealias? head)
           (:c::collect-in tops (:wat::core::+ i 1)
             (:wat::core::assoc pg :aliases
@@ -4492,7 +4587,7 @@
         (:else
           (:wat::kernel::assertion-failed!
             :message (:wat::string::concat
-                       "compile: only defn, defrecord, typealias and load-file! at the top level: "
+                       "compile: only defn, defrecord, defenum, typealias and load-file! at the top level: "
                        (:c::text pg t))))))))
 
 ;; one pass over every function: each is compiled at the address the table says, and the lengths

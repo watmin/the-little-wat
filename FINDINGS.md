@@ -14015,3 +14015,76 @@ per node replaces dozens per dispatch per walk.
 
 Do `kind` first -- 89 sites, a small closed set, self-contained -- and measure before touching
 the 105 head predicates.
+
+### C-200: `defenum`, unit variants -- the first half of F-174's answer
+
+**Extend.** wat has `defenum` and `match`; this compiler had neither, which is why
+`:rd::Node` stores `kind` as a String and why 27.7% of a self-compile is `rt_str_eq` (F-174).
+A `defenum` variant is a TAG -- a small integer -- so the comparison becomes a machine word
+compare with no call at all. **An enum IS the interning**; there is nothing left to intern.
+
+**Unit variants only**, and a variant with fields is refused by name: it would need a record
+layout and `match` to take apart, and compiling it as a unit variant would silently answer
+wrong. `elf/src/enums.wat` pins construction, `=`, and the type.
+
+**`=` on enum values is what makes this worth doing without `match`.** The 89 `kind` sites
+compare inside `cond` arms, not `match` arms, so tags alone deliver the win; `match` adds
+exhaustiveness and destructuring, which is a separate tier.
+
+**Four syntax facts, each learned by TESTING and each a bug if assumed** -- the USER-GUIDE and
+the shipped wat sources disagree, and the sources win:
+
+| | docs say | actually |
+|---|---|---|
+| match arms | `((Some v) body)` | `[:Enum.Variant {} body]` |
+| result annotation | `-> :T` required | absent in `wat-rs/wat/fmt.wat`, `deporder.wat` |
+| spelling | -- | `wat.core/match` is NOT registered; only `:wat::core::match` |
+| construction | -- | `(:Name.Variant {})`, not `:Name.Variant{}` |
+
+wat-rs's own diagnostic gave the last one: *"positional variant construction is retired; write
+`(:Name.Variant {:field value ...})` or `(:Name.Variant {})` for a unit variant"*.
+
+**The reader already reads `{}`** (`elf/lib/reader.wat:150` maps `{` to kind `"map"`), so no
+reader work was needed. The kinds it produces are a closed set of ten -- `bool int keyword list
+map nil string symbol vector` and `""` -- which is exactly the enum to write.
+
+**Bootstrap ordering.** `compile.wat` can only USE enums once a bootstrapped compiler SUPPORTS
+them, so this lands first, byte-neutral (76 programs unchanged), and the conversion of `kind`
+is a second round. Same two-round shape the F-168 fix needed.
+
+**Baseline for the conversion**, pinned, three runs: **1,885,144,8xx instructions**, 238,065 B.
+
+### F-175: the compiler's own TYPES are stringly typed too, and cost MORE than `kind`
+
+**Improve, not yet done.** Raised by the builder: "using strings for types.... those can move to
+enums too?" They can, and they should, and the accounting is worse than for `kind`:
+
+| | `kind` | type strings |
+|---|---|---|
+| compared (`rt_str_eq`) | 89 sites | 11 direct, 5 prefix tests |
+| **BUILT by `concat`** (`rt_str_cat`) | never | **8 sites** -- `(concat "vec:" elem)` |
+| **taken apart by `subs`** (`rt_str_subs`) | never | `:c::elem-ty`, `:c::rec-name-of` |
+
+So `kind` costs comparison only, while a type costs an ALLOCATION every time `:c::type-of`
+answers about a vector, a record, a function or an enum. Type strings feed three of the four
+hot routines in F-174's profile, not one.
+
+**A unit enum cannot express them.** `kind` is a flat closed set of ten; a type is RECURSIVE --
+`vec:vec:i64`, `fn:2:vec:i64`. The proper representation is a payload-carrying variant
+(`:c::Ty.Vec {:elem <Ty>}`), which is the tier C-200 refuses by name, so it is gated on `match`.
+
+**A version IS available today with no new feature**: intern types into a table on `:c::Prog`
+and make a type an `i64` handle. Construction becomes lookup-or-append over a few dozen
+descriptors, comparison becomes integer equality, destructuring becomes an index -- killing the
+`concat` and `subs` traffic outright. Uglier than the enum, available now.
+
+**`"fn:2:i64"` (C-199) and `"enum:Name"` (C-200) are deliberately TEMPORARY.** They are the
+right shape for a string-typed world and the wrong shape for the one this is heading to.
+Whoever does this work should expect to DELETE them, not extend them. Long term these are
+`wat.type/fn`, `wat.type/enum`, `wat.type/symbol` -- real wat types, with `:c::Ty` a recursive
+`defenum`.
+
+**Sequenced behind the `kind` conversion on purpose**: that number says whether representation
+changes are worth their disruption. Moves the needle hard -> this is worth more, since it
+touches three routines instead of one. Barely moves -> the 105 head predicates are the real
+cost and both representation projects drop down the list.
