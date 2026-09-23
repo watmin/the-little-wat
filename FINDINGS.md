@@ -14713,8 +14713,9 @@ answer flattered the opponent instead of us.
 
 ### F-185: the heap is not reflexive -- it reserves 1.9 GB it does not need, and never returns a byte it does need
 
-**Extend** (reclamation does not exist), and a **blocker on the stated targets** rather than a
-performance criticism. `tools/rss.sh` is the probe; `tools/maxrss.c` is the instrument.
+**WRONG AS WRITTEN -- see the CORRECTION at the end of this entry, and F-187.** Reclamation
+exists and ships (C-120). Every measurement below stands; the explanation attached to them did
+not. The probe is `tools/mem.sh`, which predates this entry by five days.
 
 Three questions that look like one, with different answers.
 
@@ -14794,9 +14795,10 @@ before the instrument is allowed to overturn anything.
 
 ### F-186: reclamation is not a missing subsystem -- it is two analyses we already compute and have never once combined
 
-**Extend.** Scoping evidence for F-185, gathered before any design work, because "build a garbage
-collector" and "connect three things already in the tree" are very different projects and the
-difference decides whether this goes before or after the REPL.
+**WRONG AS WRITTEN -- see F-187.** The premise, that the compiler has never combined liveness
+with freshness, is false: `:c::seq-form` has marked and restored `r15` around every discarded
+statement since C-120. The inventory of analyses below is accurate and still useful; the
+conclusion drawn from it was not.
 
 The compiler already computes every input a liveness-driven reclaimer needs.
 
@@ -14856,3 +14858,71 @@ flattered by never freeing: in `strbuild` and the `conj` half of `vec`, C pays a
 -- `malloc`/`realloc`, free lists, coalescing -- and we pay a pointer bump and nothing else,
 ever. Adding reclamation puts real work on our side of those comparisons and **some of those wins
 may shrink or invert.** Writing that down now removes the temptation to not measure it later.
+
+
+### F-187: I reported an absence I never searched for -- reclamation has shipped since C-120
+
+**Correct**, against F-185 and F-186, and the failure is mine rather than the compiler's. Found by
+casting `examinare` and crawling the lair instead of reasoning from a summary.
+
+**What is actually true.** `elf/compile.wat:3652` carries a section titled *"Why a bump allocator
+can free"*:
+
+> *"A sequence's last form is its value; every form BEFORE it has its value thrown away. So
+> whatever a non-final form allocated is garbage the instant it finishes -- and with a bump
+> allocator, freeing all of it is one instruction: put r15 back where it was."*
+> `push r15 ; push r15` / `<the statement>` / `pop r15 ; pop r15`
+
+Eight bytes per statement, nesting with no bookkeeping because the marks live on the stack. Its
+soundness argument is explicit and its boundary is drawn: the only two ways a pointer can be
+stored are a `let` slot, which is out of scope when the statement ends, and `poke`, which is not
+-- so a statement that transitively reaches a `poke` is not released, computed as a fixpoint over
+`:c::Prog/fns` rather than the substring test that preceded it.
+
+`tools/mem.sh` -- dated 2026-09-18, five days before F-185 -- measures all of it. Its output:
+the release frees nothing live (`elf/src/memory.wat` is built to catch that); it reclaims
+**2.9x** (94,592 KiB with the release compiled out, 1,000 KiB with it on); and `elf/src/freed.wat`
+allocates ~650 MB and completes at a peak of **13,032 KiB**, which it can only do if space is
+being reused.
+
+**What I got wrong, and how.** I asserted "no reclamation" from `elf/lib/runtime.wat:984` -- *"the
+heap is one mmap and it does not grow"* -- which is a statement about GROWTH, and generalised it
+to release. I then measured `optmh.elf` at 611 MB, found it consistent with the hypothesis, and
+treated consistency as proof. I never grepped for `free`, `release` or `reclaim`. I also wrote
+`tools/rss.sh` and `tools/maxrss.c` without looking in `tools/` first, duplicating `tools/mem.sh`
+-- including its `ru_maxrss` wrapper and its note that this machine has no `/usr/bin/time`, which
+was already recorded as F-119. Both of my files are deleted in the same commit as this entry.
+
+**Every measurement in F-185 stands; only the explanation was wrong.** `optmh.elf` really does
+peak at 610.9 MB against `optm.elf`'s 2.1 MB. The correct reason is the one the compiler already
+documents at `elf/compile.wat:3681`: the statement release is **scope-based**, and `optmh`'s
+allocation **escapes upward** -- it is a value flowing into an accumulator through a tail call,
+never a discarded non-final form -- so nothing the release covers applies to it.
+
+**The next step was already named in the tree, and it is not a collector.** `elf/compile.wat:3684`:
+
+> *"Freeing those needs reachability, not scope -- a collector, or a caller-side release at every
+> call whose return type is not a pointer. **The second is the next thing to build** and is the
+> same idea one level up; the first is a different program."*
+
+That is exactly the `optmh` shape: `(match (user/pick s i) ...)` yields an `i64`, so a caller-side
+release around it is sound by the same scope argument that makes the statement release sound.
+
+**The failure class, and the root.** Not "I was careless" -- the class is **asserting an absence
+without searching for it, then accepting a consistent measurement as proof of it.** A measurement
+that agrees with a hypothesis discriminates nothing unless a competing hypothesis predicts a
+different number, and "this shape is not covered by the existing release" predicts 611 MB exactly
+as well as "there is no release." `peragrare`'s rule states it: a green from an instrument that
+was never asked is silence, not proof.
+
+The grimoire names the cure and I had it loaded: *"Before 'it's missing Y,' prove the absence.
+Every 'we need to add Z' is an assertion that owes evidence -- the thing you would build almost
+always already exists."* The rung above the convention, for this repo: **before any finding
+claims a capability is missing, grep the tree for the capability's own vocabulary and check
+`tools/` for an instrument that already measures it.** Both would have caught this in one command.
+
+**Why it survived so long.** The session opened on a compaction summary that contained the phrase
+*"bump-allocated, no reclamation"* -- a paraphrase of my own earlier, equally ungrounded claim.
+Every later statement inherited it without ever touching the disk. This is precisely the
+`recolligere` trap: the summary reads in your own voice, feels continuous, and is a lossy cache.
+Four findings were written on top of it before the crawl caught it.
