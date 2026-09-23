@@ -2064,10 +2064,26 @@
 ;; payload is declared `<- :T`, that resolves to `i64`, which is not a pointer, which answers
 ;; tier 3. A generic enum is therefore treated as loud whatever it is instantiated to -- the
 ;; conservative direction, since being wrong the other way would hand out r8-r11 across a call.
-(:wat::core::defn :c::quiet-variant? [pg <- :c::Prog h <- :wat::core::String] -> :wat::core::bool
+;; **what a variant construction site instantiates its enum to** -- the fifth question the
+;; generator and an analysis must not answer separately (F-168, F-169, F-180). For a generic
+;; enum the payload is declared `<- :T`, so the ARGUMENT is the type of the value written at
+;; the site: `(:Opt.Some {:value "x"})` instantiates `T` to `str`, which is a pointer, which is
+;; tier 1. A unit variant carries no field and so fixes nothing -- "" -- which is why the tier
+;; for `(:Opt.None {})` comes from the enum, not from here.
+(:wat::core::defn :c::variant-arg [a <- :wat::core::i64 env <- :c::Env
+                                   pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [ks (:c::kidsof pg a)]
+    (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) ""
+      (:wat::core::let [mks (:c::kidsof pg (:wat::core::nth ks 1))]
+        (:wat::core::if (:wat::core::not= (:wat::core::length mks) 2) ""
+          (:c::type-of (:wat::core::nth mks 1) env pg))))))
+
+(:wat::core::defn :c::quiet-variant? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
+                                      h <- :wat::core::String] -> :wat::core::bool
   (:wat::core::let [ei (:c::variant-owner (:c::Prog/enums pg) h 0)]
     (:wat::core::and (:wat::core::>= ei 0)
-      (:wat::core::not= (:c::enum-tier (:c::Prog/enums pg) ei "" pg) 3))))
+      (:wat::core::not= (:c::enum-tier (:c::Prog/enums pg) ei
+                          (:c::variant-arg a env pg) pg) 3))))
 
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
@@ -2082,7 +2098,7 @@
       ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:c::all-safe? ks 0 env pg))
       (:else
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
-          (:wat::core::and (:wat::core::or (:c::quiet-head? h) (:c::quiet-variant? pg h))
+          (:wat::core::and (:wat::core::or (:c::quiet-head? h) (:c::quiet-variant? a env pg h))
             (:wat::core::and (:c::word-cmp? h ks env pg)
                              (:c::all-safe? ks 1 env pg))))))))
 
@@ -3369,8 +3385,7 @@
       [mks0 (:c::kidsof pg (:wat::core::nth ks 1))
        ;; the instantiation is inferred from the field's own value: for a generic enum the
        ;; field is declared `<- :T`, so its value's type IS the argument
-       arg (:wat::core::if (:wat::core::= (:wat::core::length mks0) 2)
-             (:c::type-of (:wat::core::nth mks0 1) env pg) "")]
+       arg (:c::variant-arg a env pg)]
       (:wat::core::if (:wat::core::= (:c::enum-tier (:c::Prog/enums pg) ei arg pg) 1)
         ;; **tier 1: the value IS the pointer.** No allocation, no tag, no store -- the field
         ;; expression alone. Eight bytes and one register where `gcc -O2` uses sixteen and two.
