@@ -14790,3 +14790,69 @@ track memory. The control was decisive and should have come first: touching 100 
 I had published the no-reclamation claim from a source comment earlier in this session and then
 nearly retracted it on a broken instrument. Validate the instrument against a known quantity
 before the instrument is allowed to overturn anything.
+
+
+### F-186: reclamation is not a missing subsystem -- it is two analyses we already compute and have never once combined
+
+**Extend.** Scoping evidence for F-185, gathered before any design work, because "build a garbage
+collector" and "connect three things already in the tree" are very different projects and the
+difference decides whether this goes before or after the REPL.
+
+The compiler already computes every input a liveness-driven reclaimer needs.
+
+**Liveness** -- `:c::live-after` (`elf/compile.wat:2787`) answers *does `name` get read anywhere
+that runs AFTER this point*, in evaluation order, with `if` handled correctly: *"from the
+CONDITION either arm may still run; from inside an arm, the other one never does."*
+`:c::dead-after-write?` asks *exactly one write, and nothing reads it afterwards*.
+
+**Escape** -- `:c::ronly-of` (`elf/compile.wat:2946`) is documented as *"the parameters of this
+function that nothing ever retains."* That is an escape analysis. It is computed per function,
+stored in `Prog/ronly`, and already trusted: C-210's share elision on a self tail call is
+conditioned on it.
+
+**Freshness** -- already written down at `elf/compile.wat:2995`: *"`concat`, `subs` and
+`i64/to-string` each write a new block and answer it, on every path, with no early return of an
+argument. Everything else -- a field read, an `nth`, a user call, an `if` -- can hand back
+something older than itself."*
+
+**Ownership at runtime** -- `[ptr-8]` holds `arm-own` (`elf/lib/runtime.wat:630`), and C-210
+proved the marker is monotone.
+
+So the compiler knows *this block was freshly allocated here* and it knows *this name is dead
+from here on*. **It has never once put those two facts together.** Reclamation is that
+conjunction plus a mechanism to hand bytes back -- not a new analysis, and emphatically not a
+collector.
+
+**What is genuinely missing**, stated so this is not mistaken for optimism:
+1. **No free mechanism of any kind.** The allocator is a bump pointer with no notion of returning
+   bytes. A free list, a rewind, or size-class reuse has to be built.
+2. **Escape is intraprocedural.** `ronly-of` covers a parameter within one body. A value
+   allocated by a callee and returned to a caller -- precisely `optmh`'s 611 MB -- needs the
+   caller to reason about what it received.
+3. **Combining fresh with dead is where silent corruption lives.** Freeing something still
+   referenced is the F-168/F-170/F-180 failure class (a wrong answer that passes every oracle)
+   with a worse blast radius.
+
+**The polarity is the whole safety argument, and it is favourable.** An unknown form must
+DISABLE the free. Failing that way means not reclaiming, and not reclaiming is exactly what the
+compiler does today -- so a conservative bug is invisible and harmless while an aggressive one is
+memory corruption. The conservative answer IS the status quo, which is why this can land one
+shape at a time with structurally zero regression risk. `:c::mut-site` already models the
+discipline: it returns `-2` for two writes rather than guessing.
+
+**The trap is already documented, and we already fell into it twice.** `elf/compile.wat:2989`:
+*"A field read is not a temporary. It is a BORROWED pointer into a container that is still alive
+-- and its share count really is 1, because a fresh value stored into a container is stored by
+MOVE."* The note records that C-140 wrote this down twice as a limitation without fixing it, and
+`elf/src/strown.wat` is the fixture in three shapes. Naive reclamation dies on exactly this, and
+the guard predates the need for it.
+
+**Why this ordering, concretely.** Intraprocedural liveness needs no whole-program knowledge, so
+a REPL compiling one form at a time does not invalidate it. A whole-program scheme would have
+been invalidated by the REPL. That is an argument for this DESIGN, not merely for doing it early.
+
+**An honest cost, recorded before it is measured rather than after.** Several current wins are
+flattered by never freeing: in `strbuild` and the `conj` half of `vec`, C pays a real allocator
+-- `malloc`/`realloc`, free lists, coalescing -- and we pay a pointer bump and nothing else,
+ever. Adding reclamation puts real work on our side of those comparisons and **some of those wins
+may shrink or invert.** Writing that down now removes the temptation to not measure it later.
