@@ -14459,6 +14459,9 @@ should be trusted until `elf/bench/opt.c` is rewritten to resist constprop**, an
 ours-vs-ours row (tier 1 against tier 3) remains the load-bearing comparison, since it involves
 no C at all.
 
+**RESOLVED by F-184**, which also shows this correction UNDERSTATED the problem: `pick.constprop.0`
+does not take one argument, it reads **none** of them. The honest ratio is **1.93x**, not 2.82x.
+
 ### F-180: `:c::slots-of` never counted `match`'s frame slots -- the TENTH walk to forget a form
 
 **Fix.** `:c::slots-of` computes a function's frame size by walking for `let` bindings. It had a
@@ -14648,3 +14651,61 @@ registers safe, and it is dead code until then.
 and so is not `callfree?`. F-181 measured 0.933/0.978 there with forced `regs?` -- the win C-136
 measured as a 25% LOSS when paid for with a prologue. Taking it needs a cost model, not a wider
 table.
+
+
+### F-184: the benchmark whose opponent deleted the benchmark -- and why the answer check could not see it
+
+**Fix** (`elf/bench/opt.c`), plus **Improve** (`tools/vs-c.sh` section 12 now checks the emitted
+code, not just the answer).
+
+F-182 caught `elf/bench/opt.c` letting gcc constant-propagate the payload. Disassembling it for
+the repair showed the damage was worse than the correction recorded. The whole of
+`pick.constprop.0`:
+
+```
+lea    0x7f1e9(%rip),%rdx    # buf.0   -- payload folded to a link-time address
+xor    %eax,%eax             #         -- tag = A_SOME, unconditionally
+ret
+```
+
+Three instructions, and `%rdi` -- the argument -- is never read. gcc proved `n >= 0` from the
+literal loop bounds, so the sign test and the entire `A_NONE` arm are gone too. The section
+header says it measures an Option-shaped construct-and-match; the C column was measuring a
+function that returns two compile-time constants.
+
+**The repair is two opaque reads, both hoisted out of the loop** (verified in the disassembly),
+so they cost nothing per iteration and only deny a whole-program proof: a `volatile` payload
+pointer, and a `volatile` loop base so `i >= 0` is not provable. With those, `pick` does real
+work again -- and gcc still out-codes us, choosing a branchless `cmovs` where we branch, which
+is the point: the opponent was not handicapped, it was merely denied the proof that deleted the
+measurement.
+
+User-mode instructions, best of 5, pinned to core 0:
+
+| | instructions | per iteration | vs ours |
+|---|---|---|---|
+| ours, tier 1 (the pointer) | 620,902,187 | 31 | 1.00x |
+| gcc -O2, **broken fixture** | 220,528,567 | 11 | 0.36x -> implied **2.82x behind** |
+| **gcc -O2, honest** | **321,835,409** | **16** | **0.52x -> 1.93x behind** |
+| clang -O2, honest | 320,528,632 | 16 | 0.52x |
+| ours, tier 3 (`vec_new`) | 1,220,298,793 | 61 | 1.97x |
+
+**The repair moves the number in our favour, which is exactly why it needed independent proof.**
+A fairness fix that flatters us is the kind that should be trusted least, so the evidence is the
+disassembly above -- `pick` performing a sign test and returning a pair -- and not the ratio.
+
+**`:u` matters here and did not before.** Measured without the user-mode modifier ours reads
+636,067,252 against the 620,902,187 recorded for C-211. The 15.8M difference is **kernel**
+instructions: our 1.9 GB heap `mmap` faulting in, which C never pays. Earlier strikes compared
+ours against ours, where that constant cancels; the moment a C binary is on the other side of
+the ratio it does not. Cross-language instruction counts in this repo are user-mode counts.
+
+**What the guard is for.** This fixture measured nothing from the day it was written, and every
+oracle stayed green throughout -- because the *answer* was still `80000000`. An answer check
+cannot detect an opponent that optimises the measured operation away; only the shape of the
+emitted code can. Section 12 now fails if `pick` is cloned or if its sign test disappears. This
+is the same mistake `elf/bench/rec.c` made when a literal bound let gcc fold it to a closed form,
+which the board already knew about and documented -- and then repeated one section later.
+
+**Fifth time this session an oracle said yes to something wrong**, and the first where the wrong
+answer flattered the opponent instead of us.

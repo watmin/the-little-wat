@@ -261,6 +261,16 @@ fi
 echo
 echo "== 12. enums: an Option-shaped match, 20000000 times (C-205) =="
 build4 opt elf/bench/opt.c
+# **The fixture guards itself now (F-184).** This row silently measured nothing for as long
+# as opt.c used a static const payload and literal loop bounds: gcc folded `pick` into a
+# three-instruction clone that never read its argument, and every oracle stayed green because
+# the ANSWER was still 80000000. An answer check cannot catch an opponent that optimises the
+# measured operation away, so the shape of the emitted code is checked directly.
+if nm ./$B/out_opt_gcc2 2>/dev/null | grep -q 'pick\.'; then
+  echo "  FAIL: gcc cloned pick -- opt.c has stopped resisting constant propagation"; fail=1
+elif ! objdump -d ./$B/out_opt_gcc2 2>/dev/null | sed -n '/<pick>:/,/ret/p' | grep -qE 'cmov|jns|js '; then
+  echo "  FAIL: gcc elided pick's sign test -- opt.c is measuring a constant"; fail=1
+fi
 # **The load-bearing pair is ours-against-ours.** optm.wat and optmh.wat are the SAME loop;
 # the only difference is a second payload variant in optmh, which forces the heap tier. So the
 # delta between those two rows is pure REPRESENTATION, with the trap checks, the refcount
