@@ -7,58 +7,80 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-22, HEAD 06a8497)
+## elf/ — the live queue (2026-09-23, HEAD 947e995)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `06a8497`**. `git log --oneline -1` must print that
+**Freshness probe:** written against **HEAD `947e995`**. `git log --oneline -1` must print that
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — the register ABI (designed, not started)
+### NEXT STRIKE — C-212, the caller-side release (drawn, not started)
 
-**Why**: `tools/vs-c.sh` section 12 has us at 79 ms against `gcc -O2` 26 ms on enums. The
-disassembly splits our ~21 extra instructions per iteration into ~6 SAFETY (overflow trap,
-refcount share, tier discriminator — paid on purpose) and ~12 WASTE. The largest waste item is
-stack argument passing: we `push` each argument AND the callee loads it back from `+16+8k`, so
-every argument costs two memory ops plus an `add $N,%rsp`. C pays neither. See F-179, C-205.
+**The compiler already names this work.** `elf/compile.wat:3684`: *"Freeing those needs
+reachability, not scope -- a collector, or **a caller-side release at every call whose return
+type is not a pointer. The second is the next thing to build** and is the same idea one level
+up; the first is a different program."*
 
-**Design, grounded this session — read these before writing code:**
-- the register numbering is the compiler's OWN, not hardware (`elf/lib/x86.wat:196-210`):
-  `rbx`=0 `r12`=1 `r13`=2 `rbp`=3 are the callee-saved parameter registers; `r8`-`r11`=4-7 are
-  scratch; **`rdx`=10 `rsi`=11 `rdi`=12 are free** and are the argument registers to use.
-- `:c::param-env` (`:disp (+ 16 (* 8 (- (- n 1) i)))`) is where a parameter's home is decided.
-  `Bind/disp` is read in exactly ONE place, the symbol case of `:c::expr`.
-- 23 sites mention `push-args` / `call-user` / `tail-store` / `tail-direct`.
+**Read F-185, F-186 and F-187 in that order before touching anything.** F-185/F-186 are marked
+WRONG at the top and are kept only because F-187 is the lesson: I reported that reclamation did
+not exist without ever grepping for it, and wrote four findings on top of that belief. It ships,
+as C-120, and `tools/mem.sh` has measured it since 2026-09-18.
 
-**The convention must be per-FUNCTION, not per-call-site** — callers compile independently of
-callees. A function with <= 3 parameters takes them in `rdi`/`rsi`/`rdx`.
+**What C-120 does today** (`elf/compile.wat:3652`, emitted by `:c::seq` at 3805): a sequence's
+non-final forms have their value discarded, so `r15` is marked before each and restored after --
+`push r15;push r15` / `pop r15;pop r15`, eight bytes, nesting for free because the marks live on
+the stack. Sound because the only ways to store a pointer are a `let` slot (out of scope when the
+statement ends) and `poke` (not) -- so `:c::releasable?` is `(not (calls-poke? a pg))`, a fixpoint
+over `Prog/fns`, not a substring test.
 
-**Two caller paths**, and the predicate for the fast one already exists and is already trusted:
-- every argument `:c::scratch-safe?` (no call in any of them) -> evaluate DIRECTLY into the
-  argument registers, no stack traffic at all;
-- otherwise -> push as today, then pop into the registers before the `call`. Roughly neutral:
-  adds pops, removes the callee's loads.
+**What it cannot reach, and the fixture for it**: `elf/src/escape.wat`. A call whose callee's
+declared return type is not a pointer, which allocated internally, is never a discarded non-final
+form. It leaks **63.8 bytes/iteration, linear in n** (62.4 MB at 1M, 123.8 at 2M, 184.7 at 3M),
+with the right answer at every n. **After C-212 its peak must be FLAT in n.** `optmh.elf` at
+610.9 MB against `optm.elf`'s 2.1 MB is the same gap at scale (F-185).
 
-**Expected**: `user/pick s i` in `elf/bench/optm.wat` is two call-free symbol arguments, so it
-takes the fast path — 2 pushes + `add $16,%rsp` + 2 callee loads gone, ~5 instructions an
-iteration.
+**The one contract decision:** the release is decided from the callee's DECLARED return type
+(`Fn/ret` at the call site), never from the runtime value and never from the argument types.
 
-**Why this and not the share elision.** The share elision looked free and is not. The mechanism
-is confirmed — `[ptr-8]` is the ownership marker (`elf/lib/runtime.wat:630`,
-`movabs r9, arm-own ; cmp [rax-8], r9`), `:c::share` increments it past `arm-own`, and a SECOND
-increment is provably dead because the only question ever asked is `== arm-own`. But knowing the
-first share happened ON THIS PATH needs a shared-names set threaded through `:c::Out` and
-invalidated wherever control could have arrived another way — and the two shares in the
-benchmark have a `jo` trap branch between them. Eliding a NEEDED share lets a still-referenced
-value be mutated in place: silent corruption, the same fail-open shape as F-168, F-170 and the
-refused alias in F-178. The ABI's risk is SCOPE; the elision's is unsoundness. Take scope.
+**Rooms, in order:** `elf/compile.wat:3652-3690` (the C-120 section and its soundness argument --
+the pattern to copy) -> `3800-3816` (`:c::releasable?` and `:c::seq`; the worked reference is
+literally `push o "41574157" 16` / `popn o2 "415f415f" 16` gated on `drop?`) -> `:c::call-user`
+(where a user call is emitted and `Fn/ret` is in hand) -> `:c::ptr-ty?` -> `:c::calls-poke?`
+(reuse the existing fixpoint, do not re-derive it).
 
-**Also open, smaller**: F-178's tier-1 alias binding (3 instructions an iteration) is blocked on
-diagnosing why reading the binding at a different stack depth, with an operand already pushed,
-returns the wrong value. Do not re-attempt it without that diagnosis.
+**Out of scope, REJECTED not deferred:** pointer-returning calls (needs reachability -- a
+collector, explicitly a different program); tail calls (no return point to restore at);
+intrinsics (`concat`/`subs`/`to-string` ARE the allocation, not a call over one).
+
+**STOP-1, the real trap-door.** `vec_conj_own` path 3 (`elf/lib/runtime.wat:563`) extends the
+heap over a vector whose last element *"ends exactly at the heap top"*. C-120 is safe from this
+because the in-place paths are gated on a PROVED last use, so nothing observes the extension
+afterwards. For a caller-side release the equivalent protection is `:c::share` marking an argument
+non-owned -- but path 2 keys on `arm-own` while **path 3 keys on `heap-arm`, and it is NOT proved
+that `share` closes path 3.** If a callee can extend a caller's vector in place, a caller-side
+restore frees the extension while its length still counts it. Prove path 3 is closed, or STOP and
+report -- do not add a guard and do not narrow the predicate until the problem disappears.
+
+**STOP-2.** If the callee's return type is not available at the call site as a DECLARED type,
+STOP; do not infer it from the body and do not fall back to the value.
+
+**Expectations, fixed before the strike:** `tools/mem.sh` -- `escape.elf` flat in n at ~2 MB, §1
+still "no", §6 `linear.wat` still agrees; `tools/elf-run.sh` no new divergence;
+`tools/bootstrap.sh` byte-identical fixpoint. Baseline to beat: fixpoint **249,978 B**, 86
+binaries.
+
+### LANDED since this section last read "next" (2026-09-23)
+
+C-206/C-207 (frame fix + tier-1 alias), C-210 (share elision), **C-211 (the register convention,
+-11.4%)** -- cumulative `optm` **780,000,354 -> 620,902,187, -20.5%**. F-184 repaired
+`elf/bench/opt.c`, which had been measuring gcc's constant propagation rather than the enum
+representation: the honest gcc -O2 figure is 321,835,409 (1.93x ahead of us), not 220,528,567
+(2.82x). Cross-language instruction counts are USER-MODE counts -- our 1.9 GB heap mmap faults in
+~15.8M kernel instructions that C never pays, and that constant stops cancelling the moment C is
+on the other side of the ratio.
 
 **THE TOOLCHAIN MOVED.** `elf/` now measures against wat-rs branch **`the-little-wat`** (commit
 `7dee55858`), not `main` — it carries clj's seven bitwise ops, which C-171 needed and which do not
