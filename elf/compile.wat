@@ -2042,7 +2042,25 @@
           (:wat::core::or (:wat::core::or (:c::not? h) (:c::bit-not? h)) (:wat::core::or (:c::do? h)
             (:wat::core::or (:c::let? h) (:wat::core::or (:c::nth? h)
               (:wat::core::or (:c::len? h) (:wat::core::or (:c::strlen? h)
-                (:wat::core::or (:c::codeat? h) (:c::peek? h)))))))))))))))
+                (:wat::core::or (:c::codeat? h)
+                  (:wat::core::or (:c::peek? h) (:c::match? h))))))))))))))))
+
+;; **an enum constructor allocates nothing unless its enum is the heap tier** (C-205). A unit
+;; variant is `mov rax, tag`; a tier-1 payload variant IS its field expression, emitting nothing
+;; of its own. Only tier 3 calls `vec_new`.
+;;
+;; `:c::quiet-head?` cannot answer this -- it takes a head STRING and the tier is a property of
+;; the enum -- which is why `:c::callfree?` called `(:user::A.Some {:value s})` a call, and why
+;; F-181's register ABI could not keep a two-parameter leaf's arguments in registers.
+;;
+;; The tier is asked with an EMPTY instantiation argument on purpose: for a generic enum whose
+;; payload is declared `<- :T`, that resolves to `i64`, which is not a pointer, which answers
+;; tier 3. A generic enum is therefore treated as loud whatever it is instantiated to -- the
+;; conservative direction, since being wrong the other way would hand out r8-r11 across a call.
+(:wat::core::defn :c::quiet-variant? [pg <- :c::Prog h <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::let [ei (:c::variant-owner (:c::Prog/enums pg) h 0)]
+    (:wat::core::and (:wat::core::>= ei 0)
+      (:wat::core::not= (:c::enum-tier (:c::Prog/enums pg) ei "" pg) 3))))
 
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
@@ -2057,7 +2075,7 @@
       ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) (:c::all-safe? ks 0 env pg))
       (:else
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
-          (:wat::core::and (:c::quiet-head? h)
+          (:wat::core::and (:wat::core::or (:c::quiet-head? h) (:c::quiet-variant? pg h))
             (:wat::core::and (:c::word-cmp? h ks env pg)
                              (:c::all-safe? ks 1 env pg))))))))
 
