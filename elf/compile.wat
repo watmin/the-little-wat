@@ -1433,6 +1433,38 @@
 (:wat::core::defn :c::imax [a <- :wat::core::i64 b <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::if (:wat::core::> a b) a b))
 
+;; ---------------------------------------------- how many frame slots a form takes for ITSELF
+;;
+;; **The one answer the GENERATOR and the FRAME SIZER both use, because F-180 was them
+;; disagreeing.** `:c::match-form` allocated a subject slot and `:c::arm-binds` one per bound
+;; field, while `:c::slots-of` counted zero -- none of it was a `let` -- so no `sub rsp` was
+;; emitted and those slots lived BELOW rsp. It survived only because the next `push` happened to
+;; land on the subject's slot, which is dead by then.
+;;
+;; This is the same shape as `:c::tail-nodes` (F-168/F-169): wherever the generator and an
+;; analysis must AGREE about a form, the agreement is one function both call, so they cannot
+;; drift. A form that allocates frame slots and is not named here will not work in the
+;; generator either, because the generator asks this question to place them.
+(:wat::core::defn :c::self-slots [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) 0
+    (:wat::core::let [ks (:c::kidsof pg a)]
+      (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
+        (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
+          (:wat::core::cond
+            ;; one per `name expr` pair in the binding vector
+            ((:wat::core::and (:c::let? h) (:wat::core::>= (:wat::core::length ks) 2))
+              (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth ks 1))) 2))
+            ;; the subject, stored once before any arm runs
+            ((:wat::core::and (:c::match? h) (:wat::core::>= (:wat::core::length ks) 3)) 1)
+            (:else 0)))))))
+
+;; and one per `{:field name}` pair an arm binds -- the arms are ALTERNATIVES, so the frame
+;; needs the deepest, not the sum
+(:wat::core::defn :c::arm-bind-slots [pg <- :c::Prog arm <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [aks (:c::kidsof pg arm)]
+    (:wat::core::if (:wat::core::< (:wat::core::length aks) 2) 0
+      (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth aks 1))) 2))))
+
 (:wat::core::defn :c::slots-of [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::not (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))) 0
     (:wat::core::let [ks (:c::kidsof pg a)]
@@ -1440,7 +1472,7 @@
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
           (:wat::core::cond
             ((:c::let? h)
-              (:wat::core::+ (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth ks 1))) 2)
+              (:wat::core::+ (:c::self-slots pg a)
                 (:c::imax (:c::slots-list (:c::kidsof pg (:wat::core::nth ks 1)) 0 0 pg)
                           (:c::slots-list ks 2 0 pg))))
             ;; **`match` was missing here, and it is the tenth walk to forget a form** (F-169).
@@ -1449,8 +1481,9 @@
             ;; the slots lived BELOW rsp. It survived only because the next `push` happened to
             ;; land on the subject's slot, which is dead by then.
             ((:wat::core::and (:c::match? h) (:wat::core::>= (:wat::core::length ks) 3))
-              (:wat::core::+ 1 (:c::imax (:c::slots-list ks 1 0 pg)
-                                         (:c::arm-slots ks 2 0 pg))))
+              (:wat::core::+ (:c::self-slots pg a)
+                (:c::imax (:c::slots-list ks 1 0 pg)
+                          (:c::arm-slots ks 2 0 pg))))
             (:else (:c::slots-list ks 0 0 pg))))))))
 
 ;; an arm is `[Variant {:field name ...} body...]`: one slot per bound field, and the bodies are
@@ -1462,8 +1495,7 @@
       (:c::arm-slots ks (:wat::core::+ i 1)
         (:wat::core::if (:wat::core::< (:wat::core::length aks) 2) best
           (:c::imax best
-            (:wat::core::+ (:wat::core::/ (:wat::core::length
-                                            (:c::kidsof pg (:wat::core::nth aks 1))) 2)
+            (:wat::core::+ (:c::arm-bind-slots pg (:wat::core::nth ks i))
                            (:c::slots-list aks 2 0 pg))))
         pg))))
 
@@ -3270,7 +3302,8 @@
              o1 (:wat::core::assoc
                   (:c::emit (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                     (:c::store (:c::fp o sd) (:c::Out/fpr o))) :rax "")]
-            (:c::match-arms ks 2 ei sd (:wat::core::+ slot 1) o1 env pg rt tb a
+            ;; the arms start above whatever this form took for itself -- asked, not assumed
+            (:c::match-arms ks 2 ei sd (:wat::core::+ slot (:c::self-slots pg a)) o1 env pg rt tb a
               ;; the instantiation is known only at the SUBJECT: `(Option :- [i64])` carries
               ;; `i64` in its type, and every arm's `<- :T` field binds at that
               (:c::enum-arg (:c::type-of (:wat::core::nth ks 1) env pg))
