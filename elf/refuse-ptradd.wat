@@ -132,9 +132,18 @@
 ;; ## Strings, and the heap
 ;;
 ;; A String value is one machine word, like everything else: the address of `[len:8][bytes...]`.
-;; Literals live in the read-only data tail. Anything `concat` builds lives in a megabyte the
-;; entry stub `mmap`s, bump-allocated through **r15**, which is reserved for the program's whole
-;; life and is the entire memory model -- no free, no collector, no bounds check.
+;; Literals live in the read-only data tail. Anything `concat` builds lives in the region the
+;; entry stub `mmap`s -- `:c::heap-bytes`, 1.9 GB of lazily-committed anonymous memory --
+;; bump-allocated through **r15**, which is reserved for the program's whole life.
+;;
+;; **This sentence used to read "no free, no collector, no bounds check", and two thirds of that
+;; was false** (F-187). There IS a free: a sequence's non-final forms have their allocations
+;; released by putting r15 back, which is C-120 and is documented under *"Why a bump allocator
+;; can free"* below. There IS a bounds check: every allocator compares against the limit at
+;; `r14+8` and calls `oom()` (`elf/lib/runtime.wat:526`). Only "no collector" was true. The line
+;; survived long enough to convince a reader of this file -- and four findings were written on
+;; top of that belief before a crawl caught it. What escapes a statement still accumulates; that
+;; is the honest limit, and it is stated where the release is.
 ;;
 ;; The header length is in BYTES, and `:wat::string::length` counts CHARACTERS. They agree only
 ;; for ASCII, so a non-ASCII literal is refused rather than silently mis-measured; wat has no
