@@ -14709,3 +14709,73 @@ which the board already knew about and documented -- and then repeated one secti
 
 **Fifth time this session an oracle said yes to something wrong**, and the first where the wrong
 answer flattered the opponent instead of us.
+
+
+### F-185: the heap is not reflexive -- it reserves 1.9 GB it does not need, and never returns a byte it does need
+
+**Extend** (reclamation does not exist), and a **blocker on the stated targets** rather than a
+performance criticism. `tools/rss.sh` is the probe; `tools/maxrss.c` is the instrument.
+
+Three questions that look like one, with different answers.
+
+**1. Do we need ~2 GB? No -- that is a reservation, not a consumption.** The entry stub maps
+`PROT_READ|PROT_WRITE`, `MAP_PRIVATE|MAP_ANONYMOUS` (`elf/compile.wat:1712`, `mov-rdx 3` /
+`mov-r10 34`). An anonymous private mapping is lazily committed: Linux hands out address space
+and allocates physical pages on first touch. `optm.elf` maps 1,900,000,000 bytes and is
+**2.1 MB resident**. An eager mapping would read 1.9 GB. The compiler compiling the whole corpus
+peaks at **257.4 MB, 14.2% of what it reserves.** The reservation has never been the cost.
+
+**2. Does it scale with load? No. It neither grows nor shrinks.** One fixed mmap, bump-allocated.
+`elf/lib/runtime.wat:984` says it plainly -- *"the heap is one mmap and it does not grow."*
+There is no `free`, no reclamation, no release, and no second mapping if the first runs out.
+
+**3. What it actually costs.** The load-bearing pair is already in the tree, and it is the same
+pair C-205 uses for representation: `optm.wat` and `optmh.wat` are the SAME loop with the same
+answer and the same iteration count, differing only in the enum tier, so one allocates nothing
+and the other calls `vec_new` once per iteration.
+
+| | peak RSS | live set | of the 1.9 GB reservation |
+|---|---|---|---|
+| `optm.elf` (tier 1, allocates nothing) | **2.1 MB** | 16 bytes | 0.12% |
+| `optmh.elf` (tier 3, `vec_new` per iteration) | **610.9 MB** | 16 bytes | **33.7%** |
+| `grow2000000.elf` (2M-element vector, genuinely retained) | 15.9 MB | 15.9 MB | 0.88% |
+| `four.elf` (prints `4`) -- our floor | 2.1 MB | -- | 0.12% |
+| `opt` (gcc -O2), for scale | 1.0 MB | -- | -- |
+
+**638 MB of that is garbage: 32.0 bytes per iteration, retained forever.** RSS tracks every
+allocation a program has EVER made, never its live set. `grow2000000` is the control that proves
+the instrument is not simply reporting mapping size -- it retains what it allocates, and reads
+the 15.9 MB it genuinely holds.
+
+**Why this has never bitten, and why it is about to.** Every program in the corpus is a BATCH
+program that exits, and exit reclaims everything. The two things named as next targets are the
+first that do not exit:
+
+- the **REPL** -- every form evaluated allocates and nothing is returned. A REPL session is a
+  memory leak with a prompt, and since the heap does not grow, exhausting 1.9 GB is death, not
+  slowdown.
+- **AF_XDP services** -- a daemon allocating per frame at line rate reaches 1.9 GB in minutes.
+
+So this is on the critical path *before* the REPL is built on top of it, not after.
+
+**We are not starting from zero.** C-210 established that `[ptr-8]` holds `arm-own`, that
+`:c::share` increments past it, and that ownership is **monotone** -- which is exactly the
+question a reclamation scheme has to answer. The share-elision work already threads a
+shared-names set through `:c::Out` and invalidates it at joins (`:c::patch`), which is the same
+dataflow a liveness-driven free would need. The cheapest shape for the `optmh` case is not a
+collector at all but a **bump-pointer rewind**: an allocation that is dead at the end of an
+iteration, with nothing newer surviving it, can have its bytes reused. That needs escape
+analysis, and it needs the fail-safe polarity F-168 taught -- an unknown form must DISABLE the
+rewind, never enable it, because rewinding live bytes is silent corruption.
+
+**A methodology correction against myself, twice over.** My first instrument was
+`perf stat -e minor-faults`, which reported `optmh` at 2.7 MB and `grow2000000` -- a
+2,000,000-element vector -- at **1.1 MB**. That is physically impossible, which is what caught
+it: transparent huge pages make 100 MB arrive as ~50 faults of 2 MB each, so fault count does not
+track memory. The control was decisive and should have come first: touching 100 MB reported
+*fewer* faults (173) than touching 1 MB (380). `tools/maxrss.c` uses
+`getrusage(RUSAGE_CHILDREN).ru_maxrss` and was validated against a known mmap-and-touch at
+1/10/100/500 MB, reading 1.5/11.9/101.9/501.9, **before** any wat program was measured.
+I had published the no-reclamation claim from a source comment earlier in this session and then
+nearly retracted it on a broken instrument. Validate the instrument against a known quantity
+before the instrument is allowed to overturn anything.
