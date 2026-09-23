@@ -741,7 +741,13 @@
 
 (:wat::core::defrecord :c::Fn
   [name <- :wat::core::String  node <- :wat::core::i64  addr <- :wat::core::i64
-   ret <- :wat::core::String])
+   ret <- :wat::core::String
+   ;; **how many of this function's parameters arrive in registers**, 0 for the stack
+   ;; convention. It rides on the Fn rather than being recomputed at each call site because a
+   ;; CALLER has to know it: the two sides of a call compile independently, so the convention
+   ;; is a property of the declaration and has to be readable from the table. See
+   ;; `:c::argreg-fns`.
+   nargs <- :wat::core::i64])
 (:wat::core::typealias :c::FnV (:wat::core::Vector :- [:c::Fn]))
 
 ;; ---------------------------------------------------------------- records and type aliases
@@ -1101,6 +1107,13 @@
       ((:wat::core::>= i (:wat::core::length v)) "i64")
       ((:wat::core::= (:c::Fn/name (:wat::core::nth v i)) name) (:c::Fn/ret (:wat::core::nth v i)))
       (:else (:c::fn-ret pg name (:wat::core::+ i 1))))))
+
+(:wat::core::defn :c::fn-nargs [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::let [v (:c::Prog/fns pg)]
+    (:wat::core::cond
+      ((:wat::core::>= i (:wat::core::length v)) 0)
+      ((:wat::core::= (:c::Fn/name (:wat::core::nth v i)) name) (:c::Fn/nargs (:wat::core::nth v i)))
+      (:else (:c::fn-nargs pg name (:wat::core::+ i 1))))))
 
 (:wat::core::defn :c::fn-addr [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::let [v (:c::Prog/fns pg)]
@@ -1548,10 +1561,13 @@
 ;; where the recursion starts; both empty when the shape does not apply.
 (:wat::core::defrecord :c::TC
   [name <- :wat::core::String  arity <- :wat::core::i64  target <- :wat::core::i64
-   nregs <- :wat::core::i64    test <- :wat::core::String  body <- :wat::core::i64])
+   nregs <- :wat::core::i64    test <- :wat::core::String  body <- :wat::core::i64
+   ;; the register convention, so the back edge writes the parameters where they actually are.
+   ;; `:c::param-reg` is the one place that knows which of the two conventions is in force.
+   nargs <- :wat::core::i64])
 
 (:wat::core::defn :c::no-tail [] -> :c::TC
-  (:c::TC :name "" :arity 0 :target 0 :nregs 0 :test "" :body 0))
+  (:c::TC :name "" :arity 0 :target 0 :nregs 0 :test "" :body 0 :nargs 0))
 
 (:wat::core::defn :c::tail-call? [tc <- :c::TC head <- :wat::core::String n <- :wat::core::i64] -> :wat::core::bool
   (:wat::core::and (:wat::core::not= (:c::TC/name tc) "")
@@ -1561,10 +1577,11 @@
 ;; pop k is argument n-1-k, because they were pushed left to right. A parameter that lives in a
 ;; register is popped straight into it; one in the frame goes through rax.
 (:wat::core::defn :c::tail-store [k <- :wat::core::i64 n <- :wat::core::i64 o <- :c::Out
-                                  nr <- :wat::core::i64] -> :c::Out
+                                  nr <- :wat::core::i64 na <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= k n) o
     (:wat::core::let
       [i (:wat::core::- (:wat::core::- n 1) k)
+       pr (:c::param-reg i nr na)
        ;; **the store happens AFTER the pop, so it measures from the shallower stack.** This is
        ;; the one site in the compiler where a frame access and a stack move share an emit, and
        ;; it is exactly the kind of thing a frame pointer made impossible to get wrong.
@@ -1578,12 +1595,12 @@
           ;; written as a store and a load, once per iteration of every tail-recursive loop
           ;; (C-153 found the pair adjacent in `loopsum`). `:c::push-but-last` leaves it in rax.
           (:wat::core::if (:wat::core::= k 0)
-            (:wat::core::if (:wat::core::< i nr) (:c::reg-mov-from i) (:c::store d fpr?))
-            (:wat::core::if (:wat::core::< i nr) (:c::reg-pop i)
+            (:wat::core::if (:wat::core::>= pr 0) (:c::reg-mov-from pr) (:c::store d fpr?))
+            (:wat::core::if (:wat::core::>= pr 0) (:c::reg-pop pr)
               (:wat::string::concat (:c::pop-rax) (:c::store d fpr?))))
           ;; ...so k = 0 moves the stack by nothing, and every other k by one slot
           (:wat::core::if (:wat::core::= k 0) 0 8))
-        nr))))
+        nr na))))
 
 ;; every argument but the last pushed; the last computed into rax and LEFT there, because the
 ;; only thing that reads it is `:c::tail-store`'s first store
@@ -1980,7 +1997,7 @@
                 (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
                                   (:wat::core::- (:wat::core::length ks) 1))
                   (:c::fail "wrong number of arguments" a pg)
-                  (:c::call-user ks head o env pg rt tb slot tc))))))))))
+                  (:c::call-user ks head fi o env pg rt tb slot tc))))))))))
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
 ;; popped back -- the stack discipline a compiler without a register allocator has to use
@@ -3846,6 +3863,85 @@
 ;; the callee, rbp points at the saved rbp, [rbp+8] is the return address, and argument i of n
 ;; sits at [rbp + 16 + 8*(n-1-i)]. The caller pops them after the call.
 
+
+;; ---------------------------------------------------------------- arguments into registers
+;;
+;; **The argument registers are written in place, so the order they are written in is part of
+;; the correctness.** Argument j goes to `arg-reg j`; argument j+1 is evaluated afterwards, so
+;; it must not READ a register an earlier argument has already overwritten. Everything else is
+;; safe by construction: `arg-reg k` for k > j has not been written yet, and `arg-reg j` itself
+;; can only be read by the argument that is about to be written to it, which is the identity
+;; move `:c::selv` already emits as nothing.
+;;
+;; This is only ever a live question when the CALLER is itself a register-convention function,
+;; because nothing else ever holds a value in rdi, rsi or rdx.
+(:wat::core::defn :c::arg-src-reg [a <- :wat::core::i64 env <- :c::Env
+                                   pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:c::reg-of a env pg))
+    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) -1)
+    (:else (:wat::core::let [ks (:c::kidsof pg a)]
+             (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) -1
+               (:c::reg-of (:wat::core::nth ks 1) env pg))))))
+
+;; **an argument whose evaluation cannot reach a `call` and cannot name an argument register.**
+;; Anything that is not a list is a literal or a name -- at worst a `movabs` -- and a list is
+;; admitted only through `:c::selv?`, which is `reg - imm` with the trap proved dead. A general
+;; expression is excluded not because it is slow but because a division, a string compare or an
+;; inlined body reaches a runtime routine, and a routine destroys rdi and rsi.
+(:wat::core::defn :c::arg-plain? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::or (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))
+                  (:c::selv? a env pg (:c::Prog/bnds pg))))
+
+(:wat::core::defn :c::args-direct? [ks <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
+                                    env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::> i n) true
+    (:wat::core::and (:c::arg-plain? (:wat::core::nth ks i) env pg)
+      (:wat::core::and
+        (:wat::core::let [p (:c::argreg-pos (:c::arg-src-reg (:wat::core::nth ks i) env pg) 0)]
+          (:wat::core::or (:wat::core::< p 0) (:wat::core::>= p (:wat::core::- i 1))))
+        (:c::args-direct? ks (:wat::core::+ i 1) n env pg)))))
+
+;; the share has to happen with the value in rax, because that is the register its three
+;; instructions name -- so a pointer that still needs marking goes the long way round and
+;; everything else goes straight to its destination
+(:wat::core::defn :c::arg-shares? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
+                                   o <- :c::Out] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
+    (:wat::core::and (:c::ptr-ty? (:c::type-of a env pg))
+      (:wat::core::< (:c::index-of-str (:c::Out/shared o) (:c::share-key a env pg) 0) 0))))
+
+(:wat::core::defn :c::arg-into [a <- :wat::core::i64 dst <- :wat::core::i64 o <- :c::Out
+                                env <- :c::Env pg <- :c::Prog rt <- :c::Layout
+                                tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::cond
+    ((:c::arg-shares? a env pg o)
+      (:c::emit (:c::share a env pg (:c::expr a o env pg rt tb slot (:c::no-tail)))
+                (:c::reg-mov-from dst)))
+    ;; a pointer name already marked: `:c::selv?` refuses it for being a pointer, but moving a
+    ;; register to a register is the same instruction whatever it holds
+    ((:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
+                      (:wat::core::>= (:c::reg-of a env pg) 0))
+      (:wat::core::let [r (:c::reg-of a env pg)]
+        (:wat::core::if (:wat::core::= r dst) o (:c::emit o (:c::mov-rr r dst)))))
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Str {})) (:c::str-lit a o tb pg dst))
+    (:else (:c::expr-to a dst o env pg rt tb slot))))
+
+(:wat::core::defn :c::arg-regs [ks <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
+                                o <- :c::Out env <- :c::Env pg <- :c::Prog rt <- :c::Layout
+                                tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::> i n) o
+    (:c::arg-regs ks (:wat::core::+ i 1) n
+      (:c::arg-into (:wat::core::nth ks i) (:c::arg-reg (:wat::core::- i 1)) o env pg rt tb slot)
+      env pg rt tb slot)))
+
+;; the other path: pushed left to right by `:c::push-args`, so the top of the stack is the LAST
+;; argument and the pops run downwards. There is no `add rsp` after this -- the pops are the
+;; deallocation.
+(:wat::core::defn :c::arg-pops [j <- :wat::core::i64 o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::< j 0) o
+    (:c::arg-pops (:wat::core::- j 1) (:c::popn o (:c::reg-pop (:c::arg-reg j)) 8))))
+
 (:wat::core::defn :c::push-args [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64] -> :c::Out
@@ -4026,42 +4122,43 @@
                                    o <- :c::Out env <- :c::Env pg <- :c::Prog
                                    rt <- :c::Layout tb <- :wat::core::i64
                                    slot <- :wat::core::i64 nr <- :wat::core::i64
-                                   pv <- :c::Kids] -> :c::Out
+                                   pv <- :c::Kids na <- :wat::core::i64] -> :c::Out
   (:wat::core::if (:wat::core::>= j n) o
+   (:wat::core::let [pr (:c::param-reg j nr na)]
     (:wat::core::cond
       ;; **an argument that is already a value goes straight into its parameter register** --
       ;; a register, a small literal, a `reg - imm`. `selv` is the same emitter the diamond's
       ;; arms use, and it carries the check that matters here: when the argument is the
       ;; parameter register ALREADY it emits nothing, where the general path below spends
       ;; `mov %rN,%rax ; mov %rax,%rN` saying so. C-177.
-      ((:wat::core::and (:wat::core::< j nr)
+      ((:wat::core::and (:wat::core::>= pr 0)
          (:c::selv? (:wat::core::nth ks (:wat::core::+ j 1)) env pg (:c::Prog/bnds pg)))
         (:c::tail-direct ks (:wat::core::+ j 1) n
-          (:c::emit o (:c::selv (:wat::core::nth ks (:wat::core::+ j 1)) j env pg))
-          env pg rt tb slot nr pv))
+          (:c::emit o (:c::selv (:wat::core::nth ks (:wat::core::+ j 1)) pr env pg))
+          env pg rt tb slot nr pv na))
       ;; **an argument that is a select goes straight into its parameter register**, which is
       ;; where the diamond's last `mov` went anyway
-      ((:wat::core::and (:wat::core::< j nr)
+      ((:wat::core::and (:wat::core::>= pr 0)
                         (:c::sel-ok? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
         (:c::tail-direct ks (:wat::core::+ j 1) n
-          (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg)
-          env pg rt tb slot nr pv))
+          (:c::sel (:wat::core::nth ks (:wat::core::+ j 1)) pr o env pg)
+          env pg rt tb slot nr pv na))
       ;; the counter step, when no bound was available to make it a `lea`
-      ((:wat::core::and (:wat::core::< j nr)
+      ((:wat::core::and (:wat::core::>= pr 0)
                         (:c::acc-op? (:wat::core::nth ks (:wat::core::+ j 1)) env pg))
         (:c::tail-direct ks (:wat::core::+ j 1) n
-          (:c::acc-op (:wat::core::nth ks (:wat::core::+ j 1)) j o env pg rt)
-          env pg rt tb slot nr pv))
+          (:c::acc-op (:wat::core::nth ks (:wat::core::+ j 1)) pr o env pg rt)
+          env pg rt tb slot nr pv na))
       (:else
        (:wat::core::let
         [o1 (:c::tail-share (:wat::core::nth ks (:wat::core::+ j 1)) pv j env pg
               (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
          o2 (:c::emit o1
-              (:wat::core::if (:wat::core::< j nr) (:c::reg-mov-from j)
+              (:wat::core::if (:wat::core::>= pr 0) (:c::reg-mov-from pr)
                 (:c::store (:c::fp o1 (:wat::core::+ 16
                              (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1) j))))
                            (:c::Out/fpr o1))))]
-        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr pv))))))
+        (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr pv na)))))))
 
 ;; **the same call, through a register.** Arguments go on the stack exactly as `:c::call-user`
 ;; puts them there, so a function reached this way is ordinary compiled code with no special
@@ -4083,21 +4180,26 @@
     (:wat::core::if (:wat::core::= n 0) o3
       (:c::popn o3 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))
 
-(:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String o <- :c::Out env <- :c::Env
+;; **the caller is handed the table INDEX, and everything it needs is one row.** The guard
+;; above already found it with `:c::fn-of` to check the arity; asking `:c::fn-addr` for the
+;; address here was a second linear scan of seven hundred rows at every call site, and asking
+;; `:c::fn-nargs` for the convention would have been a third. The comment at the guard has
+;; claimed "one scan of the function table, not two" since C-128; now it is true.
+(:wat::core::defn :c::call-user [ks <- :c::Kids head <- :wat::core::String fi <- :wat::core::i64
+                                 o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
-  (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)]
+  (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
+                    f (:wat::core::nth (:c::Prog/fns pg) fi)]
     (:wat::core::if (:c::tail-call? tc head n)
       ;; a self call in tail position: overwrite the incoming arguments and go round again, on
       ;; the SAME frame, so a tail-recursive loop runs in constant stack
       (:wat::core::let
-        [fi (:c::fn-of pg head 0)
-         pv (:c::kidsof pg (:wat::core::nth
-              (:c::kidsof pg (:c::Fn/node (:wat::core::nth (:c::Prog/fns pg) fi))) 2))
+        [pv (:c::kidsof pg (:wat::core::nth (:c::kidsof pg (:c::Fn/node f)) 2))
          o2 (:wat::core::if (:c::tail-direct? pv ks 0 n pg)
-              (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc) pv)
+              (:c::tail-direct ks 0 n o env pg rt tb slot (:c::TC/nregs tc) pv (:c::TC/nargs tc))
               (:c::tail-store 0 n (:c::push-but-last ks 1 o env pg rt tb slot pv)
-                (:c::TC/nregs tc)))]
+                (:c::TC/nregs tc) (:c::TC/nargs tc)))]
         ;; **the back edge tests for itself** (C-188), when `if-cmp` handed down a test it
         ;; can repeat. Looping is then one taken branch instead of two, and the `jmp` to the
         ;; top is left behind for the exit path -- where it re-runs the test once and falls
@@ -4111,27 +4213,48 @@
                                 (:wat::core::+ (:c::hexlen t) 4))) 4))))]
           (:c::emit o3 (:wat::string::concat "e9"
             (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o3) 5)) 4)))))
-      (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
-                        o2 (:c::call o1 (:c::fn-addr pg head 0))]
-        (:wat::core::if (:wat::core::= n 0) o2
-          (:c::popn o2 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))))
+      (:wat::core::let [na (:c::Fn/nargs f)
+                        at (:c::Fn/addr f)]
+        (:wat::core::cond
+          ;; the register convention, with every argument placeable where it belongs
+          ((:wat::core::and (:wat::core::> na 0) (:c::args-direct? ks 1 n env pg))
+            (:c::call (:c::arg-regs ks 1 n o env pg rt tb slot) at))
+          ;; the register convention with an argument that has to be evaluated out of the way
+          ;; first: the stack is the scratch space, and the pops replace the `add rsp`
+          ((:wat::core::> na 0)
+            (:c::call (:c::arg-pops (:wat::core::- n 1) (:c::push-args ks 1 o env pg rt tb slot))
+                      at))
+          (:else
+            (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
+                              o2 (:c::call o1 at)]
+              (:wat::core::if (:wat::core::= n 0) o2
+                (:c::popn o2 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n))))))))))
 
 ;; ---------------------------------------------------------------- compiling one function
 
 (:wat::core::defn :c::param-env [pv <- :c::Kids i <- :wat::core::i64 n <- :wat::core::i64
-                                 env <- :c::Env pg <- :c::Prog regs? <- :wat::core::bool] -> :c::Env
+                                 env <- :c::Env pg <- :c::Prog regs? <- :wat::core::bool
+                                 na <- :wat::core::i64] -> :c::Env
   ;; the parameter vector reads `name :- type` per parameter, so names are every third child
   (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) env
     (:c::param-env pv (:wat::core::+ i 3) n
       (:wat::core::conj env
         (:c::Bind :name (:c::text pg (:wat::core::nth pv i))
                   :ty (:c::ty-of-node (:wat::core::nth pv (:wat::core::+ i 2)) pg)
-                  :reg (:wat::core::if (:wat::core::and regs?
-                                         (:wat::core::< (:wat::core::/ i 3) (:c::nregs)))
-                         (:wat::core::/ i 3) -1)
+                  ;; **the register convention does not depend on `regs?` and must not.**
+                  ;; `regs?` asks whether a prologue that MOVES parameters into callee-saved
+                  ;; registers pays for itself; a register-convention parameter is already in
+                  ;; its register when control arrives, so there is no prologue to pay for.
+                  ;; Forcing `regs?` true for these is precisely what made F-181 measure +10.3%.
+                  :reg (:wat::core::cond
+                         ((:wat::core::> na 0) (:c::arg-reg (:wat::core::/ i 3)))
+                         ((:wat::core::and regs?
+                            (:wat::core::< (:wat::core::/ i 3) (:c::nregs)))
+                           (:wat::core::/ i 3))
+                         (:else -1))
                   :disp (:wat::core::+ 16 (:wat::core::* 8 (:wat::core::- (:wat::core::- n 1)
                                                              (:wat::core::/ i 3))))))
-      pg regs?)))
+      pg regs? na)))
 
 (:wat::core::defn :c::nparams [pv <- :c::Kids] -> :wat::core::i64
   (:wat::core::if (:wat::core::= (:wat::core::length pv) 0) 0
@@ -4358,6 +4481,120 @@
                                  arity <- :wat::core::i64 env <- :c::Env
                                  pg <- :c::Prog] -> :wat::core::bool
   (:c::noret-seq? ks start true name arity env pg))
+
+;; ---------------------------------------------------------------- who takes arguments in registers
+;;
+;; **The convention is a property of the DECLARATION, because the two sides of a call compile
+;; independently.** A caller emits its arguments before the callee has an address, let alone a
+;; body, so the only thing it can consult is the table -- hence `:c::Fn/nargs`, decided once
+;; here and read by `:c::call-user` and `:c::compile-fn` alike.
+;;
+;; **And the condition is `:c::callfree?`, not arity.** F-181 built this with the convention
+;; forced on every arity 1-3 function and measured +10.3% on `elf/bench/optm.wat`: a small
+;; callee paid `push rbx; push r12; mov rbx,rdi; mov r12,rsi; ...; pop r12; pop rbx` -- six
+;; instructions -- against two saved at the call site. C-136 had already measured the same
+;; thing in 1993-equivalent terms (`fib`: with registers 25% SLOWER). A callee that makes no
+;; returning call does not have to move its parameters ANYWHERE: nothing between entry and
+;; `ret` writes rdi, rsi or rdx, so they stay where the caller put them and the prologue this
+;; would otherwise need does not exist. That is the whole strike.
+;;
+;; The enum tiers are what made it reachable. `user/pick`'s body is
+;; `(if (< n 0) (:A.None {}) (:A.Some {:value s}))`, and until C-208 taught
+;; `:c::scratch-safe?` that a tier-1 constructor IS its field expression, `:c::callfree?`
+;; called both arms a call.
+(:wat::core::defn :c::argreg-fn? [node <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::let [ks (:c::kidsof pg node)
+                    pv (:c::kidsof pg (:wat::core::nth ks 2))
+                    n (:c::nparams pv)
+                    start (:c::body-start ks 3 pg)]
+    (:wat::core::if (:wat::core::or (:wat::core::< n 1) (:wat::core::> n (:c::nargregs))) 0
+      ;; a function that clones is excluded for C-136's reason: the child inherits the frame,
+      ;; so a parameter that never reached the frame is a parameter the child cannot see
+      (:wat::core::if (:c::has-clone? node pg) 0
+        (:wat::core::if
+          (:c::callfree? ks start (:c::text pg (:wat::core::nth ks 1)) n
+            (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg false 0) pg)
+          n 0)))))
+
+;; **a function's address is a VALUE** (`(map user/f xs)`), so an indirect caller cannot know
+;; its target's arity and `:c::call-indirect` can only ever push. F-181 answered that with a
+;; two-entry shim -- a prologue that loads the pushed arguments into registers and falls
+;; through -- and paid +5,549 bytes for it across the corpus. This answers it by asking whether
+;; the address is taken at all: a name that only ever appears in head position is never reached
+;; through `call *rax`, and in this corpus that is all but a handful of functions.
+;;
+;; One pass over the whole arena, testing against the CANDIDATE names rather than against every
+;; function: the candidate list is short and a failing string compare stops at the first byte,
+;; where `(:c::fn-of pg txt 0)` per symbol would be a scan of seven hundred names apiece.
+(:wat::core::defn :c::taken-kids [ks <- :c::Kids i <- :wat::core::i64
+                                  cands <- (:wat::core::Vector :- [:wat::core::String])
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])
+                                  pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::taken-kids ks (:wat::core::+ i 1) cands
+      (:wat::core::let [k (:wat::core::nth ks i)]
+        (:wat::core::if (:wat::core::not= (:c::kindv k pg) (:rd::Kind.Symbol {})) acc
+          (:wat::core::let [t (:c::text pg k)]
+            (:wat::core::if (:wat::core::and (:wat::core::>= (:c::index-of-str cands t 0) 0)
+                              (:wat::core::< (:c::index-of-str acc t 0) 0))
+              (:wat::core::conj acc t) acc))))
+      pg)))
+
+;; kid 0 of a list is the head and is the one position that is a CALL rather than a value;
+;; everything else -- a vector's elements, a list's arguments -- is a value
+;; **a `defn`'s own name is at kid 1 and is not a reference to anything.** Counting it made
+;; every function in the program address-taken and the convention never applied once -- the
+;; first build was byte-identical to the baseline, which is what caught it.
+(:wat::core::defn :c::taken-start [a <- :wat::core::i64 ks <- :c::Kids pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) 0
+    (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
+      (:wat::core::if (:c::defn? (:c::text pg (:wat::core::nth ks 0))) 2 1))))
+
+(:wat::core::defn :c::taken-scan [pg <- :c::Prog a <- :wat::core::i64 n <- :wat::core::i64
+                                  cands <- (:wat::core::Vector :- [:wat::core::String])
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])]
+                                 -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= a n) acc
+    (:c::taken-scan pg (:wat::core::+ a 1) n cands
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:c::taken-kids ks (:c::taken-start a ks pg) cands acc pg)))))
+
+(:wat::core::defn :c::argreg-mark [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::FnV] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg)))
+    (:wat::core::assoc pg :fns acc)
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)]
+      (:c::argreg-mark pg (:wat::core::+ i 1)
+        (:wat::core::conj acc
+          (:wat::core::assoc f :nargs (:c::argreg-fn? (:c::Fn/node f) pg)))))))
+
+(:wat::core::defn :c::argreg-cands [pg <- :c::Prog i <- :wat::core::i64
+                                    acc <- (:wat::core::Vector :- [:wat::core::String])]
+                                   -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) acc
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)]
+      (:c::argreg-cands pg (:wat::core::+ i 1)
+        (:wat::core::if (:wat::core::> (:c::Fn/nargs f) 0)
+          (:wat::core::conj acc (:c::Fn/name f)) acc)))))
+
+(:wat::core::defn :c::argreg-clear [pg <- :c::Prog i <- :wat::core::i64
+                                    taken <- (:wat::core::Vector :- [:wat::core::String])
+                                    acc <- :c::FnV] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg)))
+    (:wat::core::assoc pg :fns acc)
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)]
+      (:c::argreg-clear pg (:wat::core::+ i 1) taken
+        (:wat::core::conj acc
+          (:wat::core::if (:wat::core::< (:c::index-of-str taken (:c::Fn/name f) 0) 0) f
+            (:wat::core::assoc f :nargs 0)))))))
+
+(:wat::core::defn :c::argreg-fns [pg <- :c::Prog] -> :c::Prog
+  (:wat::core::let [pg1 (:c::argreg-mark pg 0 (:wat::core::Vector :- [:c::Fn]))
+                    cands (:c::argreg-cands pg1 0 (:wat::core::Vector :- [:wat::core::String]))]
+    (:wat::core::if (:wat::core::= (:wat::core::length cands) 0) pg1
+      (:c::argreg-clear pg1 0
+        (:c::taken-scan pg1 0 (:wat::core::length (:rd::St/arena (:c::Prog/src pg1))) cands
+          (:wat::core::Vector :- [:wat::core::String]))
+        (:wat::core::Vector :- [:c::Fn])))))
 
 ;; ---------------------------------------------------------------- what the branch proves
 ;;
@@ -4938,8 +5175,15 @@
                (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
                                (:c::text pg (:wat::core::nth ks 1)) n pg)
                (:wat::core::> slots 0)))
-     nr (:wat::core::if regs? (:c::imin n (:c::nregs)) 0)
-     env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs?)
+     ;; **and the convention the table decided, which OVERRIDES all of that.** A
+     ;; register-convention function's parameters are already in their registers when control
+     ;; arrives, so it takes none of the callee-saved pool for them -- `nr` is zero and the
+     ;; whole pool is left for `let`. That is not a detail: the version that forced `regs?`
+     ;; here and spent the pool anyway measured +10.3% (F-181).
+     na (:c::fn-nargs pg (:c::text pg (:wat::core::nth ks 1)) 0)
+     nr (:wat::core::if (:wat::core::> na 0) 0
+          (:wat::core::if regs? (:c::imin n (:c::nregs)) 0))
+     env (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg regs? na)
      fname (:c::text pg (:wat::core::nth ks 1))
      sc (:c::scalar-of pv ks start fname env pg)
      ;; **the registers a parameter did not take, `let` can have.** C-142's inlining turns every
@@ -4951,8 +5195,12 @@
      ;; See `:c::callfree?`: those four need no saving and no restoring, so the only cost of
      ;; using them is that the scratch pool has fewer -- which is why `nscr` goes down by
      ;; exactly as many as the bindings take.
-     free? (:wat::core::and (:wat::core::not (:c::has-clone? node pg))
-             (:c::callfree? ks start (:c::text pg (:wat::core::nth ks 1)) n env pg))
+     ;; **the register convention IS `:c::callfree?`, already answered.** `:c::argreg-fns`
+     ;; asked this question once for the whole program; asking it again here, twice per
+     ;; function because there are two passes, is the same walk three times over.
+     free? (:wat::core::or (:wat::core::> na 0)
+             (:wat::core::and (:wat::core::not (:c::has-clone? node pg))
+               (:c::callfree? ks start (:c::text pg (:wat::core::nth ks 1)) n env pg)))
      nlr (:wat::core::if (:c::has-clone? node pg) 0
            (:c::imin (:wat::core::+ (:wat::core::- (:c::nregs) nr)
                        (:wat::core::if free? (:c::nscratch) 0))
@@ -4982,7 +5230,10 @@
      ;; **before the frame exists, the parameters are still where the caller put them**, so this
      ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
      ;; because a cloning function keeps its frame pointer and its parameters with it.
-     env0 (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg false)
+     ;; ...except under the register convention, where "before the frame exists" and "after"
+     ;; are the same place: the parameters are in registers on both sides of the prologue,
+     ;; because nothing ever put them anywhere else.
+     env0 (:c::param-env pv 0 n (:wat::core::Vector :- [:c::Bind]) pg false na)
      ;; ...and no registers have been handed out yet either, so the peeled head is compiled
      ;; against a program that says so. `pg` still carries the PREVIOUS function's `nlr` and
      ;; `regbase` at this point -- harmless while the pool was a constant four, and not harmless
@@ -5015,6 +5266,8 @@
                        (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
                        (:c::sub-rsp frame)
                        (:c::reg-saves 0 nsave "")
+                       ;; nothing to load: `nr` is zero under the register convention and the
+                       ;; arguments were never on the stack to be loaded from
                        (:c::reg-loads pv 0 n nr pg fkv fpr? "")
                        ;; after the pointer is in its register, and BEFORE the tail target,
                        ;; so the call from outside loads the field once and the back edge
@@ -5055,7 +5308,7 @@
                    (:wat::core::Vector :- [:wat::core::String])))
      tc (:wat::core::if (:c::has-clone? node pg)
           (:c::no-tail)
-          (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr
+          (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr :nargs na
                   :target (:wat::core::+ base (:c::codelen o1)) :test "" :body 0))
      ;; when the head was peeled off, the body is the `if`'s ELSE arm and nothing else
      o2 (:wat::core::if wrap?
@@ -5140,7 +5393,8 @@
               (:wat::core::conj (:c::Prog/fns pg)
                 ;; the return TYPE waits until every record and alias has been seen -- a type
                 ;; is allowed to be declared after the function that uses it, as it is in wat
-                (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0 :ret "")))
+                (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0 :ret ""
+                        :nargs 0)))
             dir))
         ((:c::defrecord? head)
           (:wat::core::let [fv (:c::kidsof pg (:wat::core::nth ks 2))]
@@ -5715,7 +5969,10 @@
      pg-f (:c::fill-fns pg-r 0 (:wat::core::Vector :- [:c::Fn]))
      pg-p (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
      ;; the calls that become `let`s, before either pass sees a node
-     pg0 (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
+     pg-i (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
+     ;; ...and AFTER them, because inlining is what turns a body's last call into a `let` and
+     ;; so decides whether it is `:c::callfree?` at all
+     pg0 (:c::argreg-fns pg-i)
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one -- but every instruction
      ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0.

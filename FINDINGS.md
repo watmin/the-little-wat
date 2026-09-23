@@ -14446,6 +14446,19 @@ identical on both sides and cancel, so that delta is pure representation with no
 C's sixteen and two -- and we still lose on the total, because we pay a trap check per add, a
 refcount guard per share, and stack argument passing, which C pays none of.
 
+**CORRECTION (C-211).** The `gcc -O2` figure of `360,186,5xx` quoted above was measured on a C
+source with the loop in a separate `run()` function. `elf/bench/opt.c`, which `tools/vs-c.sh`
+actually pairs against `optm.elf`, puts the loop in `main` over a `static const` buffer -- and
+gcc then emits **`pick.constprop.0`**, having propagated the buffer pointer into the callee, so
+**its `pick` takes ONE argument where ours takes two**. That binary measures `220,231,04x`.
+
+Both numbers are real and they are different programs. The board's C column has been measuring
+gcc's constant propagation rather than the enum representation the section claims to measure --
+a fairness bug introduced with the benchmark itself. **No "Nx behind gcc" ratio from this section
+should be trusted until `elf/bench/opt.c` is rewritten to resist constprop**, and the
+ours-vs-ours row (tier 1 against tier 3) remains the load-bearing comparison, since it involves
+no C at all.
+
 ### F-180: `:c::slots-of` never counted `match`'s frame slots -- the TENTH walk to forget a form
 
 **Fix.** `:c::slots-of` computes a function's frame size by walking for `let` bindings. It had a
@@ -14570,3 +14583,68 @@ from 2.17x to **1.94x** behind `gcc -O2` (360,186,5xx).
 
 `elf/probe/share-shadow.wat` and `elf/probe/share-join.wat` pin both real hazards with the exact
 wrong output recorded, so a regression names itself.
+
+### C-211 / F-183: the register convention, retried and MEASURED POSITIVE -- because strike 1 came first
+
+**Improve.** A per-function calling convention: arity 1-3, no `clone`, and **`:c::callfree?`**
+means arguments arrive in `rdi`/`rsi`/`rdx`. F-181 built the same feature and measured **+10.3%**.
+This one measures **-11.4%**. One decision separates them.
+
+**`regs?` is not forced.** F-181 made every register-convention function move its parameters into
+the callee-saved pool, so a small callee paid `push rbx; push r12; mov; mov; ...; pop; pop` --
+C-136's own recorded result, *"`fib`: with registers 25% SLOWER"*. Here a call-free callee keeps
+its parameters in the argument registers and emits **no prologue at all**.
+
+**That is only possible because C-208/C-209 landed first.** F-181 tried exactly this and reported
+it "buys NOTHING", because `:c::callfree?` said `user/pick` makes a call -- `:c::quiet-head?`
+could not know an enum constructor allocates nothing. Verified this time before building, by
+instrumenting `compile-fn`: `"FREE user/pick"`. **Strike 1 measured byte-neutral on the corpus
+and was the precondition for the whole strike.** A change whose entire value is enabling a later
+one is easy to mistake for wasted work.
+
+**The emitted loop**, `elf/bench/optm.wat`:
+
+```
+callee  was: mov 0x8(%rsp),%rax ; cmp ; jge ; ... ; mov 0x10(%rsp),%rax ; ret   (5)
+        now: cmp $0x0,%rsi      ;       jge ; ... ; mov %rdi,%rax        ; ret   (4)
+call    was: mov %rbx,%rax ; push ; mov %r12,%rax ; push ; call ; add $0x10,%rsp (6)
+        now: mov %rbx,%rdi ;        mov %r12,%rsi ;        call                  (3)
+```
+
+-4 instructions x 20M = -80,000,000 predicted; -79,999,938 measured.
+
+| | instructions | compiler |
+|---|---|---|
+| before | 700,000,2xx | 244,963 B |
+| after | **620,000,2xx (-11.4%)** | 249,859 B (+4,896) |
+
+Cumulative across C-206/C-207/C-210/C-211: **780,000,354 -> 620,000,2xx, -20.5%.** Every other
+bench program is 1.0000. The code GENERATOR makes the compiler smaller (HEAD source under new
+codegen is 244,057 B, -1,260); the +4,896 is the ~340 new lines it must compile.
+
+**No shim.** F-181 gave every register-convention function a second entry point so `call *%rax`
+kept working, at +5,549 bytes. An address-taken scan replaces it: in `elf/compile.wat`, **62
+candidates and 0 actually taken**.
+
+**A bug that passed every gate, again.** The address-taken scan initially marked EVERY function as
+taken, because a `defn`'s own name sits at kid 1 of a list. The build was byte-identical to
+baseline, bootstrap reached a fixpoint, `emitted.sh` reported no movement and `elf-run` agreed --
+the feature silently did nothing. **It was found by disassembling the loop and seeing it had not
+moved.** Fourth time this session an oracle said yes to something wrong.
+
+**Two pre-existing costs found while measuring**, both now fixed: `:c::fn-nargs` was a second
+linear scan of 752 `Fn` rows per call site per pass -- ~245M instructions on a corpus compile,
+more than everything the strike added -- removed by handing `:c::call-user` the index
+`:c::fn-of` already found. That also deleted a duplicate `:c::fn-addr` scan, so
+`elf/compile.wat:1963`'s claim of *"one scan of the function table, not two"* is true now and was
+not before.
+
+**An honest over-build, kept**: `:c::args-direct?`'s clash check guards a parallel-move hazard
+that cannot arise today -- a register-convention function is `callfree?`, so nothing whose
+parameters live in argument registers is ever a caller. It is what makes widening to eight
+registers safe, and it is dead code until then.
+
+**Still on the table**: `fib32`/`fibreg` do not move, because `fib` makes a RETURNING self call
+and so is not `callfree?`. F-181 measured 0.933/0.978 there with forced `regs?` -- the win C-136
+measured as a 25% LOSS when paid for with a prologue. Taking it needs a cost model, not a wider
+table.

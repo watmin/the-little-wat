@@ -210,6 +210,38 @@
 (:wat::core::defn :c::r14 [] -> :wat::core::i64 14)
 (:wat::core::defn :c::r15 [] -> :wat::core::i64 15)
 
+;; ---------------------------------------------------------------- the argument registers
+;;
+;; **The eventual partition is eight of them.** `rdi rsi rdx rcx r8 r9 r10 r11` caller-saved
+;; arguments, `rbx r12 r13 rbp` the callee-saved pool, `rax` the return, `rsp`/`r14`/`r15`
+;; reserved -- which maps one-to-one onto ARM64's `x0`-`x7`. Two things block the widening and
+;; neither of them is argument passing: `:c::op-hex` puts every binop's right operand in `rcx`,
+;; and `r8`-`r11` are `:c::callfree?`'s scratch pool (F-181). So it is three today, and when
+;; those two move it is an edit to the constant and the table below and nothing else.
+(:wat::core::defn :c::nargregs [] -> :wat::core::i64 3)
+
+(:wat::core::defn :c::arg-reg [i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond ((:wat::core::= i 0) (:c::rdi))
+                    ((:wat::core::= i 1) (:c::rsi))
+                    (:else (:c::rdx))))
+
+;; which argument position a register is, or -1 -- the inverse of the table, read as a loop so
+;; that widening the table widens this with it
+(:wat::core::defn :c::argreg-pos [r <- :wat::core::i64 i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond ((:wat::core::>= i (:c::nargregs)) -1)
+                    ((:wat::core::= (:c::arg-reg i) r) i)
+                    (:else (:c::argreg-pos r (:wat::core::+ i 1)))))
+
+;; **where parameter j of this function lives**, or -1 for the frame. Two conventions meet here
+;; and exactly one place knows it: a register-convention function's parameters are in the
+;; ARGUMENT registers and were never on the stack, everything else's first `nr` are in the
+;; callee-saved pool, whose index IS its register number.
+(:wat::core::defn :c::param-reg [j <- :wat::core::i64 nr <- :wat::core::i64
+                                 na <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::> na 0)
+    (:wat::core::if (:wat::core::< j na) (:c::arg-reg j) -1)
+    (:wat::core::if (:wat::core::< j nr) j -1)))
+
 ;; ---------------------------------------------------------------- the third operand shape
 ;;
 ;; **A memory operand is `disp(%base,%index,scale)` and every shape x86 allows is that one with
