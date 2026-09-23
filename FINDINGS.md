@@ -14372,7 +14372,13 @@ pointer payload (ours; C has no ownership model). Only the first is a target.
    claimed -- it survives to ~119M allocations. Checked only after asserting it.
 2. `repz cmpsb` taught the same lesson C-202 recorded: the metric must match the mechanism.
 
-### F-178: the tier-1 ALIAS binding is refused -- correct in some shapes, silently wrong in others
+### F-178 (WRONG, see F-180): the tier-1 ALIAS binding is refused
+
+**This finding is WRONG and the refusal it recommends is withdrawn.** The alias is correct. The
+bug was `:c::slots-of` never counting `match`'s frame slots (F-180), so frames were undersized
+and the alias merely changed WHICH slot the corruption landed on. With the frame fixed the alias
+agrees on every shape recorded below as diverging, and is worth **-5.1%** on
+`elf/bench/optm.wat`. What follows is what a symptom looks like when it is mistaken for a cause.
 
 **Fix, not taken.** Tier 1's payload IS the value, so binding the matched name to the SUBJECT's
 own frame slot -- no load, no store, no slot consumed -- looks free. It is wrong.
@@ -14439,3 +14445,74 @@ identical on both sides and cancel, so that delta is pure representation with no
 `RAX:RDX`, so C allocates nothing either. Our tier 1 is eight bytes and one register against
 C's sixteen and two -- and we still lose on the total, because we pay a trap check per add, a
 refcount guard per share, and stack argument passing, which C pays none of.
+
+### F-180: `:c::slots-of` never counted `match`'s frame slots -- the TENTH walk to forget a form
+
+**Fix.** `:c::slots-of` computes a function's frame size by walking for `let` bindings. It had a
+`let?` case and an `:else`, and **no `match` case**. `:c::match-form` stores the subject at
+`slot` and `:c::arm-binds` takes one per bound field -- none of it a `let` -- so the answer was
+0, no `sub rsp` was emitted, and those slots lived **BELOW rsp**. It survived only because the
+next `push` happened to land on the subject's slot, which is dead by then.
+
+**This is F-169's pattern for the tenth time, introduced by C-203 four hours AFTER F-169 was
+written.** A new form was added and one of the walks was not taught about it. Centralising the
+tail-position rule in `:c::tail-nodes`/`:c::quiet-nodes`/`:c::eval-seq` did not prevent it,
+because `slots-of` asks a different question -- how many frame slots -- and carries its own
+enumeration. **The walk SET is still not enumerable; only one of its questions was centralised.**
+
+**It invalidates F-178.** That finding refused the tier-1 alias as "correct in some shapes,
+silently wrong in others -- the fail-open class". The alias was never wrong; undersized frames
+were, and the alias changed which slot the `push` landed on, which changed which value got
+corrupted. With `slots-of` fixed:
+
+| probe | before | after |
+|---|---|---|
+| `(concat "<" (concat v ">"))` | `"<<>"` DIVERGED | `"<yes>"` agrees |
+| `elf/src/matchval.wat`, `option.wat` | corrupted under frame pressure | agree |
+| `elf/bench/optm.wat` | 780,000,354 instructions | **740,000,2xx (-5.1%)** |
+
+**The discipline failure is precise.** Refusing to ship something not understood was RIGHT.
+Stopping at the refusal was wrong: `extirpare` says pull the root, not the stem, and turning the
+alias off was the stem. The root was in a function neither the symptom nor the refusal pointed
+at. **A refusal is a holding action, not a conclusion.**
+
+### F-181: the register ABI measured NEGATIVE and is held, not landed
+
+**Improve, refused on measurement.** A per-function convention -- arity 1-3 takes arguments in
+`rdi`/`rsi`/`rdx` -- was built, reached a byte-identical fixpoint and passed all three oracles.
+It is not landed, because it is slower:
+
+| | `elf/bench/optm.wat`, 20M iterations |
+|---|---|
+| base | 780,000,354 instructions |
+| register ABI | **860,000,321 (+10.3%)** |
+
+Corpus, retired instructions, new/base: `fibreg` 0.933 and `fib32` 0.978 (the intended win, on
+call-heavy code), `optm` 1.103 and `optmh` 1.063 (the loss), 1.000 almost everywhere else --
+the hot loops are either tail-recursive, so no `call` is in the loop at all, or arity 4+ and
+still on the stack path.
+
+**The cause is in our own record already.** C-136 measured that putting parameters in
+callee-saved registers made `fib` **25% SLOWER**: a small callee's `push rbx; push r12; ...;
+pop` prologue never amortises. The implementation forced `regs?` true for every
+register-convention function and reproduced it exactly -- `user/pick` went from a 5-instruction
+frame reader with no saves to paying +5 per call against -1 saved at the call site.
+
+**Three findings that outlive the attempt:**
+1. **A function's address is a value**, so an indirect caller cannot know its target's arity.
+   Every register-convention function needs TWO entries -- a shim that loads pushed arguments
+   into registers and falls through -- so `call *rax` keeps working. Cost: **+5,549 bytes**. An
+   address-taken analysis would remove them.
+2. **Widening past 3 is blocked by things that are not argument passing**: `:c::op-hex` puts
+   every binop's right operand in `rcx`, and `r8`-`r11` are `:c::callfree?`'s scratch pool. Both
+   must move before the table grows toward the eight-register partition.
+3. **Leaving a call-free leaf's parameters in their argument registers buys NOTHING** --
+   identical instruction counts across the bench corpus. C-142's inliner has already turned
+   every call small enough to qualify into a `let`, so the shape it would optimise no longer
+   reaches a `call`.
+
+**What would make it a win**: `:c::quiet-head?` is a table of head spellings with no way to know
+that a tier-0/1 enum constructor allocates nothing, so `:c::callfree?` calls it a call and
+`user/pick` cannot keep its parameters in registers. Teaching `:c::scratch-safe?` the enum tier
+fixes `optm` and widens the scratch pool everywhere -- its own strike, and the one to take
+before retrying this.

@@ -1445,11 +1445,35 @@
   (:wat::core::if (:wat::core::not (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))) 0
     (:wat::core::let [ks (:c::kidsof pg a)]
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
-        (:wat::core::if (:c::let? (:c::text pg (:wat::core::nth ks 0)))
-          (:wat::core::+ (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth ks 1))) 2)
-            (:c::imax (:c::slots-list (:c::kidsof pg (:wat::core::nth ks 1)) 0 0 pg)
-                      (:c::slots-list ks 2 0 pg)))
-          (:c::slots-list ks 0 0 pg))))))
+        (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
+          (:wat::core::cond
+            ((:c::let? h)
+              (:wat::core::+ (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth ks 1))) 2)
+                (:c::imax (:c::slots-list (:c::kidsof pg (:wat::core::nth ks 1)) 0 0 pg)
+                          (:c::slots-list ks 2 0 pg))))
+            ;; **`match` was missing here, and it is the tenth walk to forget a form** (F-169).
+            ;; `:c::match-form` stores the subject at `slot` and `:c::arm-binds` takes one per
+            ;; bound field, but none of it is a `let`, so this answered 0 -- no `sub rsp`, and
+            ;; the slots lived BELOW rsp. It survived only because the next `push` happened to
+            ;; land on the subject's slot, which is dead by then.
+            ((:wat::core::and (:c::match? h) (:wat::core::>= (:wat::core::length ks) 3))
+              (:wat::core::+ 1 (:c::imax (:c::slots-list ks 1 0 pg)
+                                         (:c::arm-slots ks 2 0 pg))))
+            (:else (:c::slots-list ks 0 0 pg))))))))
+
+;; an arm is `[Variant {:field name ...} body...]`: one slot per bound field, and the bodies are
+;; compiled above them
+(:wat::core::defn :c::arm-slots [ks <- :c::Kids i <- :wat::core::i64 best <- :wat::core::i64
+                                 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
+    (:wat::core::let [aks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:c::arm-slots ks (:wat::core::+ i 1)
+        (:wat::core::if (:wat::core::< (:wat::core::length aks) 2) best
+          (:c::imax best
+            (:wat::core::+ (:wat::core::/ (:wat::core::length
+                                            (:c::kidsof pg (:wat::core::nth aks 1))) 2)
+                           (:c::slots-list aks 2 0 pg))))
+        pg))))
 
 (:wat::core::defn :c::slots-list [ks <- :c::Kids i <- :wat::core::i64 best <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) best
@@ -3163,7 +3187,7 @@
         ;; operand already pushed, and `v` comes back as `"<"`. Correct in some shapes and
         ;; silently wrong in others is the fail-open class, so it stays off until someone
         ;; diagnoses the depth interaction rather than guessing at it.
-        (:wat::core::let [alias? false]
+        (:wat::core::let [alias? (:wat::core::= tier 1)]
           (:c::arm-binds mks (:wat::core::+ j 2) fields ftys sd
             (:wat::core::if alias? o
               (:wat::core::assoc
