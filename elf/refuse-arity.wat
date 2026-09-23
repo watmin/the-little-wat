@@ -277,7 +277,11 @@
 ;; tested: every binary has to come out byte for byte identical.
   [base <- :wat::core::i64  code <- :c::Buf  tail <- :c::Buf
    rax <- :wat::core::String  sp <- :wat::core::i64  fk <- :wat::core::i64
-   fpr <- :wat::core::bool])
+   fpr <- :wat::core::bool
+   ;; **DELIBERATELY UNSOUND FIRST CUT.** Names already shared on this path, with NO
+   ;; invalidation anywhere. The point is to learn which hazards are real by watching what
+   ;; breaks, rather than guessing at them. Do not ship this shape.
+   shared <- (:wat::core::Vector :- [:wat::core::String])])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
   (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
@@ -345,10 +349,18 @@
 ;; **A patch is a branch join, and a join must forget what rax held.** Two paths meet here and
 ;; they do not agree; every `if` and every `cond` clause lands on one of these, so clearing the
 ;; tracking in this one place covers all of them.
+;;
+;; **The share set is the same kind of fact and is cleared here too.** A share emitted inside
+;; one arm has not happened on the other, so carrying it past the join elides a share the other
+;; path still needs -- and an unshared value keeps its owned marker and gets mutated in place.
+;; Measured: `(if c (hold s) "-")` then `(hold s)` answered `"z1!-z1!"` against the
+;; interpreter's `"z1-z1!"` on the false path. `elf/probe/share-join.wat` pins it.
 (:wat::core::defn :c::patch [o <- :c::Out off <- :wat::core::i64 hex <- :wat::core::String] -> :c::Out
   (:wat::core::let [code (:c::buf-str (:c::Out/code o))
                     at (:wat::core::* off 2)]
-    (:wat::core::assoc (:wat::core::assoc o :rax "") :code
+    (:wat::core::assoc
+      (:wat::core::assoc (:wat::core::assoc o :rax "")
+                         :shared (:wat::core::Vector :- [:wat::core::String])) :code
       (:c::buf-one (:wat::string::concat
         (:wat::string::subs code 0 at)
         hex
@@ -3012,13 +3024,30 @@
     ;; integer -- so `cmp [rax-8],0` on one is a read at a negative address. Every enum tier
     ;; that can hold a pointer can also hold a unit, so the increment gets a second guard in
     ;; front of the literal guard: below a page it is a tag, and there is nothing to count.
-    (:c::emit o
+    (:wat::core::let [key (:c::share-key a env pg)]
+    (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::Out/shared o) key 0) 0) o
+    (:wat::core::assoc
+      (:c::emit o
       (:wat::core::if (:c::maybe-unit? (:c::type-of a env pg))
         (:wat::string::concat "483d00100000"                    ;; cmp rax, 0x1000
           (:wat::string::concat "720b"                          ;; jb  +11 (skip both)
                                 "488378f800740448ff40f8"))
         "488378f800740448ff40f8"))                              ;; cmp [rax-8],0 ; je +4 ; incq
+      :shared (:wat::core::conj (:c::Out/shared o) key))))
     o))
+
+;; **the key is the BINDING, not the name.** Keying on the name alone corrupts under shadowing:
+;; `(let [s ...] (hold s) (let [s ...] (hold s)))` elides the second share, so the inner `s`
+;; keeps its owned marker, `hold` mutates it in place, and the caller's later read sees the
+;; mutation -- measured, `"z2!z1!z2!"` against the interpreter's `"z2z1!z2!"`. A shadowing
+;; rebind gets a different frame slot, so `name@disp` tells them apart and the second share
+;; stands. `elf/probe/share-shadow.wat` pins it.
+(:wat::core::defn :c::share-key [a <- :wat::core::i64 env <- :c::Env
+                                 pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [nm (:c::text pg a)]
+    (:wat::string::concat nm
+      (:wat::string::concat "@"
+        (:wat::i64::to-string (:c::lookup env nm (:wat::core::- (:wat::core::length env) 1)))))))
 
 ;; a type whose values are SOMETIMES a pointer and sometimes a small tag
 (:wat::core::defn :c::maybe-unit? [t <- :wat::core::String] -> :wat::core::bool
@@ -4956,7 +4985,8 @@
      ;; them puts every parameter one slot out.
      fkv (:wat::core::if fpr? 0
            (:wat::core::+ frame (:wat::core::* 8 nsave)))
-     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv)
+     o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv
+                 :shared (:wat::core::Vector :- [:wat::core::String]))
      ;; **before the frame exists, the parameters are still where the caller put them**, so this
      ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
      ;; because a cloning function keeps its frame pointer and its parameters with it.
@@ -5220,7 +5250,7 @@
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
-                :fpr false)
+                :fpr false :shared (:wat::core::Vector :- [:wat::core::String]))
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))

@@ -14516,3 +14516,57 @@ that a tier-0/1 enum constructor allocates nothing, so `:c::callfree?` calls it 
 `user/pick` cannot keep its parameters in registers. Teaching `:c::scratch-safe?` the enum tier
 fixes `optm` and widens the scratch pool everywhere -- its own strike, and the one to take
 before retrying this.
+
+### C-210 / F-182: the redundant share, elided -- and two of three predicted hazards were wrong
+
+**Improve.** `:c::share` marks a value as shared by incrementing the ownership word past
+`arm-own`, which disables in-place mutation. The marker is MONOTONE -- the only question ever
+asked is `== arm-own`, and it never comes back -- so a second share of the same binding on the
+same path is provably dead work. `:c::Out` now carries the set of bindings already shared, and
+`:c::share` emits nothing for one already in it.
+
+**The method is the finding.** The unsound version was built FIRST, deliberately -- keyed on the
+name, invalidated nowhere -- and run against the corpus to learn which hazards are real rather
+than which ones could be imagined. Three were predicted; the corpus agreed on all twelve moved
+programs, so every one had to be demonstrated by a program written for it:
+
+| predicted hazard | outcome |
+|---|---|
+| **shadowing** -- `let` rebinds a name | **REAL**: `"z2!z1!z2!"` against the interpreter's `"z2z1!z2!"` |
+| **tail call rewrites a parameter** | **DOES NOT EXIST** -- the body is emitted ONCE, and a tail call is a `jmp`, so nothing after it on that path is reachable. A site running twice is not an elision. |
+| **branch join** | **REAL**, and found only by reasoning through why the tail-call case failed to reproduce: `"z1!-z1!"` against `"z1-z1!"` on the false path |
+
+Had the design been built from the predictions, it would have cleared at five places -- two of
+which do nothing -- and still missed the join, which is the one that corrupts.
+
+**Two fixes, both structural rather than remembered:**
+1. **The key is the BINDING, not the name** (`name@disp`). A shadowing rebind gets a different
+   frame slot, so the two cannot collide. Nothing has to remember to clear at a binding site.
+2. **`:c::patch` clears the set** -- and the codebase already knew this. Its own comment reads
+   *"a patch is a branch join, and a join must forget what rax held ... clearing the tracking in
+   this one place covers all of them."* The share set is the same kind of fact, cleared in the
+   same place, for the same reason. The mechanism was written down; it had not been applied here.
+
+**Abort jumps correctly do not clear.** `:c::ovf-check` emits `jo -> at-ovf` through `:c::emit`
+with a computed displacement, never through `:c::patch`. A jump that never returns creates no
+join -- which is exactly what makes the benchmark's two shares, separated by an overflow trap,
+elidable at all.
+
+**Measured**, `elf/bench/optm.wat`, 20M iterations:
+
+| | instructions | compiler size |
+|---|---|---|
+| before | 740,000,2xx | 253,902 B |
+| after | **700,000,2xx (-5.4%)** | **244,963 B (-8,939)** |
+
+**The size result was not predicted and is the more interesting number.** Nearly 9 KB of the
+compiler was the share guard emitted for values already marked -- five instructions a site,
+roughly 1,800 sites. That is a measure of how often this codebase passes the same name to
+several calls in one expression, which is the same state-threading shape that puts 51 functions
+at 7+ parameters.
+
+Cumulative on `optm` across C-206/C-207/C-210: **780,000,354 -> 700,000,2xx, -10.3%**, closing
+from 2.17x to **1.94x** behind `gcc -O2` (360,186,5xx).
+
+`elf/probe/share-shadow.wat` and `elf/probe/share-join.wat` pin both real hazards with the exact
+wrong output recorded, so a regression names itself.
