@@ -14768,6 +14768,17 @@ iteration, with nothing newer surviving it, can have its bytes reused. That need
 analysis, and it needs the fail-safe polarity F-168 taught -- an unknown form must DISABLE the
 rewind, never enable it, because rewinding live bytes is silent corruption.
 
+**Exhaustion is CLEAN, and that is the one good part.** Every allocator compares `r15 + need`
+against the limit at `r14+8` and calls `oom()` (`elf/lib/runtime.wat:983`), which aborts. Proven
+rather than read: `elf/bench/optmh.wat` with `20000000` changed to `200000000` -- about 6.4 GB of
+demand against a 1.9 GB heap -- exits **70** with `wat: heap exhausted` on stderr, at a peak RSS
+of **1811.9 MB**, which is the reservation exactly (1,900,000,000 B = 1812.0 MB). So a leaking
+program walks the bump pointer to the end, commits every reserved page, and then dies loudly and
+deterministically. It does not corrupt, and it does not get OOM-killed by the kernel. Reproduce
+with `sed 's/20000000/200000000/'` on `optmh.wat` through `tools/probe.sh`'s sandbox recipe; it
+is deliberately NOT added to the corpus, since `tools/elf-run.sh` would read a program that
+always aborts as a failure.
+
 **A methodology correction against myself, twice over.** My first instrument was
 `perf stat -e minor-faults`, which reported `optmh` at 2.7 MB and `grow2000000` -- a
 2,000,000-element vector -- at **1.1 MB**. That is physically impossible, which is what caught
