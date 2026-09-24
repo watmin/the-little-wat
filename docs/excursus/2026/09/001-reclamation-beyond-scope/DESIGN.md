@@ -1,12 +1,11 @@
 # Excursus 001 — reclamation beyond scope
 
-**Status: 2026-09-23.** **Stones 0, 0a and 0b LANDED.** F-188 is closed -- NINE doors -- with
-every read out of a container going through `:c::read-out` (checked by `tools/reads.sh`), and its
-cost (F-189) is 71% recovered in INSTRUCTIONS by guarding each type only against what it can be --
-but stone 0 costs ~5-7% in TIME, and 0b's time recovery is inside the measured 1.8% layout floor
-(F-192). The remaining ~5% of cycles is recorded, unexplained; the memory touch is the hypothesis. **Stone 1** -- the caller-side release -- is
-next: it stays HELD on `excursus-001-stone-1` until it is rebased onto `main`, takes an
-`allocates?` gate, and gets a real flatness gate in `mem.sh` §7.
+**Status: 2026-09-23.** **Stones 0 and 0a LANDED** (F-188 closed, nine doors; every read through
+`:c::read-out`). **Stone 0b was REVERTED on `main`** (F-194): its guard derivation trusted a type
+string, and a tier-1 enum built by a constructor and bound by `let` is spelled `henum:` -- a
+segfault on a valid program. It re-lands after ONE function answers an enum value's type. **Stone 0c**
+(the census) STOPPED on that same two-spelling defect -- its SCORE has the census. **Stone 1** stays
+HELD.
 
 > Builder: *"i explicitly do not want a gc that pauses anything.. can we do this inline as we make
 > forward progress in programs?"* — and, on ordering: *"do the hard, correct thing first and

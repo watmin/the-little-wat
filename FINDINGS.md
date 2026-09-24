@@ -14991,7 +14991,7 @@ read of reclaimed memory (`30|240000|4|1|0`), which is why stone 1 is held on br
 
 ### F-189: counting at the read costs the compiler +10.64% -- the guard, not the increment
 
-**71% of the INSTRUCTIONS recovered by excursus 001 stone 0b -- and the TIME is not shown recovered
+**(REVERTED on `main` by F-194 -- stone 0b shipped a segfault; it re-lands after the enum-type spelling is fixed at its root.)** **71% of the INSTRUCTIONS recovered by excursus 001 stone 0b -- and the TIME is not shown recovered
 (F-192).** In cycles, stone 0 costs the compiler ~5-7% and stone 0b's gain over 0a (1.1-1.5%) is
 inside this workload's measured 1.8% layout floor. The instruction figures: Three compilers each at its own fixpoint, identical inputs, best of 9: `dada88f`
 2,083,575,459; stone 0a +8.283% (on today's input -- the +10.64% above was measured on the
@@ -15193,3 +15193,44 @@ dismissed, and it accounts for about 3.5 of stone 0's ~5-7% time cost.
 **The count census this exposed:** of the compiler's 2,654 counted sites, **313 are reads** (stone
 0's) and **~2,341 are `:c::share` increments** -- the counting that predates this excursus is the
 large majority. Whether most counts protect anything is excursus 001 stone 0c.
+
+
+### F-194: stone 0b shipped a segfault -- one enum value, two type spellings, and the rules that catch it
+
+**Fix (a crash on a valid program, landed by the orchestrator), and the first result of excursus 002.**
+Found by the shadowdancer's STOP-2 on excursus 001 stone 0c; reproduced by the orchestrator.
+
+```clojure
+(:wat::core::defenum :user::S :wat::enum::Pure :None [] :Some [s <- :wat::core::String])
+(wat.core/let [o (:user::S.Some {:s "xy"}) k (user/slen o)] (wat.kernel/println k))
+```
+
+Interpreter `2`. `main` at `c1c5069`..`b73463e`: **SIGSEGV**. Stone 0a: `2`.
+
+**The chain.** `:c::type-of-form`'s variant arm (`elf/compile.wat:1374-1379`) types a constructor
+`henum:`/`enum:` from `Enum/heap` alone -- it IGNORES THE TIER, and drops `;arg`. Every declared use
+of the same type goes through `:c::enum-ty` (`:963`), which accounts for both: `penum:user::S`. A
+`let` binding is typed from its initialiser (`:c::bind-each`, `:c::ty-bind`), so the binding gets
+the constructor's spelling. **One value, two type strings.** Stone 0b then derived the count guard
+from the type string: a genuine `henum:` is a heap block and can never be a read-only literal, so it
+gets a bare `incq` -- but this value is tier 1, its payload IS the String literal `"xy"`, and the
+`incq` writes a read-only page.
+
+**Stone 0b's derivation was right per tier; the type string lied about the tier.** The two
+spellings predate 0b -- 0b is what made them fatal. The orchestrator's mutation test for 0b broke the
+`penum:` guard directly and never built an enum through a `let`, so it could not see this.
+
+**Resolved on `main` by restoring stone 0a's code** (`git checkout c9746f1 -- elf/compile.wat
+tools/reads.sh`): fixpoint 254,849 B; `penum-str-let` and `penum-spelled-henum` agree; all 14
+probes agree; `elf-run` ok. Stone 0b's records stay; it re-lands after the spelling is fixed at its
+root -- ONE function that answers "what is this enum value's type", which both paths call.
+
+**The rules experiment** (`docs/excursus/2026/09/002-no-guesses/rete/`). The two derivations
+written as rete rules over wat-grep's facts, exactly as the compiler performs them, plus the one
+constraint it lacks -- *an argument's type equals its parameter's type*. On the crashing program the
+rules report `boundary-type-conflict` at **13:20**, `(user/slen o)`, `henum:user/S` against
+`penum:user/S`: the segfault, found statically, at the call. With ONLY the constructor rule changed to
+spell by tier, the conflict is gone and an agreement witness fires at the same site with both sides
+`penum:user/S` -- so the joins reach the site both ways and only the verdict changes. What the
+hand-written compiler shipped as a segfault, one boundary constraint over two stated derivations
+reports as a compile-time error.
