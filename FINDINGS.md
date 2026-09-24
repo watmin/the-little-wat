@@ -15036,6 +15036,10 @@ that can reach an own path. `elf/src/borrowed.wat` is the oracle for every one o
 
 ### F-190: the checker refuses to re-bind a PARAMETER at a new type, allows it for a `let` -- and blames a `vec` that is not there
 
+**CLOSED -- it was F-196.** The rejection came from checking the UN-normalized copy of the body. With
+stone 3, `elf/probe/check-param-shadow.wat` passes `--check` and prints `4`, as the keyword spelling
+always did. The "two things certain" below were certain about the symptom, not the cause.
+
 **Correct** (an inconsistent rule, or a checker defect -- the cause is NOT yet read) and **Clean**
 (the diagnostic). Found by accident while probing excursus 001 stone 0a; `elf/probe/check-param-shadow.wat`.
 
@@ -15273,6 +15277,12 @@ instead of knows -- and the checker from excursus 002 stone 1 is its gate.
 
 
 ### F-196: `wat --check` does not type-check a function body spelled with namespaced symbols
+
+**FIXED by excursus 002 stone 3 (option E, chosen by the builder): the checked body is the run body.**
+Step 6 now DECLARES (signature, placeholder body); the one body of each function is the normalized
+`def` in the residue, which step 8 checks and step 9 evaluates. Namespaced `(user/slen 5)` now exits 1
+with the TypeMismatch; all 68 corpus programs give byte-identical `--check` output before and after.
+Two wat-rs unit tests that only passed through the removed copy await the builder's ruling.
 
 **Correct, in wat-rs — and the largest gap between "wat delivers perfect knowledge" and what runs.**
 Found by excursus 002 stone 2's shadowdancer, whose oracle could not work without seeing it;

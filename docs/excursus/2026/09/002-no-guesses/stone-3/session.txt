@@ -1,0 +1,8 @@
+(:wat::core::defenum :user::S :wat::enum::Pure :None [] :Some [s <- :wat::core::String])
+(wat.core/defn user/slen [o :- :user::S] :- wat.type/i64 (:wat::core::match o [:user::S.None {} 0] [:user::S.Some {:s s} (wat.string/length s)]))
+(wat.core/defn user/dbl [n :- wat.type/i64] :- wat.type/i64 (wat.i64/* n 2))
+(user/dbl 21)
+(user/slen (:user::S.Some {:s "xyz"}))
+(wat.core/defn user/bad [] :- wat.type/i64 (user/slen 5))
+(user/bad)
+(user/dbl 5)
