@@ -6,7 +6,8 @@
 
 ## THE DEFECT — one guard, applied to types it cannot protect
 
-`:c::count-hex` (`elf/compile.wat:3068`) emits, for every pointer type:
+`:c::count-hex` (`elf/compile.wat:3059`) emits, for every pointer type — and it has exactly two
+callers since stone 0a, `:c::share` and `:c::read-out`, so this one function is where the change lands:
 
 ```
 cmp  qword [rax-8], 0      ; a string LITERAL has count 0 in a read-only segment
@@ -57,11 +58,11 @@ docs/excursus/.../SCORE-stone-0-count-at-the-read.md   the ablation, the census,
 FINDINGS.md F-189                                       the cost and its attribution
 elf/compile.wat:36-50       what the compiler emits; the data tail holds string literals only
 elf/compile.wat:900-975     the enum representation ladder -- what each tier's value IS
-elf/compile.wat:3032        :c::ptr-ty?
-elf/compile.wat:3046-3066   :c::share -- BOTH guards, and the prose saying why each exists
-elf/compile.wat:3068        :c::count-hex -- where the change lands
-elf/compile.wat:3095        :c::count-read
-elf/compile.wat:3112        :c::maybe-unit?
+elf/compile.wat:3023        :c::ptr-ty?
+elf/compile.wat:3037-3057   :c::share -- BOTH guards, and the prose saying why each exists
+elf/compile.wat:3059        :c::count-hex -- where the change lands
+elf/compile.wat:3134-3161   :c::read-out (stone 0a) -- the one caller for reads; count-read is gone
+elf/compile.wat:3170        :c::maybe-unit?
 ```
 
 ## STOP TRIGGERS
@@ -72,7 +73,7 @@ elf/compile.wat:3112        :c::maybe-unit?
   outside the heap.** Then the premise is wrong for that type. STOP and report it — do not guard
   it quietly and carry on, because it means the premise needs re-deriving everywhere.
 - **STOP-3 — less than half of F-189 comes back.** Measure the corpus compile with three
-  compilers, each built to its own fixpoint: before stone 0 (`dada88f`), stone 0 (`e0861bc`), and
+  compilers, each built to its own fixpoint: before stone 0 (`dada88f`), after stone 0a (`c9746f1`), and
   yours. F-189 is the first gap (+10.64%). If yours recovers less than half of it — i.e. it is
   still more than +5.32% over `dada88f` — STOP and report all three, instructions AND cycles. The
   remaining cost may be the memory touch at `[rax-8]` rather than the instruction count, and that
@@ -87,7 +88,7 @@ recorded in DESIGN as not drawn, and this stone does not touch them.
 
 ## METHOD
 
-`/home/watmin/Work/holon/the-little-wat`, branch `main`, HEAD `e0861bc`. `timeout -s KILL` on
+`/home/watmin/Work/holon/the-little-wat`, branch `main`, HEAD `c9746f1`. `timeout -s KILL` on
 every wat run; the tree untouched while `bootstrap.sh` or `elf-run.sh` runs; every replacement
 asserts it matched; `cond` ends in `(:else …)`; bootstrap without `--fast`. Measure user-mode
 instructions AND cycles, pinned `taskset -c 0`, best of 9, interleaved; build each comparison
