@@ -48,3 +48,32 @@ apart, which is precisely the cut text cannot make.
 type, the binding, an `Option`, a runtime check) · **polarity** -- FAIL-SAFE (a wrong guess only
 declines an optimisation) or FAIL-OPEN (a wrong guess can produce a wrong answer or a crash) ·
 reachable from a valid program? (yes with a probe / no with the reason / unknown).
+
+
+## The pivot, 2026-09-23 — rules as the compiler's checker, then its knowledge
+
+> Builder: *"let's get after it - rete has been the thing i have fought hardest for..... structural
+> reasoning continues to prove a massive strength...."*
+
+F-194's experiment (`rete/`) showed a boundary constraint written as rules reporting, at the exact
+line, a bug the hand-written compiler shipped as a segfault. The builder's rete is the most trusted
+part of wat -- and that trust lives in `wat-rs/src/rete/` (15,405 lines of Rust); the wat source is
+the network compiler (~2,100 lines). So the native compiler cannot "compile rete". The order is:
+
+1. **Phase 1 — rete CHECKS the compiler.** The compiler exports what it decided; rules join those
+   decisions syntactically and report disagreements. No change to the compiler's architecture;
+   self-hosting untouched; wat-rs's native rete does the work.
+2. **Phase 2 — one fact, one derivation, inside the compiler** — the elaboration pass, shaped by
+   what phase 1's rules proved the derivations must say.
+3. **Phase 3 — the native compiler compiles rule sets** (the network as a jump DAG, plus fact
+   memories), with wat-rs's rete as the ORACLE: same facts in, same facts out, on every run.
+
+**The first slice rests on a sharp choice: the rules derive NO types.** F-194 was the compiler
+DISAGREEING WITH ITSELF -- the argument typed `henum:`, the parameter `penum:`. So the compiler exports
+its own answers, and the rules supply only the syntactic join (this argument feeds that parameter).
+Writing a type derivation as rules would put the same logic in two languages -- the very disease.
+
+The join key is source position, in wat-grep's convention, measured: **1-based line and column of a
+node's first character; a list begins at its `(`.** The compiler's reader keeps `pos` while reading
+but `:rd::Node` (`elf/lib/reader.wat`) stores only `k`/`text`/`kids`, so positions are the first
+thing to add.
