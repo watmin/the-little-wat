@@ -4223,21 +4223,61 @@
           (:c::emit o3 (:wat::string::concat "e9"
             (:asm::le (:wat::core::- (:c::TC/target tc) (:wat::core::+ (:c::here o3) 5)) 4)))))
       (:wat::core::let [na (:c::Fn/nargs f)
-                        at (:c::Fn/addr f)]
-        (:wat::core::cond
+                        at (:c::Fn/addr f)
+                        ;; ---------------------------------------- the caller-side release
+                        ;;
+                        ;; **`:c::seq`'s rewind, one level up.** A statement's value is thrown
+                        ;; away, so what it allocated is garbage; a call whose callee's DECLARED
+                        ;; return type is not a pointer cannot hand back anything pointing into
+                        ;; what it allocated, so that is garbage too -- and so is whatever
+                        ;; evaluating the arguments allocated, because the only consumer of those
+                        ;; values is a callee that has no way to give one back. Eight bytes of
+                        ;; code, and it nests without bookkeeping because the marks are on the
+                        ;; stack. This is the paragraph at `:c::seq` naming what it does not do.
+                        ;;
+                        ;; **The type test is the DECLARATION.** `:c::Fn/ret` is filled by
+                        ;; `:c::fill-fns` from the `:-` node in the source; nothing here infers a
+                        ;; return type from a body and nothing here looks at a runtime value.
+                        ;;
+                        ;; **The poke test is `:c::releasable?`'s**, spelled over `ks` because
+                        ;; this site holds the call's children rather than the call node: the
+                        ;; callee, through the fixpoint in `:c::Prog/pokers`, and every argument
+                        ;; expression. A `poke` can put a pointer anywhere, so a call that
+                        ;; transitively reaches one is not released -- exactly as for a statement.
+                        ;;
+                        ;; **Why `vec_conj_own` cannot corrupt this.** A callee may extend a
+                        ;; linear parameter IN PLACE over the heap top (`elf/lib/runtime.wat`,
+                        ;; path 3), which would leave a caller's Vector counting a word this
+                        ;; rewind frees. It cannot reach a caller's Vector: the share count and
+                        ;; the arm word are the SAME word at `[ptr-8]`, `:c::share` increments it
+                        ;; at every pointer-typed symbol argument, and path 3 is gated on that
+                        ;; word reading exactly `:c::heap-arm`, which is 1. A shared Vector reads
+                        ;; 2 and falls through to the COPYING `vec_conj`. `:c::arm-own` -- path
+                        ;; two -- is defeated by the same increment for the same reason.
+                        ;;
+                        ;; The mark precedes ARGUMENT evaluation and the release follows the
+                        ;; RETURN: an argument allocates before the callee does, and the callee's
+                        ;; own work is not ours to free until it has handed the value back.
+                        rel? (:wat::core::and
+                               (:wat::core::not (:c::ptr-ty? (:c::Fn/ret f)))
+                               (:wat::core::and (:wat::core::not (:c::is-poker? pg head 0))
+                                                (:wat::core::not (:c::any-poke? ks 0 pg))))
+                        o0 (:wat::core::if rel? (:c::push o "41574157" 16) o)
+                        oc (:wat::core::cond
           ;; the register convention, with every argument placeable where it belongs
           ((:wat::core::and (:wat::core::> na 0) (:c::args-direct? ks 1 n env pg))
-            (:c::call (:c::arg-regs ks 1 n o env pg rt tb slot) at))
+            (:c::call (:c::arg-regs ks 1 n o0 env pg rt tb slot) at))
           ;; the register convention with an argument that has to be evaluated out of the way
           ;; first: the stack is the scratch space, and the pops replace the `add rsp`
           ((:wat::core::> na 0)
-            (:c::call (:c::arg-pops (:wat::core::- n 1) (:c::push-args ks 1 o env pg rt tb slot))
+            (:c::call (:c::arg-pops (:wat::core::- n 1) (:c::push-args ks 1 o0 env pg rt tb slot))
                       at))
           (:else
-            (:wat::core::let [o1 (:c::push-args ks 1 o env pg rt tb slot)
+            (:wat::core::let [o1 (:c::push-args ks 1 o0 env pg rt tb slot)
                               o2 (:c::call o1 at)]
               (:wat::core::if (:wat::core::= n 0) o2
-                (:c::popn o2 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n))))))))))
+                (:c::popn o2 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n))))))]
+        (:wat::core::if rel? (:c::popn oc "415f415f" 16) oc)))))
 
 ;; ---------------------------------------------------------------- compiling one function
 

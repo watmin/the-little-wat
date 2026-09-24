@@ -80,5 +80,23 @@ else
 fi
 
 echo
+echo "== 7. what escapes a statement but not a CALL: the caller-side release =="
+# escape.wat is the gap isolated: (user/len s) is an OPERAND of +, never a discarded non-final
+# form, and inside user/len the concat is the FINAL form -- so C-120's statement release cannot
+# reach either one. What reaches it is the release at the CALL: user/len's declared return type
+# is i64, so nothing it allocated can come back, and the caller marks r15 before the arguments
+# and restores it after the return. Measured at n = 1e6/2e6/3e6 the peak was 62.4/123.8/184.7 MB
+# -- 63.8 bytes per iteration, LINEAR -- and is now flat at about 0.94 MB for all three.
+i=$("$WAT" elf/src/escape.wat 2>&1); irc=$?
+n=$(./elf/out/escape.elf 2>&1);      nrc=$?
+if [ "$i" = "$n" ] && [ $irc -eq $nrc ]; then
+  printf '  escape  %7s KiB   -> %s   (was 13768 KiB before the caller-side release)\n' \
+         "$(./$RSS ./elf/out/escape.elf)" "$n"
+  echo "  It is FLAT in n: 960 KiB at 1e6, 964 at 2e6, 972 at 3e6 -- the whole growth is gone."
+else
+  echo "  FAIL: escape.wat differs"; diff <(printf '%s\n' "$i") <(printf '%s\n' "$n"); fail=1
+fi
+
+echo
 [ $fail -eq 0 ] && echo "mem: ok" || echo "mem: FAILED"
 exit $fail
