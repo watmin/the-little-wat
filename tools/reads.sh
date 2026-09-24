@@ -82,7 +82,7 @@ while IFS= read -r h; do
 done <<< "$(echo "$code" | grep -E '\(:c::at-[a-z0-9-]+ rt\)')"
 
 # ---- 3. the count is still there, and still one spelling
-echo "$code" | awk -F: -v s="$start" -v e="$end" '$1>=s && $1<=e' | grep -q '(:c::count-hex t)' \
+echo "$code" | awk -F: -v s="$start" -v e="$end" '$1>=s && $1<=e' | grep -q '(:c::count-hex t pg)' \
   || { echo "reads: FAIL -- :c::read-out no longer emits :c::count-hex"; fail=1; }
 callers=$(echo "$code" | grep -c '(:c::count-hex ')
 [ "$callers" -eq 2 ] || { echo "reads: FAIL -- :c::count-hex has $callers callers, expected 2 (:c::share, :c::read-out)"; fail=1; }

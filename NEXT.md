@@ -17,19 +17,27 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 001 stone 0b: recover F-189's +10.64% without narrowing
+### NEXT STRIKE — excursus 001 stone 1, un-held: rebase the caller-side release onto `main`
 
-**Read `docs/excursus/2026/09/001-reclamation-beyond-scope/` top to bottom** — DESIGN, the SCOREs
-in stone order, then stone 0b's BRIEF when it is drawn. That directory is the truth; this points.
+**Read `docs/excursus/2026/09/001-reclamation-beyond-scope/` top to bottom** -- DESIGN, then every
+SCORE in stone order. That directory is the truth; this points at it.
 
-**Where it stands.** Stone 0a LANDED after stone 0: every read out of a container now goes through `:c::read-out`, and `tools/reads.sh` (run by `elf-run`) fails on a read that bypasses it. Stone 0 LANDED: a pointer read out of a container is counted at the read,
-closing F-188 — eight doors, each reproduced at HEAD, all guarded by `elf/src/borrowed.wat` in the
-corpus. It costs the compiler +10.64% (F-189), all of it in the guard, none in the increment.
-Stone 0b recovers it by a mechanism, never by dropping a site; `borrowed.wat` is the oracle. Stone 1
-(the caller-side release) stays HELD on branch `excursus-001-stone-1` until after 0b.
+**Where it stands.** Stones 0, 0a, 0b LANDED: F-188 closed (nine doors, every one a probe in
+`elf/probe/`, all in `elf/src/borrowed.wat`); every read out of a container goes through
+`:c::read-out`, which `tools/reads.sh` checks from inside `elf-run`; F-189's cost 71% recovered
+(+2.382% over `dada88f` in instructions -- the rest recorded and NOT drawn, because cycle deltas
+this small across builds are below F-154's line).
 
-**The order is fixed:** 0b on `main` → stone 1 rebased, `allocates?`-gated, §7 made a real gate →
-merge. Bootstrap and `mem.sh` were green with F-188 in the tree; neither is the bar.
+**Stone 1** (the caller-side release, `escape.wat` flat) is HELD on branch `excursus-001-stone-1`
+(`a7551a6`). To merge it must: rebase onto `main`; show `callrel-borrow` and every other F-188
+probe AGREEING with the release on; take an `allocates?` gate so fib32 stops paying +9.86% for a
+release with nothing to free -- `:c::allocates?` does NOT exist yet, it is new work; and replace
+`mem.sh` §7's hardcoded "FLAT" echo with a real gate (n = 200,000: ~1 MB released vs ~13.7 MB
+leaking discriminates).
+
+**Also open, recorded not drawn:** F-190 (checker, parameter re-binding) · F-191 (a valid program
+segfaults natively, mechanism not established) · `reads.sh` misses a load placed after another
+instruction in the same hex literal (the 0a SCORE has the tightening).
 
 ### LANDED since this section last read "next" (2026-09-23)
 

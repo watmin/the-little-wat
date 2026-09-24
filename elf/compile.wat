@@ -3037,7 +3037,8 @@
 (:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
   (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                     (:c::ptr-ty? (:c::type-of a env pg)))
-    ;; **guarded, because a string LITERAL lives in the read-only segment.** Its count is zero
+    ;; **guarded -- where the TYPE can be what the guard is for (`:c::count-hex`, stone 0b) --
+    ;; because a string LITERAL lives in the read-only segment.** Its count is zero
     ;; by construction, which already means "never eligible for in-place" -- so skipping the
     ;; increment costs nothing, and writing it would be a fault. `elf/src/strverbs.wat` found
     ;; this the moment a String parameter was passed on through a recursive call: three
@@ -3049,21 +3050,86 @@
     (:wat::core::let [key (:c::share-key a env pg)]
     (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::Out/shared o) key 0) 0) o
     (:wat::core::assoc
-      (:c::emit o (:c::count-hex (:c::type-of a env pg)))
+      (:c::emit o (:c::count-hex (:c::type-of a env pg) pg))
       :shared (:wat::core::conj (:c::Out/shared o) key))))
     o))
 
-;; **the bytes of the increment, guarded twice**, for a value of type `t` already in rax -- or
-;; nothing at all when `t` is not a pointer. `:c::share` above explains both guards; they are
-;; spelled once, here, so the two callers cannot drift apart.
-(:wat::core::defn :c::count-hex [t <- :wat::core::String] -> :wat::core::String
+;; **the bytes of the increment, for a value of type `t` already in rax, guarded only against
+;; what `t` can actually BE** -- or nothing at all when `t` is not a pointer. `:c::share` above
+;; says why each guard exists; they are spelled once, here, so its two callers cannot drift.
+;;
+;; The guards are not a property of "pointer" (stone 0b, F-189). Stone 0 gave every pointer
+;; type both, and the corpus compile paid +10.64% for it -- in the GUARD, not the increment: a
+;; NOP where the `incq` was cost the same to 0.001%. So each is emitted only for a type that can
+;; be what it protects against:
+;;
+;;   * `cmp [rax-8],0 ; je` -- a READ-ONLY LITERAL, count 0. The `cmp` already dereferences
+;;     `[rax-8]`, so it guards a count-0 WRITE and nothing else. Every allocator writes a count
+;;     of at least 1 (below), so a count of 0 IS a literal, and only `:c::static-str` makes one.
+;;   * `cmp rax,0x1000 ; jb` -- a SMALL-INTEGER TAG, a unit variant. `[rax-8]` on one is a read
+;;     at a negative address.
+;;
+;;   type      what a value of it can be                          guards
+;;   str       a data-tail literal, count 0 (`:c::static-str`)    literal
+;;             or a heap block (`str_*`, count heap-arm)
+;;   vec:      only a heap block: `:c::vec-form` calls `varr_new`  none -- `incq` alone
+;;             for EVERY Vector form, zero elements included; the
+;;             runtime's other Vector makers (`vec_conj`, the copy
+;;             in `vec_conj_own`, `tree_push`, `tree_from_arr`)
+;;             all allocate with count heap-arm or arm-own
+;;   rec:      only a heap block: `:c::rec-form` calls `vec_new`   none
+;;             (count 1); `assoc` calls `slot_set` (count 1)
+;;   henum:    a heap block (`:c::variant-form` calls `vec_new`)   tag
+;;             or a unit variant's tag, below a page
+;;   penum:    its payload's value ITSELF (`:c::variant-form`,     tag, plus whatever
+;;             tier 1: no allocation) or a unit tag                the PAYLOAD needs
+;;
+;; `file:line` for every row is in the stone-0b SCORE. The data tail holds string literals only:
+;; `:c::static-str` is its one writer of values (`print-string` writes raw bytes nothing names).
+;;
+;; ⛔ **A NEW WAY TO MAKE A VALUE THAT IS NOT A HEAP BLOCK re-derives this table.** A static empty
+;; Vector, a record literal in the data tail, a count-0 "frozen" object: any of them makes
+;; `incq` alone a write to a read-only page -- or, on a writable one, turns a count of 0 into 1,
+;; which `vec_conj_own` reads as "owned". `elf/probe/count-bare.wat` faults on the first.
+(:wat::core::defn :c::count-hex [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [unit? (:c::maybe-unit? t)
+                    lit? (:c::maybe-literal? t pg)]
+    (:wat::core::cond
+      ((:wat::core::not (:c::ptr-ty? t)) "")
+      ((:wat::core::and unit? lit?)
+        (:wat::string::concat "483d00100000"                    ;; cmp rax, 0x1000
+          (:wat::string::concat "720b"                          ;; jb  +11 (skip both)
+                                "488378f800740448ff40f8")))     ;; cmp [rax-8],0 ; je +4 ; incq
+      (unit?
+        (:wat::string::concat "483d00100000"                    ;; cmp rax, 0x1000
+          (:wat::string::concat "7204"                          ;; jb  +4  (skip the incq)
+                                "48ff40f8")))                   ;; incq [rax-8]
+      (lit? "488378f800740448ff40f8")                           ;; cmp [rax-8],0 ; je +4 ; incq
+      (:else "48ff40f8"))))                                     ;; incq [rax-8]
+
+;; **can a value of this pointer type be a read-only LITERAL?** Only a String is ever written to
+;; the data tail. A `penum:` value IS its payload (tier 1 allocates nothing), so it can be a
+;; literal exactly when its payload can -- `Opt :- [str]` can, `Opt :- [Row]` cannot. An answer
+;; this cannot reach is YES: the guard stays, which is the safe side (F-168's polarity).
+(:wat::core::defn :c::maybe-literal? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
-    ((:wat::core::not (:c::ptr-ty? t)) "")
-    ((:c::maybe-unit? t)
-      (:wat::string::concat "483d00100000"                      ;; cmp rax, 0x1000
-        (:wat::string::concat "720b"                            ;; jb  +11 (skip both)
-                              "488378f800740448ff40f8")))
-    (:else "488378f800740448ff40f8")))                          ;; cmp [rax-8],0 ; je +4 ; incq
+    ((:wat::core::= t "str") true)
+    ((:wat::string::starts-with? t "penum:")
+      (:wat::core::let [p (:c::penum-payload-ty t pg)]
+        (:wat::core::if (:c::ptr-ty? p) (:c::maybe-literal? p pg) true)))
+    ((:wat::string::starts-with? t "vec:") false)
+    ((:wat::string::starts-with? t "rec:") false)
+    ((:wat::string::starts-with? t "henum:") false)
+    (:else true)))
+
+;; the one payload type of a tier-1 enum, instantiated -- `penum:Opt;str` answers `str` -- or ""
+;; when the name does not resolve
+(:wat::core::defn :c::penum-payload-ty [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [c (:c::semi-from t 0)
+                    nm (:wat::string::subs t 6 (:wat::core::if (:wat::core::< c 0) (:wat::string::length t) c))
+                    ei (:c::enum-index (:c::Prog/enums pg) nm 0)]
+    (:wat::core::if (:wat::core::< ei 0) ""
+      (:c::sole-payload-ty (:c::Prog/enums pg) ei (:c::enum-arg t) pg))))
 
 ;; ---------------------------------------------------------------- reading OUT of a container
 ;;
@@ -3148,7 +3214,7 @@
           [:c::Read.AtReg {:r r :d d} (:c::emit o (:c::mov-rm r d (:c::rax)))]
           [:c::Read.Reg {:r r} (:c::emit o (:c::mov-rr r (:c::rax)))])]
     (:wat::core::cond
-      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t)))
+      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t pg)))
       ((:c::word-ty? t) lo)
       (:else (:c::fail (:wat::string::concat "a read out of a container, of unknown type " t)
                a pg)))))

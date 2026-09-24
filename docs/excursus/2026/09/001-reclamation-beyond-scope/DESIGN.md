@@ -1,10 +1,11 @@
 # Excursus 001 — reclamation beyond scope
 
-**Status: 2026-09-23.** **Stone 0 LANDED** (F-188 closed, eight doors) at a measured +10.64% on
-the compiler (F-189). **Stone 0a LANDED**: every read out of a heap object goes through
-`:c::read-out`, which requires a type and counts by construction; `tools/reads.sh`, run by
-`elf-run`, fails on a read that bypasses it -- rung CHECK, limit stated in its SCORE. **Stone 0b**
-(recover F-189 without dropping a site) is next. **Stone 1** stays HELD on `excursus-001-stone-1`.
+**Status: 2026-09-23.** **Stones 0, 0a and 0b LANDED.** F-188 is closed -- NINE doors -- with
+every read out of a container going through `:c::read-out` (checked by `tools/reads.sh`), and its
+cost (F-189) is 71% recovered in instructions by guarding each type only against what it can be.
+The remaining +2.382% is recorded, not drawn (F-154). **Stone 1** -- the caller-side release -- is
+next: it stays HELD on `excursus-001-stone-1` until it is rebased onto `main`, takes an
+`allocates?` gate, and gets a real flatness gate in `mem.sh` §7.
 
 > Builder: *"i explicitly do not want a gc that pauses anything.. can we do this inline as we make
 > forward progress in programs?"* — and, on ordering: *"do the hard, correct thing first and

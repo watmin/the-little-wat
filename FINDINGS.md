@@ -14930,7 +14930,7 @@ Four findings were written on top of it before the crawl caught it.
 
 ### F-188: a pointer read out of a container keeps count 1, so in-place `conj` extends a LIVE element -- two doors, one root
 
-**CLOSED by excursus 001 stone 0 -- and it was EIGHT doors, not two.** The strike found six more,
+**CLOSED by excursus 001 stone 0 -- and it was NINE doors, not two.** The ninth, `elf/probe/count-trie.wat` -- a row read out of a promoted (trie) Vector, through `nth`'s runtime `tget` arm -- was found by stone 0b verifying a trap door; built with `dada88f` it prints `41|41|…|5` against the interpreter's `41|40|…|4`, and stone 0 had already closed it without anyone knowing, because the count sits on what `tget` answers. The first eight: The strike found six more,
 each reproduced at HEAD by the orchestrator on its own builds: the String forms of both doors
 (`str-borrow`, `str-shadow` -- `:c::fresh-str?` guarded only a non-symbol concat operand), both
 record-field forms (`field-borrow` reaches `vec_conj_own` path TWO, `arm-own`, not path 3;
@@ -14990,6 +14990,15 @@ read of reclaimed memory (`30|240000|4|1|0`), which is why stone 1 is held on br
 
 
 ### F-189: counting at the read costs the compiler +10.64% -- the guard, not the increment
+
+**71% RECOVERED by excursus 001 stone 0b** -- instructions, the metric F-154 lets this repo trust at
+this size. Three compilers each at its own fixpoint, identical inputs, best of 9: `dada88f`
+2,083,575,459; stone 0a +8.283% (on today's input -- the +10.64% above was measured on the
+compiler's source as it was then); stone 0b **+2.382%**. Every counted site kept. The guard is now
+derived from what each type can BE: only `str`, and a `penum:` whose payload can be a String, can
+be a count-0 read-only literal, so `vec:`/`rec:` get a bare `incq`. The remaining +2.382% is
+recorded and NOT drawn: cycle deltas this small across builds are below F-154's line, so nothing
+yet says whether the rest is instructions or the memory touch.
 
 **Improve.** The price of closing F-188, measured and attributed, recorded the moment it was paid.
 
