@@ -74,6 +74,18 @@ stone**: with the bump pointer rewound, the pages above `r15` are already reusab
 them buys RSS-as-reported and not a single allocation. It is recorded here so the case for it
 stays honest — the motivation is cosmetic until something measures otherwise.
 
+## Not drawn — `own?` keyed on the binding rather than the spelling
+
+`own?` asks `linear?` about a parameter by its NAME, and `:c::occ` counts a name's occurrences
+straight through a shadowing `let` -- so a shadowing binding's uses are charged to the parameter.
+That can only OVER-count, which is conservative, but it could cost a genuinely linear parameter its
+in-place growth -- the F-141 quadratic. Probed before briefing (2026-09-23): two programs identical
+except the spelling of one inner `let` binding (`acc`, shadowing the linear accumulator, against
+`b`), `conj` in a loop at n = 2000/4000/8000. Both flat at ~2.1 MB; **the two binaries are
+byte-identical.** The spelling changes nothing emitted, so there is no failing probe, and by
+examinare's rule there is no stone. After stone 0 correctness does not rest on `own?` at all -- it
+rests on the count being complete, which is what stone 0a is for.
+
 ## What a collector would be, and why it is not this
 
 Anything whose allocation escapes *upward through a return of pointer type* needs reachability,

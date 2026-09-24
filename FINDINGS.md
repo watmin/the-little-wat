@@ -15021,3 +15021,84 @@ shipping known wrong answers; that is Honest? NO. The contrast with stone 1, hel
 **The recovery is drawn as stone 0b**, with three unmeasured mechanisms: count at the STORE rather
 than the read; a cheaper guard for types that can never be a read-only literal; count only types
 that can reach an own path. `elf/src/borrowed.wat` is the oracle for every one of them.
+
+
+### F-190: the checker refuses to re-bind a PARAMETER at a new type, allows it for a `let` -- and blames a `vec` that is not there
+
+**Correct** (an inconsistent rule, or a checker defect -- the cause is NOT yet read) and **Clean**
+(the diagnostic). Found by accident while probing excursus 001 stone 0a; `elf/probe/check-param-shadow.wat`.
+
+Five cases, `x :- String` a function parameter, same session, same wat-rs build:
+
+| shape | interpreter |
+|---|---|
+| `(let [y "s"] (let [y 1] ...))` -- a LET name re-bound at a new type | runs, `4` |
+| `(let [x "zz"] (length x))` -- the PARAMETER re-bound at the SAME type | runs, `2` |
+| `(+ (length x) (let [x 1] x))` -- the PARAMETER re-bound at a NEW type | **rejected** |
+| `(+ (let [x 1] x) (length x))` -- same, `let` first | **rejected** |
+| `(+ (let [y 1] y) (length x))` -- no shadowing | runs, `4` |
+
+The rejection reads *":wat::core::vec: parameter #3 expects :wat::core::String; got
+:wat::core::i64"*. There is no `vec` in the program. "Parameter #3" is the type slot of the
+declaration `[x :- String]` -- so the `let`'s new value appears to be checked against the
+PARAMETER's declared type. Placement does not matter (rows 3 and 4), so this is not a binding
+leaking between sibling arguments; that was the first hypothesis and it is withdrawn.
+
+**Two things are certain and one is not.** Certain: the language allows re-binding a name at a new
+type for a `let` and refuses it for a parameter, which is either a rule nobody wrote down or a
+defect. Certain: the diagnostic names a callee and a parameter that are not in the program. Not
+known: which of the two it is -- `grep shadow src/check.rs` finds no stated rule, and the code path
+has not been read. That read comes before any fix is proposed.
+
+**And the two implementations disagree about which programs are wat.** The native compiler
+(`elf/`) accepts all five and prints `4`, `2`, `4`, `4`, `4`. It has no type checker of its own,
+so it compiles programs the language refuses. That is a known shape of this compiler, but it had
+not been exhibited with a program the interpreter rejects outright.
+
+
+### F-191: a valid program segfaults the native compiler -- and two plausible mechanisms are refuted
+
+**Fix** (a crash on a program the interpreter accepts). Found while probing excursus 001 stone 0a;
+`elf/probe/let-shadow-crash.wat`. **The mechanism is NOT established**, and this entry says so
+rather than naming the first hypothesis that fitted.
+
+```clojure
+(wat.core/let [y "abc"]
+  (wat.kernel/println (wat.core/+ (wat.core/let [y 1] y) (wat.string/length y))))
+```
+
+Interpreter: `4`. Native: **SIGSEGV**. Reproduces every run.
+
+The matrix -- every row run through `tools/probe.sh`, native against interpreter:
+
+| inner `let` body, then outer use | result |
+|---|---|
+| `(+ (let [y 1] y) (length y))`, outer `y` a String | **CRASH**. The same shape with `y` a String PARAMETER also crashes -- but the interpreter REJECTS that program (F-190), so only the `let` form is a valid-program crash |
+| `(+ (length y) (let [y 1] y))` -- order swapped | agree, `4` |
+| `(+ (let [y 100] y) y)`, both `i64` | agree, `103` |
+| `(concat (let [y "zz"] y) y)`, both String | agree, `"zzabc"` |
+| `(+ (length (let [y "zzzzzzz"] y)) (length y))` | agree, `10` |
+| inner a 5-element Vector, outer String | agree, `8` |
+| inner String, outer `i64` | agree, `11` |
+
+**Refuted, with the probe that refuted it:**
+1. *Types resolved by spelling.* `:c::type-of` resolves a symbol through `:c::lookup-ty`, which
+   scans the environment innermost-first -- lexically correct.
+2. *`Out/rax` reused by spelling, generally.* `Out/rax` DOES record a spelling
+   (`elf/compile.wat:1640`, `(:c::text pg a)`), and that predicts silent wrong answers at the SAME
+   type. The same-type rows above were built to produce them; all agree.
+
+**Remaining suspect, unproven:** the spelling-keyed `Out/rax` consulted at a DIFFERENT site --
+`elf/compile.wat:2371` (`:c::reg-of-name (:c::Out/rax o) env`) or `:1969` -- on the path the
+`length` of a just-pushed operand takes. Establishing it is a disassembly of the crashing binary,
+not another guess.
+
+**Why it is recorded now and not fixed now.** It fails LOUDLY -- no silent row has been found --
+so it is below F-188's class. It is the builder's call where it goes in the queue.
+
+**It bears on the question that found it.** Asked whether the compiler does one thing several ways,
+the answer on the disk is that variable identity is decided by SPELLING in at least four trackers
+(`Out/rax`, `own?`/`linear?`, `:c::occ`, `:c::lookup-reg`) and by BINDING in one (`:c::share-key`,
+`name@disp`, which C-210 moved there for a shadowing hazard). Stone 0a's own probe found the
+`own?` instance harmless; this crash may be the `Out/rax` instance. One notion of identity is the
+extirpation; it is not yet drawn.
