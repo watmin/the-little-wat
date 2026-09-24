@@ -22,7 +22,7 @@ line below, and read the newest entries before you move.
 **Read `docs/excursus/2026/09/001-reclamation-beyond-scope/` top to bottom** — DESIGN, the SCOREs
 in stone order, then stone 0b's BRIEF when it is drawn. That directory is the truth; this points.
 
-**Where it stands.** Stone 0 LANDED: a pointer read out of a container is counted at the read,
+**Where it stands.** Stone 0a LANDED after stone 0: every read out of a container now goes through `:c::read-out`, and `tools/reads.sh` (run by `elf-run`) fails on a read that bypasses it. Stone 0 LANDED: a pointer read out of a container is counted at the read,
 closing F-188 — eight doors, each reproduced at HEAD, all guarded by `elf/src/borrowed.wat` in the
 corpus. It costs the compiler +10.64% (F-189), all of it in the guard, none in the increment.
 Stone 0b recovers it by a mechanism, never by dropping a site; `borrowed.wat` is the oracle. Stone 1

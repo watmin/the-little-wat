@@ -1863,30 +1863,21 @@
               (:c::call (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail))
                 (:c::at-rdhex rt))))
           ((:c::vector? head) (:c::vec-form ks a o env pg rt tb slot))
+          ;; **only a Vector.** `nth` on a record used to take a bare-load arm and type its
+          ;; answer `i64` -- a DEFAULT for an element whose type nothing declares, and an `i64`
+          ;; is never counted. The interpreter refuses `nth` on a record (and on a String), so
+          ;; no valid program reached it; now the compiler refuses it too (stone 0a).
           ((:c::nth? head)
             (:wat::core::if (:wat::core::or (:wat::core::not= (:wat::core::length ks) 3)
-                              (:wat::core::not (:c::ptr-ty? (:c::type-of (:wat::core::nth ks 1) env pg))))
-              (:c::fail "nth: operand is not a Vector or record" a pg)
+                              (:wat::core::not (:wat::string::starts-with?
+                                                 (:c::type-of (:wat::core::nth ks 1) env pg) "vec:")))
+              (:c::fail "nth: operand is not a Vector" a pg)
               (:wat::core::let
                 [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
                  o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)]
-                ;; a read out of a container: counted, F-188
-                (:c::count-read (:c::type-of a env pg)
-                (:wat::core::if
-                  (:wat::string::starts-with? (:c::type-of (:wat::core::nth ks 1) env pg) "rec:")
-                  ;; a record never conj's, so it is the array arm for ever: one load, no test
-                  (:c::emit o3 "488b44c808")
-                  ;; a Vector asks. The array arm is the same single load it always was; the
-                  ;; tree arm is a walk, and the branch predicts because a vector stays in one
-                  ;; arm for its whole life.
-                  (:c::call
-                    (:c::emit o3 (:wat::string::concat
-                      "488378f000"                  ;; cmp qword [rax-16], 0   -- which arm?
-                      "0f8507000000"                ;; jne +7                  -- the tree
-                      "488b44c808"                  ;; mov rax,[rax+rcx*8+8]   -- the array
-                      "eb05"))                      ;; jmp +5                  -- over the call
-                    (:c::at-tget rt)))))))
+                (:c::read-out (:c::elem-ty (:c::type-of (:wat::core::nth ks 1) env pg))
+                  (:c::Read.Elem {:tget (:c::at-tget rt)}) o3 a pg))))
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
               (:wat::core::let
@@ -1920,18 +1911,18 @@
                 ;; right when the pointer arrived there and a wasted `mov` when it did not.
                 ;; C-183. A scalarised parameter has no pointer left: the register IS the field.
                 ;; It is still a read out of a container -- the prologue loaded it from one --
-                ;; so all three arms are counted, F-188.
+                ;; so all three arms go through `:c::read-out`, F-188. `acc-ty` is the DECLARED
+                ;; field type: `acc-index >= 0` above means its "i64" fallbacks cannot fire here.
                 (:wat::core::cond
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::not= sf (:c::acc-index pg head)))
                     (:c::fail "scalar field" a pg))
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::>= r 0))
-                    (:c::count-read (:c::acc-ty pg head) (:c::emit o (:c::mov-rr r (:c::rax)))))
+                    (:c::read-out (:c::acc-ty pg head) (:c::Read.Reg {:r r}) o a pg))
                   ((:wat::core::>= r 0)
-                    (:c::count-read (:c::acc-ty pg head) (:c::emit o (:c::mov-rm r d (:c::rax)))))
+                    (:c::read-out (:c::acc-ty pg head) (:c::Read.AtReg {:r r :d d}) o a pg))
                   (:else
-                    (:c::count-read (:c::acc-ty pg head)
-                      (:c::emit (:c::expr opnd o env pg rt tb slot (:c::no-tail))
-                        (:c::load-at d))))))))
+                    (:c::read-out (:c::acc-ty pg head) (:c::Read.At {:d d})
+                      (:c::expr opnd o env pg rt tb slot (:c::no-tail)) a pg))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
           ;; `=` on two Strings must compare CONTENT. The type pass knows both operands, so
@@ -3017,7 +3008,7 @@
 ;; the wrong conclusion. `elf/src/strown.wat` is that in three shapes.
 ;;
 ;; (That was true of every read until F-188. A pointer read out of a container is now COUNTED
-;; at the read -- `:c::count-read`, below `:c::share` -- so the runtime guard sees 2 for a
+;; at the read -- `:c::read-out`, below `:c::share` -- so the runtime guard sees 2 for a
 ;; borrowed element. This predicate still earns its place: it is a STATIC proof, and it lets
 ;; `concat` skip the owning routine for a borrowed operand without paying the runtime test.)
 ;;
@@ -3047,7 +3038,7 @@
 ;; somewhere durable is now reachable twice, so the count goes up. It never comes down: this is
 ;; not reclamation, it is a "has this ever been shared?" flag that can only become more
 ;; conservative. A freshly computed value is not incremented -- the slot takes the count of 1
-;; that the allocator already gave it. The other caller is `:c::count-read`, below: a pointer
+;; that the allocator already gave it. The other caller is `:c::read-out`, below: a pointer
 ;; read out of a CONTAINER, which is the one way a value reaches a name or an argument already
 ;; held somewhere else without passing through here.
 (:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
@@ -3081,26 +3072,93 @@
                               "488378f800740448ff40f8")))
     (:else "488378f800740448ff40f8")))                          ;; cmp [rax-8],0 ; je +4 ; incq
 
-;; **a pointer read OUT OF A CONTAINER is counted at the read (F-188).** A value stored into a
-;; Vector, a record or a payload variant is stored by MOVE and keeps count 1 -- that is what
-;; keeps a `(conj rows row)` chain cheap. So when it is read back out it is indistinguishable
-;; from a value nobody else holds, and `vec_conj_own` / `str_cat_own` extend it in place while
-;; the container still points at it. Two doors reach that, and a gate at either one is a stem:
+;; ---------------------------------------------------------------- reading OUT of a container
+;;
+;; **There is one way to read a value out of a heap object, and it counts (F-188, stone 0a).**
+;; A value stored into a Vector, a record or a payload variant is stored by MOVE and keeps
+;; count 1 -- that is what keeps a `(conj rows row)` chain cheap. So when it is read back out it
+;; is indistinguishable from a value nobody else holds, and `vec_conj_own` / `str_cat_own`
+;; extend it in place while the container still points at it. Two doors reach that:
 ;;
 ;;   * passed on as an ARGUMENT, `(bump (nth g 3))` -- not a Symbol, so no `:c::share` fires;
 ;;   * bound by a `let` or a `match` arm under a name that SHADOWS a linear parameter -- `own?`
 ;;     is keyed on the spelling, so the binding inherits the parameter's ownership.
 ;;
-;; Both begin at the read, so the count goes up there: `elf/probe/callrel-borrow.wat` and
-;; `elf/probe/own-shadow.wat`, and the String forms beside them. There are three reads out of
-;; a heap container -- `nth`, a record field accessor, and a tier-2/3 `match` payload binding --
-;; and each emits this after the load. A tier-1 payload is the subject ITSELF, not a read out
-;; of it, and the subject was counted wherever it came from.
+;; Both begin at the read, so the count goes up there. Stone 0 found eight shapes through three
+;; read sites (`elf/src/borrowed.wat`, `elf/probe/`), and each site had the count bolted on by
+;; hand -- a site that forgot re-opened exactly its own doors, measured by ablation. So the
+;; decision is no longer a site's to make: **a site says WHAT it read (`t`, required) and HOW
+;; the load is spelled (a `:c::Read`); `:c::read-out` emits the load and, by construction, the
+;; count.** A pointer type is counted; a machine-word type is not; ANY OTHER type is a refusal.
+;; There is no default: an `i64` fallback is exactly how the `match` site used to skip a count.
+;;
+;; The kinds are the load shapes, not the verbs -- the verbs share them:
+;;
+;;   :Elem   a Vector's `nth`. Its array arm is one inline load; its trie arm is a CALL into the
+;;           runtime (`tget`), whose load this compiler never sees. So what this function owns
+;;           is the EMISSION of the read -- inline load or call -- and the count on what comes
+;;           back in rax. It does not own the runtime's load, and does not need to: the count is
+;;           on the answer, after both arms have joined.
+;;   :At     `mov rax,[rax+d]` -- a field accessor's general arm, a tier-2/3 `match` payload
+;;   :AtReg  `mov rax,[r+d]`   -- a field of a register-resident record (C-183)
+;;   :Reg    `mov rax,r`       -- a field of a SCALARISED record parameter. The prologue did the
+;;           load (`:c::scalar-bytes`); every use of the register is an accessor, so every use
+;;           is counted here. That prologue is the one load out of a container not emitted in
+;;           this function, and `tools/reads.sh` names it.
+;;
+;; A tier-1 payload is not here: it is the subject ITSELF, not a read out of it, and the subject
+;; was counted wherever it came from.
+;;
+;; ⛔ **THE NEXT READ VERB COMES HERE.** A map `get`, `first`, `last`, `peek` on a queue, a
+;; `match` on a map entry -- anything that answers a value a container still holds -- is a read
+;; out of a container, and it goes through `:c::read-out` with the VALUE's type. If its load is a
+;; new shape (an inline probe, or a runtime call like `tget`'s -- a map `get` will almost
+;; certainly be a call into a `map_get` routine), add a variant to `:c::Read` and an arm to the
+;; `match` below: the interpreter refuses a non-exhaustive match, so a variant without an arm
+;; does not bootstrap. What nothing can stop is a verb that calls its runtime routine DIRECTLY
+;; and never mentions this function -- that is F-188 re-opened, silently, for every pointer the
+;; verb answers. `tools/reads.sh` (run first by `tools/elf-run.sh`) is the check: it refuses any
+;; runtime entry it has not classified and any heap load spelled outside this function.
 ;;
 ;; The cost is the monotone flag's: an element read out once loses in-place growth for good,
-;; which is correct -- the container still holds it -- and an `i64` element pays nothing.
-(:wat::core::defn :c::count-read [t <- :wat::core::String o <- :c::Out] -> :c::Out
-  (:wat::core::if (:c::ptr-ty? t) (:c::emit o (:c::count-hex t)) o))
+;; which is correct -- the container still holds it -- and a machine-word element pays nothing.
+(:wat::core::defenum :c::Read :wat::enum::Pure
+  :Elem  [tget <- :wat::core::i64]
+  :At    [d <- :wat::core::i64]
+  :AtReg [r <- :wat::core::i64 d <- :wat::core::i64]
+  :Reg   [r <- :wat::core::i64])
+
+;; a value that is a machine word and owns nothing, so reading one out needs no count. The
+;; complement of `:c::ptr-ty?` over the types this compiler names -- and NOT its negation: a
+;; type in neither is unknown, and `:c::read-out` refuses it.
+(:wat::core::defn :c::word-ty? [t <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= t "i64")
+    (:wat::core::or (:wat::core::= t "bool")
+      (:wat::core::or (:wat::core::= t "nil")
+        (:wat::core::or (:wat::string::starts-with? t "enum:")
+                        (:wat::string::starts-with? t "fn:"))))))
+
+(:wat::core::defn :c::read-out [t <- :wat::core::String rd <- :c::Read o <- :c::Out
+                                a <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+  (:wat::core::let
+    [lo (:wat::core::match rd
+          [:c::Read.Elem {:tget tget}
+            ;; the branch predicts because a vector stays in one arm for its whole life
+            (:c::call
+              (:c::emit o (:wat::string::concat
+                "488378f000"                  ;; cmp qword [rax-16], 0   -- which arm?
+                "0f8507000000"                ;; jne +7                  -- the tree
+                "488b44c808"                  ;; mov rax,[rax+rcx*8+8]   -- the array
+                "eb05"))                      ;; jmp +5                  -- over the call
+              tget)]
+          [:c::Read.At {:d d} (:c::emit o (:c::load-at d))]
+          [:c::Read.AtReg {:r r :d d} (:c::emit o (:c::mov-rm r d (:c::rax)))]
+          [:c::Read.Reg {:r r} (:c::emit o (:c::mov-rr r (:c::rax)))])]
+    (:wat::core::cond
+      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t)))
+      ((:c::word-ty? t) lo)
+      (:else (:c::fail (:wat::string::concat "a read out of a container, of unknown type " t)
+               a pg)))))
 
 ;; **the key is the BINDING, not the name.** Keying on the name alone corrupts under shadowing:
 ;; `(let [s ...] (hold s) (let [s ...] (hold s)))` elides the second share, so the inner `s`
@@ -3340,6 +3398,10 @@
        nm (:c::text pg (:wat::core::nth mks (:wat::core::+ j 1)))
        disp (:wat::core::* -8 (:wat::core::+ slot 1))]
       (:wat::core::if (:wat::core::< fi 0) (:c::BindR :o (:c::fail "match field" a pg) :env env :slot slot)
+      ;; **a field with no declared type is a refusal, not an `i64`.** This used to default, and
+      ;; an `i64` is never counted -- so the unknown case took the UNSAFE branch (stone 0a).
+      (:wat::core::if (:wat::core::>= fi (:wat::core::length ftys))
+        (:c::BindR :o (:c::fail "match field type" a pg) :env env :slot slot)
         ;; **The ALIAS is refused, and this is the note so it is not re-proposed blind.**
         ;; Tier 1's payload IS the value, so binding the name to the SUBJECT's own slot --
         ;; no load, no store, no slot consumed -- looks free and is wrong. It agrees for
@@ -3350,25 +3412,18 @@
         ;; diagnoses the depth interaction rather than guessing at it.
         (:wat::core::let [alias? (:wat::core::= tier 1)]
           (:c::arm-binds mks (:wat::core::+ j 2) fields ftys sd
+            ;; tier 1's payload IS the value -- nothing to index into. Tiers 2 and 3 read the
+            ;; field OUT of the subject, so it goes through `:c::read-out`, F-188.
             (:wat::core::if alias? o
-              (:wat::core::assoc
-                (:c::emit o (:wat::string::concat
-                  (:c::load (:c::fp o sd) (:c::Out/fpr o))
-                  (:wat::string::concat
-                    ;; tier 1's payload IS the value -- nothing to index into. Tiers 2 and 3
-                    ;; read the field OUT of the subject, so it is counted, F-188.
-                    (:wat::core::if (:wat::core::= tier 1) ""
-                      (:wat::string::concat
-                        (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1))))
-                        (:c::count-hex (:wat::core::if (:wat::core::< fi (:wat::core::length ftys))
-                                         (:wat::core::nth ftys fi) "i64"))))
-                    (:c::store (:c::fp o disp) (:c::Out/fpr o)))))
-                :rax ""))
+              (:c::emit
+                (:c::read-out (:wat::core::nth ftys fi)
+                  (:c::Read.At {:d (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1)))})
+                  (:c::emit o (:c::load (:c::fp o sd) (:c::Out/fpr o))) a pg)
+                (:c::store (:c::fp o disp) (:c::Out/fpr o))))
             (:wat::core::conj env
               (:c::Bind :name nm :disp (:wat::core::if alias? sd disp) :reg -1
-                        :ty (:wat::core::if (:wat::core::< fi (:wat::core::length ftys))
-                              (:wat::core::nth ftys fi) "i64")))
-            pg a (:wat::core::if alias? slot (:wat::core::+ slot 1)) tier))))))
+                        :ty (:wat::core::nth ftys fi)))
+            pg a (:wat::core::if alias? slot (:wat::core::+ slot 1)) tier)))))))
 
 (:wat::core::defn :c::match-arms [ks <- :c::Kids i <- :wat::core::i64 ei <- :wat::core::i64
                                   sd <- :wat::core::i64 slot <- :wat::core::i64 o <- :c::Out

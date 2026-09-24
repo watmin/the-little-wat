@@ -17,6 +17,10 @@ WAT="${WAT:-../wat-rs/target/release/wat}"
 [ -x "$WAT" ] || { echo "elf-run: no wat binary at $WAT"; exit 2; }
 fail=0
 
+# **every read out of a container goes through `:c::read-out`** (F-188, stone 0a). Static, and
+# first: a new read verb that bypasses the count is a wrong answer that every run below can miss.
+tools/reads.sh || exit 1
+
 # SKIP_BUILD=1 uses whatever is already in elf/out/ instead of rebuilding it through the
 # interpreter. tools/bootstrap.sh --fast sets it, because it has just built everything with a
 # compiled compiler and rebuilding the same bytes at 150x the cost proves nothing.
