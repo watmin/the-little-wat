@@ -2,8 +2,9 @@
 
 **Status: 2026-09-23.** **Stones 0, 0a and 0b LANDED.** F-188 is closed -- NINE doors -- with
 every read out of a container going through `:c::read-out` (checked by `tools/reads.sh`), and its
-cost (F-189) is 71% recovered in instructions by guarding each type only against what it can be.
-The remaining +2.382% is recorded, not drawn (F-154). **Stone 1** -- the caller-side release -- is
+cost (F-189) is 71% recovered in INSTRUCTIONS by guarding each type only against what it can be --
+but stone 0 costs ~5-7% in TIME, and 0b's time recovery is inside the measured 1.8% layout floor
+(F-192). The remaining ~5% of cycles is recorded, unexplained; the memory touch is the hypothesis. **Stone 1** -- the caller-side release -- is
 next: it stays HELD on `excursus-001-stone-1` until it is rebased onto `main`, takes an
 `allocates?` gate, and gets a real flatness gate in `mem.sh` §7.
 

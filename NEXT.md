@@ -25,8 +25,9 @@ SCORE in stone order. That directory is the truth; this points at it.
 **Where it stands.** Stones 0, 0a, 0b LANDED: F-188 closed (nine doors, every one a probe in
 `elf/probe/`, all in `elf/src/borrowed.wat`); every read out of a container goes through
 `:c::read-out`, which `tools/reads.sh` checks from inside `elf-run`; F-189's cost 71% recovered
-(+2.382% over `dada88f` in instructions -- the rest recorded and NOT drawn, because cycle deltas
-this small across builds are below F-154's line).
+in INSTRUCTIONS (+2.382% over `dada88f`) -- but NOT shown recovered in TIME: stone 0 costs the
+compiler ~5-7% in cycles and 0b's gain is inside this workload's measured 1.8% layout floor
+(F-192). The ~5% is real and unexplained; the memory touch is the hypothesis.
 
 **Stone 1** (the caller-side release, `escape.wat` flat) is HELD on branch `excursus-001-stone-1`
 (`a7551a6`). To merge it must: rebase onto `main`; show `callrel-borrow` and every other F-188

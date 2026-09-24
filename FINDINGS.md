@@ -14991,14 +14991,16 @@ read of reclaimed memory (`30|240000|4|1|0`), which is why stone 1 is held on br
 
 ### F-189: counting at the read costs the compiler +10.64% -- the guard, not the increment
 
-**71% RECOVERED by excursus 001 stone 0b** -- instructions, the metric F-154 lets this repo trust at
-this size. Three compilers each at its own fixpoint, identical inputs, best of 9: `dada88f`
+**71% of the INSTRUCTIONS recovered by excursus 001 stone 0b -- and the TIME is not shown recovered
+(F-192).** In cycles, stone 0 costs the compiler ~5-7% and stone 0b's gain over 0a (1.1-1.5%) is
+inside this workload's measured 1.8% layout floor. The instruction figures: Three compilers each at its own fixpoint, identical inputs, best of 9: `dada88f`
 2,083,575,459; stone 0a +8.283% (on today's input -- the +10.64% above was measured on the
 compiler's source as it was then); stone 0b **+2.382%**. Every counted site kept. The guard is now
 derived from what each type can BE: only `str`, and a `penum:` whose payload can be a String, can
-be a count-0 read-only literal, so `vec:`/`rec:` get a bare `incq`. The remaining +2.382% is
-recorded and NOT drawn: cycle deltas this small across builds are below F-154's line, so nothing
-yet says whether the rest is instructions or the memory touch.
+be a count-0 read-only literal, so `vec:`/`rec:` get a bare `incq`. The remaining cost is
+recorded: +2.382% in instructions and ~5% in cycles, which instruction count does not explain.
+The memory touch -- a counted read dirties its object's header line -- is the leading hypothesis,
+unproven.
 
 **Improve.** The price of closing F-188, measured and attributed, recorded the moment it was paid.
 
@@ -15111,3 +15113,44 @@ the answer on the disk is that variable identity is decided by SPELLING in at le
 `name@disp`, which C-210 moved there for a shadowing hazard). Stone 0a's own probe found the
 `own?` instance harmless; this crash may be the `Out/rax` instance. One notion of identity is the
 extirpation; it is not yet drawn.
+
+
+### F-192: F-154's "sub-25%" line is a tight-loop result -- on the compiler's own workload, layout moves cycles 1.8%
+
+**Correct (method), against F-154's scope, and against the orchestrator's use of it.** The builder
+asked, of F-154: *"does this still hold? is this a rule i agreed to?"* It was not his rule -- F-154
+is a Claude-written finding (`667a8f1`, 2026-09-21) with no word from him -- and it was being cited
+as "this repo's own rule" to dismiss a cycle measurement.
+
+F-154's evidence is one tight loop: an inline-asm C file, cycles per iteration, where one branch's
+alignment dominates -- and it moved 50% on layout alone. Its own remedy is "measured across many
+real programs, so that layout averages out." The workload it was applied to, the compiler
+compiling the corpus, is two billion instructions over hundreds of functions: the averaging case.
+
+**Measured, not argued.** Seven compilers, each built to its own fixpoint, identical except that
+the entry stub's FIRST emission is k NOP bytes, k = 0/4/8/16/24/32/48 -- every function after it
+shifts by k (plus a constant 37 B for the extra `emit` in `:c::stub`'s own code), so every
+function's alignment against every cache line changes. Each compiles the same input tree; nine
+interleaved rounds, pinned, user-mode:
+
+| k | cycles, min of 9 | instructions, min |
+|---|---|---|
+| 0 | 1,153,881,954 | 2,141,918,392 |
+| 4 | 1,172,131,565 | 2,141,978,521 |
+| 8 | 1,154,122,935 | 2,141,992,342 |
+| 16 | 1,151,694,665 | 2,143,730,928 |
+| 24 | 1,152,848,987 | 2,142,043,224 |
+| 32 | 1,159,594,905 | 2,142,064,461 |
+| 48 | 1,157,298,089 | 2,142,115,278 |
+
+Instructions agree to <0.1%: the variants are layout-only. **Cycle spread from layout: 1.77%
+(minima), 1.75% (medians).** Run-to-run on ONE binary: 4.78% max-min over nine runs -- which is why
+the minimum of nine is the estimator, and why a single run proves nothing.
+
+**What this changes.** For THIS workload a cross-build cycle difference above ~2% is signal, not
+F-154's 25%. Applied to excursus 001 stone 0b, it reverses the orchestrator's reading: stone 0's
+cost in TIME (~5-7%) is real, and stone 0b's time recovery over 0a (1.1-1.5%) is not demonstrated.
+
+**The rule that replaces the misuse:** a noise floor is a property of a WORKLOAD, measured, not a
+constant inherited from a finding about a different one. F-154 stands for tight loops. The
+layout-shift method above is how to get the floor for any other workload, in about twenty minutes.

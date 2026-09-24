@@ -421,3 +421,30 @@ moved for that reason; the row was worded too broadly.
 
 **Stone 0b lands.** F-189's instruction cost is 71% recovered with every counted site kept, the
 compiler is 12,382 bytes smaller, and a ninth F-188 door was found and shown closed.
+
+---
+
+## ORCHESTRATOR — CORRECTION to the section above, same day
+
+The section above invoked F-154 to call the strike's cycle rows unattributable. **That was wrong,
+and the strike's reading was closer to right.** The builder asked whether F-154 still holds and
+whether it was a rule he had agreed to. It was not -- it is a Claude-written finding (`667a8f1`)
+with no word from the builder -- and its evidence is one TIGHT LOOP (cycles per iteration in a
+synthetic inline-asm C file), a scope its own text says does not generalise.
+
+So the floor was measured for THIS workload (F-192): seven compilers, each proved at its own
+fixpoint, identical except for a uniform code-layout shift of k = 0/4/8/16/24/32/48 bytes;
+instructions agree to <0.1%. **Layout alone moves this workload's cycles by 1.77%** (minima of 9),
+1.75% (medians). Against that floor:
+
+| | cycles vs `dada88f` (strike's two rounds) | against the 1.8% floor |
+|---|---|---|
+| stone 0a | +6.594% / +6.709% | **real** -- stone 0 costs ~5-7% of the compiler's TIME |
+| stone 0b | +5.431% / +5.164% | **real** |
+| 0b vs 0a | -1.09% / -1.45% | **inside the floor** -- a time recovery is NOT demonstrated |
+
+**Stone 0b recovered 71% of the INSTRUCTIONS and has not been shown to recover TIME.** The
+remaining ~5% of cycles is real and unexplained by instruction count; the memory touch at `[rax-8]`
+-- every counted read now dirties the header line of the object it read -- is the leading
+hypothesis and is still unproven. That is the thing to measure next, at the uop level or with a
+same-binary control, now that there is a floor to measure it against.
