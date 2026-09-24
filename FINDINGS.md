@@ -411,6 +411,11 @@ checker's or runtime's diagnostic quoted verbatim; the class; and the repro file
 
 ### F-007: an unknown bare call name passes the checker and fails only at runtime (found via a self-calling let-bound fn)
 
+**2026-09-24: NOT closed by excursus 002 stone 3.** Stone 3 fixed F-196 (NAMESPACED heads in function
+bodies went unchecked). Re-run on a HEAD build of wat-rs and on stone 3's build, every bare-head probe
+below still passes `--check` (exit 0 on both), and `unknown-ns-in-fn.wat` still fails it on both. A
+separate seam; still open.
+
 - **Where:** Seasoned Schemer ch 12's `letrec` job: a local helper that recurses.
 - **What happened** (2026-09-14, wat-rs `a3218644d`): `probes/letrec-let-bound-fn.wat`
   binds `fact` to a `fn` whose body calls `fact`. Startup (type check) **accepts** it. The
@@ -15323,3 +15328,36 @@ red before it and nobody ran the floor after those stones. The timeout,
 `every_wat_scripts_file_loads_on_the_current_runtime` at its 600 s deadline, has the same shape in
 the 09-13 floor logs — passed once at 442 s, timed out twice. By the standing rule there is no such
 thing as a known flake: it is a test that sits at its deadline, recorded here, not re-run.
+
+
+### F-198: `eval-step!` cannot step a call spelled with a namespaced head -- and calls a function that captured nothing "closure-bearing"
+
+**Correct, in wat-rs.** Found while answering the builder's question about closures, 2026-09-24.
+`probes/eval-step-closure.wat` and `probes/eval-step-closure-kw.wat`.
+
+The builder's example is a real closure -- `x` is neither a parameter nor a global, so the `fn` must
+carry `x = 42`:
+
+```clojure
+(wat.core/defn user/make [] :- [wat.type/i64 :-> wat.type/i64]
+  (wat.core/let [x 42] (wat.core/fn [y :- wat.type/i64] :- wat.type/i64 (wat.core/+ x y))))
+(wat.core/defn user/add1 [n :- wat.type/i64] :- wat.type/i64 (wat.core/+ n 1))
+```
+
+`((user/make) 0)` prints **42**. Stepping is where the seams are:
+
+| `(:wat::eval-step! (quote …))` | answer |
+|---|---|
+| `(user/add1 3)` -- namespaced, as the corpus and the REPL write it | `no-step-rule … symbol-head:user/add1` -- quoted code is DATA, keeps its spelling, and `eval-step!` resolves only keyword heads. A sibling of F-196, one level down |
+| `(:user::add1 3)` -- keyword | `no-step-rule … :user::add1 (closure-bearing — Phase 3)` -- but `add1` captured NOTHING |
+
+**The second row is the dilemma the builder scored after stone 3.** The refusal is
+`if func.closed_env.is_some()` (`wat-rs/src/runtime.rs` ~13721); step 9 evaluates every top-level def
+with `Environment::new()`, so every top-level function carries an EMPTY captured environment and is
+refused. At HEAD, in a real program, `eval-step!` could never step any user-defined function; two unit
+tests passed only through step 6's closure-less copy, which stone 3 removed. By the four questions the
+fix is "a captured environment that binds NOTHING is not a closure" -- the builder's `x = 42` example
+stays correctly refused until Phase 3 teaches substitution to carry captured values.
+
+**Also confirmed:** the native compiler refuses `fn` outright (*"cannot compile call: (wat.core/fn …)"*)
+-- already on the queue as NEXT.md's "Anonymous `fn`", the builder's call of 2026-09-20.
