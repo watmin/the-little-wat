@@ -14926,3 +14926,56 @@ claims a capability is missing, grep the tree for the capability's own vocabular
 Every later statement inherited it without ever touching the disk. This is precisely the
 `recolligere` trap: the summary reads in your own voice, feels continuous, and is a lossy cache.
 Four findings were written on top of it before the crawl caught it.
+
+
+### F-188: a pointer read out of a container keeps count 1, so in-place `conj` extends a LIVE element -- two doors, one root
+
+**Fix.** A silent wrong answer present at HEAD `e35a682`, found by the shadowdancer's STOP-1 on
+excursus 001 stone 1, reproduced independently by the orchestrator, and widened into a second
+door by the orchestrator's own disconfirming probe.
+
+**Door 1 -- a borrowed pointer passed as an argument** (`elf/probe/callrel-borrow.wat`):
+`(user/bump (wat.core/nth g 3))`, where `bump` does `(conj v 99)` on its linear parameter.
+
+```
+interpreter   30|240000|3|1|30
+HEAD          30|240000|4|1|99     <- the row grew; the caller's grid now holds 4 elements
+```
+
+**Door 2 -- a `let` that shadows a linear parameter** (`elf/probe/own-shadow.wat`). No borrowed
+pointer crosses any call: `e` is passed as a Symbol and shared; the borrowed row is bound INSIDE
+`bump` by `(let [v (nth g 3)] ...)`, and `v` shadows the parameter `v`.
+
+```
+interpreter   30|3|30
+HEAD          30|4|99
+```
+
+**The mechanism.** `vec_conj_own` path 3 (`elf/lib/runtime.wat:563`) extends the heap over a
+vector whose arm word reads `:c::heap-arm` (1) and which ends exactly at the heap top. A value
+stored into a container is stored by MOVE and keeps count 1, so when it is read back OUT of the
+container it is indistinguishable from an owned value -- the compiler's own comment at
+`elf/compile.wat:2989` states exactly this (*"a field read is not a temporary. It is a BORROWED
+pointer into a container that is still alive -- and its share count really is 1"*). `:c::share`
+(`:3033`) raises the count only for a Symbol, so nothing raises it at the read. And `own?`
+(`:1889`) is `Symbol ∧ linear?`, where `linear?` is keyed on the NAME -- which is door 2: the
+shadowing `let` inherits the parameter's ownership by spelling.
+
+**The two probes discriminate between the candidate fixes exactly:**
+
+| fix | door 1 | door 2 |
+|---|---|---|
+| share non-fresh pointer arguments at the call site | closed | **open** |
+| make `own?` binding-aware rather than name-keyed | **open** | closed |
+| **raise the count when a pointer is read out of a container** | closed | closed |
+
+The third is the root; the first two are stems. It is drawn as excursus 001 stone 0.
+
+**Why this hid.** `tools/mem.sh` §1 (*"does the release free anything still live?"*) never
+exercises a borrowed pointer, and `elf/src/strown.wat` covers the String form of this class --
+which `:c::fresh-str?` (`:3010`) closed for strings -- but nothing covered the Vector form. The
+comment diagnosing the class sat twelve lines above the predicate that fixed half of it.
+
+**Blast radius.** Excursus 001 stone 1's caller-side release turns door 1's wrong length into a
+read of reclaimed memory (`30|240000|4|1|0`), which is why stone 1 is held on branch
+`excursus-001-stone-1` and does not land until stone 0 has.

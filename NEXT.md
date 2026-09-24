@@ -17,60 +17,23 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — C-212, the caller-side release (drawn, not started)
+### NEXT STRIKE — excursus 001 stone 0: count a pointer at the moment it is read out of a container
 
-**The compiler already names this work.** `elf/compile.wat:3684`: *"Freeing those needs
-reachability, not scope -- a collector, or **a caller-side release at every call whose return
-type is not a pointer. The second is the next thing to build** and is the same idea one level
-up; the first is a different program."*
+**Read `docs/excursus/2026/09/001-reclamation-beyond-scope/` top to bottom** — DESIGN, then both
+SCOREs, then stone 0's BRIEF and EXPECTATIONS. That directory is the truth for this work; this
+section only points at it.
 
-**Read F-185, F-186 and F-187 in that order before touching anything.** F-185/F-186 are marked
-WRONG at the top and are kept only because F-187 is the lesson: I reported that reclamation did
-not exist without ever grepping for it, and wrote four findings on top of that belief. It ships,
-as C-120, and `tools/mem.sh` has measured it since 2026-09-18.
+**Where it stands.** Stone 1 (the caller-side release — the work `elf/compile.wat:3684` named) is
+STRUCK and HELD on branch `excursus-001-stone-1`. It works: `escape.wat` goes flat. It does not
+merge, because STOP-1 found **F-188**: a pointer read out of a container keeps count 1, so
+`vec_conj_own` extends a LIVE element in place — a silent wrong answer already at HEAD, through two
+doors (`elf/probe/callrel-borrow.wat`, `elf/probe/own-shadow.wat`). Stone 1 would widen it into a
+read of reclaimed memory. Stone 0 closes it at the root — the read — and then stone 1 rebases onto
+it, takes an `allocates?` gate (fib32 pays +9.86% for a release with nothing to free) and a real
+flatness gate in `mem.sh` §7 (today's §7 prints a number it never measures).
 
-**What C-120 does today** (`elf/compile.wat:3652`, emitted by `:c::seq` at 3805): a sequence's
-non-final forms have their value discarded, so `r15` is marked before each and restored after --
-`push r15;push r15` / `pop r15;pop r15`, eight bytes, nesting for free because the marks live on
-the stack. Sound because the only ways to store a pointer are a `let` slot (out of scope when the
-statement ends) and `poke` (not) -- so `:c::releasable?` is `(not (calls-poke? a pg))`, a fixpoint
-over `Prog/fns`, not a substring test.
-
-**What it cannot reach, and the fixture for it**: `elf/src/escape.wat`. A call whose callee's
-declared return type is not a pointer, which allocated internally, is never a discarded non-final
-form. It leaks **63.8 bytes/iteration, linear in n** (62.4 MB at 1M, 123.8 at 2M, 184.7 at 3M),
-with the right answer at every n. **After C-212 its peak must be FLAT in n.** `optmh.elf` at
-610.9 MB against `optm.elf`'s 2.1 MB is the same gap at scale (F-185).
-
-**The one contract decision:** the release is decided from the callee's DECLARED return type
-(`Fn/ret` at the call site), never from the runtime value and never from the argument types.
-
-**Rooms, in order:** `elf/compile.wat:3652-3690` (the C-120 section and its soundness argument --
-the pattern to copy) -> `3800-3816` (`:c::releasable?` and `:c::seq`; the worked reference is
-literally `push o "41574157" 16` / `popn o2 "415f415f" 16` gated on `drop?`) -> `:c::call-user`
-(where a user call is emitted and `Fn/ret` is in hand) -> `:c::ptr-ty?` -> `:c::calls-poke?`
-(reuse the existing fixpoint, do not re-derive it).
-
-**Out of scope, REJECTED not deferred:** pointer-returning calls (needs reachability -- a
-collector, explicitly a different program); tail calls (no return point to restore at);
-intrinsics (`concat`/`subs`/`to-string` ARE the allocation, not a call over one).
-
-**STOP-1, the real trap-door.** `vec_conj_own` path 3 (`elf/lib/runtime.wat:563`) extends the
-heap over a vector whose last element *"ends exactly at the heap top"*. C-120 is safe from this
-because the in-place paths are gated on a PROVED last use, so nothing observes the extension
-afterwards. For a caller-side release the equivalent protection is `:c::share` marking an argument
-non-owned -- but path 2 keys on `arm-own` while **path 3 keys on `heap-arm`, and it is NOT proved
-that `share` closes path 3.** If a callee can extend a caller's vector in place, a caller-side
-restore frees the extension while its length still counts it. Prove path 3 is closed, or STOP and
-report -- do not add a guard and do not narrow the predicate until the problem disappears.
-
-**STOP-2.** If the callee's return type is not available at the call site as a DECLARED type,
-STOP; do not infer it from the body and do not fall back to the value.
-
-**Expectations, fixed before the strike:** `tools/mem.sh` -- `escape.elf` flat in n at ~2 MB, §1
-still "no", §6 `linear.wat` still agrees; `tools/elf-run.sh` no new divergence;
-`tools/bootstrap.sh` byte-identical fixpoint. Baseline to beat: fixpoint **249,978 B**, 86
-binaries.
+**The order is fixed:** stone 0 on `main` → stone 1 rebased, gated, both F-188 probes AGREEING →
+merge. Bootstrap and `mem.sh` were both green with F-188 in the tree; neither is the bar.
 
 ### LANDED since this section last read "next" (2026-09-23)
 

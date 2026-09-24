@@ -1,7 +1,9 @@
 # Excursus 001 — reclamation beyond scope
 
-**Status: DRAWN 2026-09-23, HEAD `e35a682`.** Stone 1 is drawn and not struck. The probe is
-committed and measured; the one open question is STOP-1 and it is stated, not taken.
+**Status: 2026-09-23.** **Stone 1 is STRUCK and HELD** on branch `excursus-001-stone-1` (`a7551a6`):
+it works -- `escape.wat` goes flat -- and it widens F-188, a silent wrong answer already at HEAD, so
+it does not merge until **stone 0** (drawn) has closed F-188 on `main`. See the SCORE's
+ORCHESTRATOR section for why, by the four questions.
 
 > Builder: *"i explicitly do not want a gc that pauses anything.. can we do this inline as we make
 > forward progress in programs?"* — and, on ordering: *"do the hard, correct thing first and
