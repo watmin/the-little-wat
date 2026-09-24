@@ -28,7 +28,13 @@ call boundary (the compiler exports its own decisions; the rules only join them;
 twice). Phase 2 is one fact, one derivation inside the compiler. Phase 3 is the compiler compiling
 rule sets, with wat-rs's rete as the oracle.
 
-**The gate currently reports 8 conflicts, 4 causes, all real:**
+**Two gates now (stone 2 landed 2026-09-24): `rules:` (self-agreement, 8 conflicts) and `types:` (the
+compiler against wat-rs's checker, 9 conflicts in 17,367 jointly-typed nodes). Stone 2 also found F-196:
+`wat --check` does not type-check bodies spelled with namespaced symbols -- most of this corpus -- and
+F-197: the wat-rs floor has been red since this repo's 09-20 stones. Both are in wat-rs; the builder
+decides.**
+
+**The boundary gate's 8 conflicts, 4 causes, all real:**
 - F-194: `:c::type-of-form`'s variant arm ignores the TIER (`henum:` vs `penum:`)
 - the same arm drops `;arg` (`elf/src/option.wat`, inliner-dependent)
 - F-195: no `match` arm in `:c::type-of-form`, so a match-bound value is guessed `"i64"` -- a SILENT

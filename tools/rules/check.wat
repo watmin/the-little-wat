@@ -17,6 +17,26 @@
 ;;   "PROG <path>"  "FILE <path>"...  "CArg ..."...  "CParam ..."...  "END"
 ;; `tools/rules.sh` produces exactly that. Anything else on stdin is ignored.
 ;;
+;; **Stone 2 -- the compiler knows what the language knows.** The same compile also SAYS, at its
+;; type waist (`:c::type-of`), the type it gave every node it typed (`CType`), in wat's spelling
+;; through its one translation function (`:c::wat-ty`). wat-rs's checker, asked
+;; (`WAT_CHECK_TYPES=1 wat --check`), says the type its `infer` gave every node (`KType`; `KUnres`
+;; where a type variable survived). The rules join the two BY POSITION and nothing else, and
+;; compare the strings -- again deriving no type:
+;;   type-conflict      the compiler's type is neither the checker's type nor that type with its
+;;                      variants widened to their enum                        (a FINDING)
+;;   type-AGREES        equal to the checker's type                        (counted)
+;;   type-refined       equal only once the checker's variant is widened to its enum -- the
+;;                      compiler knows the enum, the language knows the variant (counted)
+;;   type-partial       the compiler's spelling is not a whole wat type (a function type: arity
+;;                      and return only) -- joined, not compared            (counted)
+;;   type-untranslatable  the one translation did not know the spelling    (printed)
+;;   type-unresolved    the checker's type at the node kept a variable (STOP-4) (printed)
+;;   checker-multi      one position, two checker types (STOP-3)           (printed)
+;;   compiler-multi     one position, two compiler types                   (printed)
+;;   ctype-unjoined     the compiler typed a node the checker did not      (counted)
+;;   ktype-unjoined     the checker typed a node the compiler did not      (counted)
+;;
 ;; Reported, per program and in total:
 ;;   boundary-type-conflict   an argument's type differs from its parameter's      (a FINDING)
 ;;   boundary-type-AGREES     the same join, types equal -- counted, the witness that a
@@ -34,6 +54,21 @@
 (:wat::core::defrecord :ck::CParam
   [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
    idx <- :wat::core::i64  fn <- :wat::core::String  ty <- :wat::core::String])
+
+;; ── stone 2: the type each side gave each node, at its position ──────────────────────
+;; `seq` is the line's order within its program -- only so a pair of facts at one position can
+;; be named once rather than twice. `kind` is "type", "partial" or "untranslatable", read off the
+;; translation's own marker.
+(:wat::core::defrecord :ck::CType
+  [seq <- :wat::core::i64  file <- :wat::core::String  line <- :wat::core::i64
+   col <- :wat::core::i64  in <- :wat::core::String  raw <- :wat::core::String
+   wat <- :wat::core::String  kind <- :wat::core::String])
+(:wat::core::defrecord :ck::KType
+  [seq <- :wat::core::i64  file <- :wat::core::String  line <- :wat::core::i64
+   col <- :wat::core::i64  ty <- :wat::core::String  wide <- :wat::core::String])
+(:wat::core::defrecord :ck::KUnres
+  [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
+   ty <- :wat::core::String])
 
 ;; ── wat-grep's facts, one fact base for every file of a program ──────────────────────
 ;; wat-grep numbers each file's nodes from 1, so a program of several files needs its ids moved
@@ -160,6 +195,109 @@
              (:wat::grep::Capture :name "call" :value ?callee)
              (:wat::grep::Capture :name "defn" :value ?fn)))])
 
+;; ── stone 2 ★ THE CONSTRAINT: the compiler's type for a node is the language's ─────────
+(:wat::rete::defrule :ck::t-agree
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat) (?k <- :kind))
+         (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :ty))
+         (:wat::rete::where (:wat::rete::string::= ?k "type"))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-AGREES"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "type" :value ?w)))])
+
+(:wat::rete::defrule :ck::t-refined
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat) (?k <- :kind))
+         (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?kt <- :ty) (?w <- :wide))
+         (:wat::rete::where (:wat::rete::string::= ?k "type"))
+         (:wat::rete::where (:wat::rete::string::not= ?kt ?w))
+         (:wat::rete::not (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :ty)))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-refined"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "compiler" :value ?w)
+             (:wat::grep::Capture :name "checker" :value ?kt)))])
+
+(:wat::rete::defrule :ck::t-conflict
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?in <- :in) (?r <- :raw)
+                     (?w <- :wat) (?k <- :kind))
+         (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?kt <- :ty))
+         (:wat::rete::where (:wat::rete::string::= ?k "type"))
+         (:wat::rete::not (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :ty)))
+         (:wat::rete::not (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wide)))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-conflict"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "in" :value ?in)
+             (:wat::grep::Capture :name "compiler" :value ?w)
+             (:wat::grep::Capture :name "checker" :value ?kt)
+             (:wat::grep::Capture :name "raw" :value ?r)))])
+
+(:wat::rete::defrule :ck::t-partial
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat) (?k <- :kind))
+         (:wat::rete::where (:wat::rete::string::= ?k "partial"))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-partial"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "compiler" :value ?w)))])
+
+(:wat::rete::defrule :ck::t-untranslatable
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat) (?k <- :kind))
+         (:wat::rete::where (:wat::rete::string::= ?k "untranslatable"))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-untranslatable"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "compiler" :value ?w)))])
+
+(:wat::rete::defrule :ck::t-unresolved
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat))
+         (:ck::KUnres (?f <- :file) (?l <- :line) (?c <- :col) (?kt <- :ty))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "type-unresolved"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "compiler" :value ?w)
+             (:wat::grep::Capture :name "checker" :value ?kt)))])
+
+;; STOP-3: one position, two checker types -- both named, neither chosen
+(:wat::rete::defrule :ck::t-checker-multi
+  :when [(:ck::KType (?s1 <- :seq) (?f <- :file) (?l <- :line) (?c <- :col) (?a <- :ty))
+         (:ck::KType (?s2 <- :seq) (?f <- :file) (?l <- :line) (?c <- :col) (?b <- :ty))
+         (:wat::rete::where (:wat::rete::i64::< ?s1 ?s2))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "checker-multi"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "one" :value ?a)
+             (:wat::grep::Capture :name "two" :value ?b)))])
+
+(:wat::rete::defrule :ck::t-compiler-multi
+  :when [(:ck::CType (?s1 <- :seq) (?f <- :file) (?l <- :line) (?c <- :col) (?a <- :wat))
+         (:ck::CType (?s2 <- :seq) (?f <- :file) (?l <- :line) (?c <- :col) (?b <- :wat))
+         (:wat::rete::where (:wat::rete::i64::< ?s1 ?s2))
+         (:wat::rete::where (:wat::rete::string::not= ?a ?b))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "compiler-multi"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "one" :value ?a)
+             (:wat::grep::Capture :name "two" :value ?b)))])
+
+;; one side only: counted per fact
+(:wat::rete::defrule :ck::t-ctype-unjoined
+  :when [(:ck::CType (?f <- :file) (?l <- :line) (?c <- :col) (?w <- :wat) (?in <- :in))
+         (:wat::rete::not (:ck::KType (?f <- :file) (?l <- :line) (?c <- :col)))
+         (:wat::rete::not (:ck::KUnres (?f <- :file) (?l <- :line) (?c <- :col)))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "ctype-unjoined"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "in" :value ?in)
+             (:wat::grep::Capture :name "compiler" :value ?w)))])
+
+(:wat::rete::defrule :ck::t-ktype-unjoined
+  :when [(:ck::KType (?f <- :file) (?l <- :line) (?c <- :col) (?kt <- :ty))
+         (:wat::rete::not (:ck::CType (?f <- :file) (?l <- :line) (?c <- :col)))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "ktype-unjoined"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "checker" :value ?kt)))])
+
 ;; ── reading the compiler's lines ─────────────────────────────────────────────────────
 (:wat::core::defn :ck::int [s <- :wat::core::String] -> :wat::core::i64
   (:wat::core::Option/expect (:wat::string::to-i64 s) "rules: not an integer in a fact line"))
@@ -171,11 +309,19 @@
 (:wat::core::defrecord :ck::Tally
   [progs <- :wat::core::i64  cargs <- :wat::core::i64  cparams <- :wat::core::i64
    agree <- :wat::core::i64  conflict <- :wat::core::i64  unplaced <- :wat::core::i64
-   unjoined <- :wat::core::i64  mismatch <- :wat::core::i64  lists <- :wat::core::i64])
+   unjoined <- :wat::core::i64  mismatch <- :wat::core::i64  lists <- :wat::core::i64
+   ;; stone 2
+   ctypes <- :wat::core::i64  ktypes <- :wat::core::i64  kunres <- :wat::core::i64
+   tagree <- :wat::core::i64  trefined <- :wat::core::i64  tconflict <- :wat::core::i64
+   tpartial <- :wat::core::i64  tuntrans <- :wat::core::i64  tunres <- :wat::core::i64
+   kmulti <- :wat::core::i64  cmulti <- :wat::core::i64
+   conly <- :wat::core::i64  konly <- :wat::core::i64])
 
 (:wat::core::defn :ck::zero [] -> :ck::Tally
   (:ck::Tally :progs 0 :cargs 0 :cparams 0 :agree 0 :conflict 0 :unplaced 0 :unjoined 0
-              :mismatch 0 :lists 0))
+              :mismatch 0 :lists 0
+              :ctypes 0 :ktypes 0 :kunres 0 :tagree 0 :trefined 0 :tconflict 0 :tpartial 0
+              :tuntrans 0 :tunres 0 :kmulti 0 :cmulti 0 :conly 0 :konly 0))
 
 ;; one program's records: every file's wat-grep facts, ids moved apart, then the compiler's
 (:wat::core::defn :ck::grep-file
@@ -218,36 +364,84 @@
 
 (:wat::core::defrecord :ck::Prog
   [recs <- (:wat::core::PersistentVector :- [:wat::core::Record])
-   files <- :wat::core::i64  cargs <- :wat::core::i64  cparams <- :wat::core::i64])
+   files <- :wat::core::i64  cargs <- :wat::core::i64  cparams <- :wat::core::i64
+   ctypes <- :wat::core::i64  ktypes <- :wat::core::i64  kunres <- :wat::core::i64])
+
+(:wat::core::defn :ck::bump-prog [p <- :ck::Prog field <- :wat::core::keyword] -> :ck::Prog
+  (:wat::core::cond
+    ((:wat::core::= field :cargs) (:wat::core::assoc p :cargs (:wat::i64::+ (:ck::Prog/cargs p) 1)))
+    ((:wat::core::= field :cparams) (:wat::core::assoc p :cparams (:wat::i64::+ (:ck::Prog/cparams p) 1)))
+    ((:wat::core::= field :ctypes) (:wat::core::assoc p :ctypes (:wat::i64::+ (:ck::Prog/ctypes p) 1)))
+    ((:wat::core::= field :ktypes) (:wat::core::assoc p :ktypes (:wat::i64::+ (:ck::Prog/ktypes p) 1)))
+    (:else (:wat::core::assoc p :kunres (:wat::i64::+ (:ck::Prog/kunres p) 1)))))
+
+(:wat::core::defn :ck::add-rec [p <- :ck::Prog r <- :wat::core::Record field <- :wat::core::keyword]
+    -> :ck::Prog
+  (:ck::bump-prog (:wat::core::assoc p :recs (:wat::vector::conj (:ck::Prog/recs p) r)) field))
+
+;; words i.. of a line, joined again by the spaces they were split on -- a wat type holds spaces
+(:wat::core::defn :ck::rest [ws <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64]
+    -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length ws)) "")
+    ((:wat::core::= i (:wat::i64::- (:wat::core::length ws) 1)) (:wat::core::nth ws i))
+    (:else (:wat::string::concat (:wat::core::nth ws i) " " (:ck::rest ws (:wat::i64::+ i 1))))))
+
+;; the translation's own marker, read back, anywhere in the type -- a Vector of functions is
+;; as partial as a function: "partial:" and "untranslatable:" are not wat types
+(:wat::core::defn :ck::kind-of [w <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::string::contains? w "untranslatable:") "untranslatable")
+    ((:wat::string::contains? w "partial:") "partial")
+    (:else "type")))
+
+(:wat::core::defn :ck::seq-of [p <- :ck::Prog] -> :wat::core::i64
+  (:wat::i64::+ (:ck::Prog/ctypes p) (:ck::Prog/ktypes p)))
 
 (:wat::core::defn :ck::add-line [p <- :ck::Prog s <- :wat::core::String] -> :ck::Prog
   (:wat::core::let [ws (:wat::string::split s " ")
-                    tag (:ck::word ws 0)]
+                    tag (:ck::word ws 0)
+                    ts (:wat::string::split s "\t")
+                    ttag (:ck::word ts 0)]
     (:wat::core::cond
       ((:wat::core::= tag "FILE")
-        (:ck::Prog :recs (:ck::grep-file (:ck::Prog/recs p) (:ck::word ws 1)
-                           (:wat::i64::* (:wat::i64::+ (:ck::Prog/files p) 1) 100000000))
-                   :files (:wat::i64::+ (:ck::Prog/files p) 1)
-                   :cargs (:ck::Prog/cargs p) :cparams (:ck::Prog/cparams p)))
+        (:wat::core::assoc
+          (:wat::core::assoc p :recs (:ck::grep-file (:ck::Prog/recs p) (:ck::word ws 1)
+                                       (:wat::i64::* (:wat::i64::+ (:ck::Prog/files p) 1) 100000000)))
+          :files (:wat::i64::+ (:ck::Prog/files p) 1)))
       ((:wat::core::= tag "CArg")
-        (:ck::Prog :recs (:wat::vector::conj (:ck::Prog/recs p)
-                           (:ck::CArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
-                                      :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
-                                      :callee (:ck::word ws 5) :in (:ck::word ws 6)
-                                      :ty (:ck::word ws 7)))
-                   :files (:ck::Prog/files p)
-                   :cargs (:wat::i64::+ (:ck::Prog/cargs p) 1) :cparams (:ck::Prog/cparams p)))
+        (:ck::add-rec p (:ck::CArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
+                                   :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
+                                   :callee (:ck::word ws 5) :in (:ck::word ws 6)
+                                   :ty (:ck::word ws 7))
+          :cargs))
       ((:wat::core::= tag "CParam")
-        (:ck::Prog :recs (:wat::vector::conj (:ck::Prog/recs p)
-                           (:ck::CParam :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
-                                        :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
-                                        :fn (:ck::word ws 5) :ty (:ck::word ws 6)))
-                   :files (:ck::Prog/files p)
-                   :cargs (:ck::Prog/cargs p) :cparams (:wat::i64::+ (:ck::Prog/cparams p) 1)))
+        (:ck::add-rec p (:ck::CParam :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
+                                     :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
+                                     :fn (:ck::word ws 5) :ty (:ck::word ws 6))
+          :cparams))
+      ((:wat::core::= tag "CType")
+        (:wat::core::let [w (:ck::rest ws 6)]
+          (:ck::add-rec p (:ck::CType :seq (:ck::seq-of p) :file (:ck::word ws 1)
+                                      :line (:ck::int (:ck::word ws 2)) :col (:ck::int (:ck::word ws 3))
+                                      :in (:ck::word ws 4) :raw (:ck::word ws 5)
+                                      :wat w :kind (:ck::kind-of w))
+            :ctypes)))
+      ((:wat::core::= ttag "KType")
+        (:ck::add-rec p (:ck::KType :seq (:ck::seq-of p) :file (:ck::word ts 1)
+                                    :line (:ck::int (:ck::word ts 2)) :col (:ck::int (:ck::word ts 3))
+                                    :ty (:ck::word ts 4) :wide (:ck::word ts 5))
+          :ktypes))
+      ((:wat::core::= ttag "KUnres")
+        (:ck::add-rec p (:ck::KUnres :file (:ck::word ts 1)
+                                     :line (:ck::int (:ck::word ts 2)) :col (:ck::int (:ck::word ts 3))
+                                     :ty (:ck::word ts 4))
+          :kunres))
       (:else p))))
 
 (:wat::core::defn :ck::empty-prog [] -> :ck::Prog
-  (:ck::Prog :recs (:wat::core::PersistentVector :- [:wat::core::Record]) :files 0 :cargs 0 :cparams 0))
+  (:ck::Prog :recs (:wat::core::PersistentVector :- [:wat::core::Record]) :files 0 :cargs 0 :cparams 0
+             :ctypes 0 :ktypes 0 :kunres 0))
 
 ;; ── reporting ────────────────────────────────────────────────────────────────────────
 (:wat::core::defn :ck::cap [cs <- (:wat::core::PersistentVector :- [:wat::grep::Capture])] -> :wat::core::String
@@ -262,18 +456,41 @@
     ((:wat::core::= rule "boundary-type-conflict") (:wat::core::assoc t :conflict (:wat::i64::+ (:ck::Tally/conflict t) 1)))
     ((:wat::core::= rule "arg-unjoined") (:wat::core::assoc t :unjoined (:wat::i64::+ (:ck::Tally/unjoined t) 1)))
     ((:wat::core::= rule "callee-mismatch") (:wat::core::assoc t :mismatch (:wat::i64::+ (:ck::Tally/mismatch t) 1)))
+    ((:wat::core::= rule "type-AGREES") (:wat::core::assoc t :tagree (:wat::i64::+ (:ck::Tally/tagree t) 1)))
+    ((:wat::core::= rule "type-refined") (:wat::core::assoc t :trefined (:wat::i64::+ (:ck::Tally/trefined t) 1)))
+    ((:wat::core::= rule "type-conflict") (:wat::core::assoc t :tconflict (:wat::i64::+ (:ck::Tally/tconflict t) 1)))
+    ((:wat::core::= rule "type-partial") (:wat::core::assoc t :tpartial (:wat::i64::+ (:ck::Tally/tpartial t) 1)))
+    ((:wat::core::= rule "type-untranslatable") (:wat::core::assoc t :tuntrans (:wat::i64::+ (:ck::Tally/tuntrans t) 1)))
+    ((:wat::core::= rule "type-unresolved") (:wat::core::assoc t :tunres (:wat::i64::+ (:ck::Tally/tunres t) 1)))
+    ((:wat::core::= rule "checker-multi") (:wat::core::assoc t :kmulti (:wat::i64::+ (:ck::Tally/kmulti t) 1)))
+    ((:wat::core::= rule "compiler-multi") (:wat::core::assoc t :cmulti (:wat::i64::+ (:ck::Tally/cmulti t) 1)))
+    ((:wat::core::= rule "ctype-unjoined") (:wat::core::assoc t :conly (:wat::i64::+ (:ck::Tally/conly t) 1)))
+    ((:wat::core::= rule "ktype-unjoined") (:wat::core::assoc t :konly (:wat::i64::+ (:ck::Tally/konly t) 1)))
     (:else (:wat::core::assoc t :unplaced (:wat::i64::+ (:ck::Tally/unplaced t) 1)))))
 
 (:wat::core::defn :ck::add [a <- :ck::Tally b <- :ck::Tally] -> :ck::Tally
   (:ck::Tally :progs (:wat::i64::+ (:ck::Tally/progs a) (:ck::Tally/progs b))
-              :cargs (:wat::i64::+ (:ck::Tally/cargs a) (:ck::Tally/cargs b))
-              :cparams (:wat::i64::+ (:ck::Tally/cparams a) (:ck::Tally/cparams b))
-              :agree (:wat::i64::+ (:ck::Tally/agree a) (:ck::Tally/agree b))
-              :conflict (:wat::i64::+ (:ck::Tally/conflict a) (:ck::Tally/conflict b))
-              :unplaced (:wat::i64::+ (:ck::Tally/unplaced a) (:ck::Tally/unplaced b))
-              :unjoined (:wat::i64::+ (:ck::Tally/unjoined a) (:ck::Tally/unjoined b))
-              :mismatch (:wat::i64::+ (:ck::Tally/mismatch a) (:ck::Tally/mismatch b))
-              :lists (:wat::i64::+ (:ck::Tally/lists a) (:ck::Tally/lists b))))
+    :cargs (:wat::i64::+ (:ck::Tally/cargs a) (:ck::Tally/cargs b))
+    :cparams (:wat::i64::+ (:ck::Tally/cparams a) (:ck::Tally/cparams b))
+    :agree (:wat::i64::+ (:ck::Tally/agree a) (:ck::Tally/agree b))
+    :conflict (:wat::i64::+ (:ck::Tally/conflict a) (:ck::Tally/conflict b))
+    :unplaced (:wat::i64::+ (:ck::Tally/unplaced a) (:ck::Tally/unplaced b))
+    :unjoined (:wat::i64::+ (:ck::Tally/unjoined a) (:ck::Tally/unjoined b))
+    :mismatch (:wat::i64::+ (:ck::Tally/mismatch a) (:ck::Tally/mismatch b))
+    :lists (:wat::i64::+ (:ck::Tally/lists a) (:ck::Tally/lists b))
+    :ctypes (:wat::i64::+ (:ck::Tally/ctypes a) (:ck::Tally/ctypes b))
+    :ktypes (:wat::i64::+ (:ck::Tally/ktypes a) (:ck::Tally/ktypes b))
+    :kunres (:wat::i64::+ (:ck::Tally/kunres a) (:ck::Tally/kunres b))
+    :tagree (:wat::i64::+ (:ck::Tally/tagree a) (:ck::Tally/tagree b))
+    :trefined (:wat::i64::+ (:ck::Tally/trefined a) (:ck::Tally/trefined b))
+    :tconflict (:wat::i64::+ (:ck::Tally/tconflict a) (:ck::Tally/tconflict b))
+    :tpartial (:wat::i64::+ (:ck::Tally/tpartial a) (:ck::Tally/tpartial b))
+    :tuntrans (:wat::i64::+ (:ck::Tally/tuntrans a) (:ck::Tally/tuntrans b))
+    :tunres (:wat::i64::+ (:ck::Tally/tunres a) (:ck::Tally/tunres b))
+    :kmulti (:wat::i64::+ (:ck::Tally/kmulti a) (:ck::Tally/kmulti b))
+    :cmulti (:wat::i64::+ (:ck::Tally/cmulti a) (:ck::Tally/cmulti b))
+    :conly (:wat::i64::+ (:ck::Tally/conly a) (:ck::Tally/conly b))
+    :konly (:wat::i64::+ (:ck::Tally/konly a) (:ck::Tally/konly b))))
 
 (:wat::core::defn :ck::show [label <- :wat::core::String t <- :ck::Tally] -> :wat::core::nil
   (:wat::kernel::println
@@ -286,6 +503,36 @@
       "  unplaced " (:wat::i64::to-string (:ck::Tally/unplaced t))
       "  unjoined " (:wat::i64::to-string (:ck::Tally/unjoined t))
       "  mismatch " (:wat::i64::to-string (:ck::Tally/mismatch t)))))
+
+;; stone 2's counts. `joined` is every compiler type that met a checker type at its node:
+;; agree + refined + conflict (a node with two checker types can be counted once per type).
+(:wat::core::defn :ck::show-types [label <- :wat::core::String t <- :ck::Tally] -> :wat::core::nil
+  (:wat::kernel::println
+    (:wat::string::concat label
+      "  CType " (:wat::i64::to-string (:ck::Tally/ctypes t))
+      "  KType " (:wat::i64::to-string (:ck::Tally/ktypes t))
+      "  KUnres " (:wat::i64::to-string (:ck::Tally/kunres t))
+      "  joined " (:wat::i64::to-string (:wat::i64::+ (:ck::Tally/tagree t)
+                                           (:wat::i64::+ (:ck::Tally/trefined t) (:ck::Tally/tconflict t))))
+      "  agree " (:wat::i64::to-string (:ck::Tally/tagree t))
+      "  refined " (:wat::i64::to-string (:ck::Tally/trefined t))
+      "  TYPE-CONFLICT " (:wat::i64::to-string (:ck::Tally/tconflict t))
+      "  partial " (:wat::i64::to-string (:ck::Tally/tpartial t))
+      "  untranslatable " (:wat::i64::to-string (:ck::Tally/tuntrans t))
+      "  unresolved " (:wat::i64::to-string (:ck::Tally/tunres t))
+      "  checker-multi " (:wat::i64::to-string (:ck::Tally/kmulti t))
+      "  compiler-multi " (:wat::i64::to-string (:ck::Tally/cmulti t))
+      "  compiler-only " (:wat::i64::to-string (:ck::Tally/conly t))
+      "  checker-only " (:wat::i64::to-string (:ck::Tally/konly t)))))
+
+;; counted, and printed only to the detail stream: the lines that are witnesses, not findings
+(:wat::core::defn :ck::quiet? [rule <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::or (:wat::core::= rule "boundary-type-AGREES")
+    (:wat::core::or (:wat::core::= rule "type-AGREES")
+      (:wat::core::or (:wat::core::= rule "type-refined")
+        (:wat::core::or (:wat::core::= rule "type-partial")
+          (:wat::core::or (:wat::core::= rule "ctype-unjoined")
+                          (:wat::core::= rule "ktype-unjoined")))))))
 
 (:wat::rete::defquery :ck::q-match
   :params []
@@ -303,15 +550,25 @@
              (:wat::core::do
                (:wat::core::if (:wat::core::= rule "boundary-type-AGREES") nil
                  (:wat::kernel::println
-                   (:wat::string::concat "  " rule "  " (:wat::grep::Match/file m) ":"
+                   (:wat::string::concat (:wat::core::if (:ck::quiet? rule) "  ~" "  ") rule "  "
+                     (:wat::grep::Match/file m) ":"
                      (:wat::i64::to-string (:wat::grep::Match/line m)) ":"
                      (:wat::i64::to-string (:wat::grep::Match/col m))
                      (:ck::cap (:wat::grep::Match/captures m)))))
                (:ck::bump t rule))))
-         (:ck::Tally :progs 1 :cargs (:ck::Prog/cargs p) :cparams (:ck::Prog/cparams p)
-                     :agree 0 :conflict 0 :unplaced 0 :unjoined 0 :mismatch 0 :lists 0)
+         (:wat::core::assoc
+           (:wat::core::assoc
+             (:wat::core::assoc
+               (:wat::core::assoc
+                 (:wat::core::assoc (:wat::core::assoc (:ck::zero) :progs 1) :cargs (:ck::Prog/cargs p))
+                 :cparams (:ck::Prog/cparams p))
+               :ctypes (:ck::Prog/ctypes p))
+             :ktypes (:ck::Prog/ktypes p))
+           :kunres (:ck::Prog/kunres p))
          (:wat::rete::query fired (:ck::q-match)))]
-    (:wat::core::do (:ck::show (:wat::string::concat "rules: " name) t) t)))
+    (:wat::core::do (:ck::show (:wat::string::concat "rules: " name) t)
+                    (:ck::show-types (:wat::string::concat "types: " name) t)
+                    t)))
 
 (:wat::core::defn :ck::read-line [] -> :wat::core::String
   (:wat::core::match (:wat::kernel::readln)
@@ -339,4 +596,6 @@
     (:wat::core::do
       (:ck::show (:wat::string::concat "rules: TOTAL over " (:wat::i64::to-string (:ck::Tally/progs total))
                    " programs") total)
+      (:ck::show-types (:wat::string::concat "types: TOTAL over " (:wat::i64::to-string (:ck::Tally/progs total))
+                         " programs") total)
       nil)))

@@ -24,6 +24,14 @@
 #
 # **Every program is compiled twice by the exporter** -- export on, export off -- and the two
 # binaries must be byte-identical: the export may say things, never change them.
+#
+# **Stone 2 -- the compiler knows what the language knows.** The same export also prints, at the
+# compiler's type waist, the type it gave every node it typed (CType), in wat's spelling. And
+# wat-rs's own checker is asked for the type ITS `infer` gave every node of the same program
+# (`WAT_CHECK_TYPES=1 wat --check`, one process per program, four at a time); those lines become
+# KType/KUnres facts in the same block. check.wat joins the two by position. A program the
+# checker refuses has no KType facts and is counted. RULES_DETAIL=<file> keeps every line the
+# checker printed, the counted witnesses (`~`) included.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 REPO=$PWD
@@ -70,11 +78,33 @@ else
   echo "rules: exporter is the INTERPRETER (RULES_INTERP)"
 fi
 
+# ---- stone 2: what the LANGUAGE says each node's type is -- wat-rs's checker, one process per
+# program, four at a time (they are independent)
+s=$(date +%s%N)
+mkdir -p "$BOX/k"
+i=0; for p in $PROGS; do i=$((i+1)); printf '%s %s\n' "$i" "$p"; done > "$BOX/k/list"
+export WAT BOX
+xargs -P 4 -L 1 sh -c 'WAT_CHECK_TYPES=1 timeout -s KILL 300 "$WAT" --check "$1" > "$BOX/k/$0.types" 2> "$BOX/k/$0.err"; echo $? > "$BOX/k/$0.rc"' < "$BOX/k/list"
+tkchk=$(ms $s)
+kref=0; kerr=0; korph=0; kmul=0; kunr=0
+while read -r i p; do
+  if [ "$(cat "$BOX/k/$i.rc")" != 0 ] || ! grep -q '^TYPES ' "$BOX/k/$i.types"; then
+    kref=$((kref+1)); echo "  checker refused  $p  ($(grep -v '^TYPES-CHECK-ERROR' "$BOX/k/$i.err" | head -1 | cut -c1-110))"
+  else
+    set -- $(sed -n 's/^TYPES recorded .* multi \([0-9]*\) unresolved \([0-9]*\) orphans \([0-9]*\) check-errors \([0-9]*\)$/\1 \2 \3 \4/p' "$BOX/k/$i.types")
+    kmul=$((kmul+$1)); kunr=$((kunr+$2)); korph=$((korph+$3)); kerr=$((kerr+$4))
+    [ "$4" = 0 ] || echo "  checker's recording check found $4 errors in $p: $(grep -m1 '^TYPES-CHECK-ERROR' "$BOX/k/$i.err" | cut -c1-140)"
+  fi
+done < "$BOX/k/list"
+echo "types: the checker typed $(( $(echo $PROGS | wc -w) - kref )) programs in $tkchk ms ($kref refused);" \
+     "over the whole of each (stdlib included): $kmul positions with two types, $kunr unresolved, $korph orphans, $kerr check errors"
+
 # ---- export, one process per program, so a program the compiler refuses costs only itself
 s=$(date +%s%N)
 : > "$BOX/facts"
-nprog=0; refused=0; moved=0; same_out=0; diff_out=0
+nprog=0; refused=0; moved=0; same_out=0; diff_out=0; i=0
 for p in $PROGS; do
+  i=$((i+1))
   printf '%s' "$p" > "$BOX/prog"; rm -f "$BOX/x.elf" "$BOX/n.elf"
   timeout -s KILL $TMO "${EXPORT[@]}" > "$BOX/one" 2>&1
   if ! grep -q '"compile: ok"' "$BOX/one"; then
@@ -92,9 +122,24 @@ for p in $PROGS; do
   if [ -n "$o" ] && [ -f "$o" ]; then
     if cmp -s "$BOX/n.elf" "$o"; then same_out=$((same_out+1)); else diff_out=$((diff_out+1)); echo "  (differs from $o)"; fi
   fi
-  # one block per program; a line said twice (a form compiled twice) is one fact
-  sed -n '/^"PROG /,/^"END"/p' "$BOX/one" | grep -E '^"(PROG|END|FILE|CArg|CParam)[ "]' \
-    | awk '!seen[$0]++' >> "$BOX/facts"
+  # one block per program; a line said twice (a form compiled twice) is one fact. A CType is one
+  # fact per node and type, whichever function it was typed in (an inlined body is typed once
+  # per caller): the first `in` is kept.
+  sed -n '/^"PROG /,/^"END"/p' "$BOX/one" | grep -E '^"(PROG|FILE|CArg|CParam|CType)[ "]' \
+    | awk '!seen[$0]++' | awk '$1 != "\"CType" || !ct[$2" "$3" "$4" "$6]++' >> "$BOX/facts"
+  # the checker's types for the files this program was read from, re-spelled with the
+  # compiler's path for each (the two name a loaded file differently: `elf/src/../lib/x.wat`)
+  grep '^"FILE ' "$BOX/one" | sed 's/^"FILE //; s/"$//' | awk '!s[$0]++' | while read -r f; do
+    printf '%s\t%s\n' "$(realpath -m --relative-to="$REPO" "$f")" "$f"; done > "$BOX/map"
+  cut -f2 "$BOX/k/$i.types" | grep -v '^TYPES' | sort -u | while read -r l; do
+    printf '%s\t%s\n' "$l" "$(realpath -m --relative-to="$REPO" "$l")"; done > "$BOX/labels"
+  awk -F'\t' 'FILENAME==ARGV[1] { comp[$1]=$2; next }
+               FILENAME==ARGV[2] { if ($2 in comp) lab[$1]=comp[$2]; next }
+               ($1=="TYPE" || $1=="UNRESOLVED") && ($2 in lab) {
+                 if ($1=="TYPE") printf "\"KType\\t%s\\t%s\\t%s\\t%s\\t%s\"\n", lab[$2], $3, $4, $5, $6
+                 else            printf "\"KUnres\\t%s\\t%s\\t%s\\t%s\"\n", lab[$2], $3, $4, $5 }' \
+      "$BOX/map" "$BOX/labels" "$BOX/k/$i.types" >> "$BOX/facts"
+  echo '"END"' >> "$BOX/facts"
 done
 texp=$(ms $s)
 echo "rules: exported $nprog programs in $texp ms ($refused refused by the compiler);" \
@@ -105,7 +150,10 @@ echo "rules: exported $nprog programs in $texp ms ($refused refused by the compi
 s=$(date +%s%N)
 timeout -s KILL 1800 "$WAT" tools/rules/check.wat < "$BOX/facts" > "$BOX/check" 2>&1; rc=$?
 tchk=$(ms $s)
-sed -e 's/^"//' -e 's/"$//' -e 's/\\"/"/g' "$BOX/check" | grep -v '^rules: .*CONFLICT 0  unplaced 0  unjoined 0  mismatch 0$'
+sed -e 's/^"//' -e 's/"$//' -e 's/\\"/"/g' "$BOX/check" > "$BOX/check.txt"
+[ -n "${RULES_DETAIL:-}" ] && cp "$BOX/check.txt" "$RULES_DETAIL"
+grep -v '^  ~' "$BOX/check.txt" | grep -v '^rules: .*CONFLICT 0  unplaced 0  unjoined 0  mismatch 0$' \
+  | grep -v '^types: [^T].*TYPE-CONFLICT 0  partial [0-9]*  untranslatable 0  unresolved 0  checker-multi 0  compiler-multi 0 '
 echo "rules: checked in $tchk ms; total $(ms $t0) ms"
 [ $rc -eq 0 ] || { echo "rules: the checker died (exit $rc)"; exit 2; }
 [ $moved -eq 0 ] || exit 1

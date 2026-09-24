@@ -248,17 +248,21 @@ refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
 # not fail this run yet. What DOES fail it is a check that could not be made -- the exporter did
 # not build, the checker died, or the export moved an emitted byte.
 echo
-echo "== the compiler agrees with itself at every boundary: tools/rules.sh (report mode) =="
+# Excursus 002 stone 2 rides the same run: the type the compiler gave every node it typed, joined
+# by position with the type wat-rs's own checker gave it (report mode too).
+echo "== the compiler agrees with itself, and with the language: tools/rules.sh (report mode) =="
 rout=$(tools/rules.sh 2>&1); rrc=$?
 printf '%s\n' "$rout" | sed 's/^/  /'
 [ $rrc -eq 0 ] || { echo "  FAIL: tools/rules.sh could not make the check (exit $rrc)"; fail=1; }
 rtot=$(printf '%s\n' "$rout" | sed -n 's/.*TOTAL over \([0-9]*\) programs.*pairs \([0-9]*\).*CONFLICT \([0-9]*\).*/\3 conflicts in \2 argument-parameter pairs over \1 programs/p')
+ttot=$(printf '%s\n' "$rout" | sed -n 's/^types: TOTAL over \([0-9]*\) programs.*joined \([0-9]*\)  agree \([0-9]*\)  refined \([0-9]*\)  TYPE-CONFLICT \([0-9]*\) .*/\5 type conflicts in \2 nodes both typed (\3 agree, \4 refined) over \1 programs/p')
 
 echo
 if [ $fail -eq 0 ]; then
   echo "elf-run: ok -- $(ls elf/out/*.elf | wc -l) native binaries. $agreed agree with the interpreter;"
   echo "         $natively more use syscalls it has no implementation of (F-119); $refused refusals and"
   echo "         $trapped traps, both ways. rules: ${rtot:-no total}."
+  echo "         types: ${ttot:-no total}."
 else
   echo "elf-run: FAILED"
 fi

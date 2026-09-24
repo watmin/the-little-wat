@@ -15270,3 +15270,46 @@ record"* where the interpreter answers.
 
 **Not fixed here.** Its root is the same shape as F-194's -- a type the compiler reconstructs
 instead of knows -- and the checker from excursus 002 stone 1 is its gate.
+
+
+### F-196: `wat --check` does not type-check a function body spelled with namespaced symbols
+
+**Correct, in wat-rs — and the largest gap between "wat delivers perfect knowledge" and what runs.**
+Found by excursus 002 stone 2's shadowdancer, whose oracle could not work without seeing it;
+reproduced by the orchestrator, including on a HEAD build of wat-rs with no stone-2 code in it.
+
+The same program, differing only in how its names are spelled, with a wrong-typed argument
+(`(user/slen 5)` where the parameter is declared `:user::S`):
+
+| spelling | `wat --check` | `wat` |
+|---|---|---|
+| namespaced symbols — `user/slen`, `wat.core/let` — how most of this corpus is written | **exit 0** | dies at runtime, `PatternMatchFailed` |
+| keywords — `:user::slen`, `:wat::core::let` | **exit 1**, `TypeMismatch: :user::slen: parameter #1 expects :user::S; got :wat::core::i64` | — |
+
+**Mechanism, per the strike (not independently traced by the orchestrator):** freeze registers
+function bodies at step 6 and normalises namespaced symbols to keywords at step 7, but only for the
+residue; the startup check reads the un-normalised bodies, whose heads are unbound Symbols, gets a
+fresh type variable for each call, and types nothing inside. `elf/probe/nth-record.wat` — which the
+native compiler now refuses and the interpreter rejects at runtime — also passes `wat --check`.
+
+**Why it matters beyond this repo:** the builder's ruling is that runtime must never panic and every
+error is a compile-time error or a matched value. With this hole, a wrong-typed call in the dominant
+spelling reaches runtime and panics. The check exists and is correct; it is not being fed the bodies.
+
+**Not fixed** (excursus 002 stone 2's STOP-5, and moving the check changes what existing callers
+see — that is the builder's call in his own repo). Stone 2's oracle works around it: under
+`WAT_CHECK_TYPES` only, it runs a second `check_program` over the FROZEN world, whose bodies are
+normalised. `--check` itself is unchanged.
+
+### F-197: the wat-rs floor has been red on `the-little-wat` since this repo's own 09-20 stones
+
+**Fix, and the failure is ours.** Excursus 002 stone 2 ran the wat-rs floor as the gate for touching
+`src/check.rs` (`NEXTEST_TEST_THREADS=4`): `5397 run: 5394 passed, 2 failed, 1 timed out`. Both
+failures are content lints — `no_inlined_wat_in_tests`, `no_loose_string_assert` — and both name one
+file, `tests/resolve/probe_little_wat_bits_and_code_point.rs`, written by `0a04c0512` and
+`04d18e8a4`, the `STONE(the-little-wat/code-point-at)` and `STONE(the-little-wat/bytes)` commits of
+2026-09-20. Stone 2 left `tests/` byte-identical; the lints read only test files; so the floor was
+red before it and nobody ran the floor after those stones. The timeout,
+`every_wat_scripts_file_loads_on_the_current_runtime` at its 600 s deadline, has the same shape in
+the 09-13 floor logs — passed once at 442 s, timed out twice. By the standing rule there is no such
+thing as a known flake: it is a test that sits at its deadline, recorded here, not re-run.

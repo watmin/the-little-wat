@@ -1,10 +1,11 @@
 # Excursus 002 — no guesses: every place the compiler knows less than the language
 
-**Status: 2026-09-23.** **Stone 1 LANDED** -- rete checks the compiler: `tools/rules.sh` (run by
-`elf-run`, report mode) joins what the compiler DECIDED at every call boundary and reports where it
-disagrees with itself. First run: 8 conflicts across 4 causes -- F-194 (tier ignored), `;arg` dropped
-(inliner-dependent), and the `match` → `"i64"` guess, which led to F-195, a silent wrong answer on
-`main`. The discovery sweep and the gate's growth continue from here.
+**Status: 2026-09-24.** **Stones 1 and 2 LANDED** -- two rete gates, run by `elf-run` in report mode.
+Stone 1: the compiler must agree WITH ITSELF at every call boundary (representation -- F-194). Stone 2:
+the compiler's type for every node it types must agree WITH THE LANGUAGE's checker (type -- F-195).
+Current reports: 8 boundary conflicts; 9 type conflicts in 17,367 jointly-typed nodes. Stone 2 also
+found that `wat --check` skips function bodies spelled with namespaced symbols (F-196) -- most of this
+corpus. Next: one total derivation behind the compiler's type waist, and both gates to MUST-BE-ZERO.
 
 > Builder: *"wat should deliver perfect knowledge... i want to know every place where perfect
 > knowledge isn't known... at runtime dynamic values can arrive... but they are bounded... ints are

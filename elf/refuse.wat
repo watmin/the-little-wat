@@ -1329,6 +1329,14 @@
       (:wat::core::or (:wat::core::= op "=") (:wat::core::= op "not=")))))
 
 (:wat::core::defn :c::type-of [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:c::Prog/exp pg)
+    (:c::fact-type a (:c::type-of-node a env pg) pg)
+    (:c::type-of-node a env pg)))
+
+;; **the waist.** `:c::type-of` is every question about an expression's type; asked with the
+;; export on (excursus 002 stone 2), it also SAYS each answer -- `:c::fact-type` -- and this is
+;; the answer.
+(:wat::core::defn :c::type-of-node [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
   (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
       ((:wat::core::= k (:rd::Kind.Str {})) "str")
@@ -6245,6 +6253,55 @@
           " " (:wat::i64::to-string (:wat::core::- i 1)) " " head " " (:c::Prog/cur pg)
           " " (:c::type-of (:wat::core::nth ks i) env pg)))
       (:c::fact-args a ks (:wat::core::+ i 1) head env pg))))
+
+;; **the ONE translation from this compiler's type spelling to wat's** (excursus 002 stone 2).
+;; The compiler's strings are a wat type PLUS its representation; wat's checker states only the
+;; type. So every representation tier of an enum -- `enum:` (a tag), `penum:` (one pointer
+;; payload), `henum:` (a heap block) -- is the one enum type, and `;arg` is its type argument.
+;; A function type is spelled here with only its arity and its return, so it cannot be a whole
+;; wat type: it comes back marked `partial:`, and anything this does not know comes back
+;; marked `untranslatable:` -- neither is ever passed off as a type.
+(:wat::core::defn :c::wat-ty [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [n (:wat::string::length t)]
+    (:wat::core::cond
+      ((:wat::core::= t "i64") ":wat::core::i64")
+      ((:wat::core::= t "str") ":wat::core::String")
+      ((:wat::core::= t "bool") ":wat::core::bool")
+      ((:wat::core::= t "nil") ":()")
+      ((:wat::string::starts-with? t "vec:")
+        (:wat::string::concat "(:wat::core::Vector :- ["
+          (:wat::string::concat (:c::wat-ty (:wat::string::subs t 4 n)) "])")))
+      ((:wat::string::starts-with? t "rec:") (:wat::string::subs t 4 n))
+      ((:wat::core::or (:wat::string::starts-with? t "enum:")
+                       (:wat::core::or (:wat::string::starts-with? t "penum:")
+                                       (:wat::string::starts-with? t "henum:")))
+        (:wat::core::let [b (:c::colon-from t 0)
+                          body (:wat::string::subs t (:wat::core::+ b 1) n)
+                          semi (:c::semi-from body 0)]
+          (:wat::core::if (:wat::core::< semi 0) body
+            (:wat::string::concat "("
+              (:wat::string::concat (:wat::string::subs body 0 semi)
+                (:wat::string::concat " :- ["
+                  (:wat::string::concat
+                    (:c::wat-ty (:wat::string::subs body (:wat::core::+ semi 1)
+                                  (:wat::string::length body)))
+                    "])")))))))
+      ((:c::fn-ty? t) (:wat::string::concat "partial:" t))
+      (:else (:wat::string::concat "untranslatable:" t)))))
+
+;; at the type waist: the node, the function it is being compiled in, the compiler's own type
+;; and that type in wat's spelling -- which runs to the end of the line, as it holds spaces.
+;; Answers the type it was handed, so `:c::type-of` answers exactly what it did.
+(:wat::core::defn :c::fact-type [a <- :wat::core::i64 t <- :wat::core::String pg <- :c::Prog]
+    -> :wat::core::String
+  (:wat::core::do
+    (:wat::kernel::println
+      (:wat::string::concat "CType " (:wat::string::concat (:c::loc-str pg a)
+        (:wat::string::concat " " (:wat::string::concat
+          (:wat::core::if (:wat::core::= (:c::Prog/cur pg) "") "-" (:c::Prog/cur pg))
+          (:wat::string::concat " " (:wat::string::concat t
+            (:wat::string::concat " " (:c::wat-ty t)))))))))
+    t))
 
 ;; for a `defn`: the type each parameter has in the environment its body is compiled in
 (:wat::core::defn :c::fact-params [pv <- :c::Kids i <- :wat::core::i64 fname <- :wat::core::String
