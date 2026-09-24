@@ -10,7 +10,9 @@
 ;;    0   with it -- the caller's rewind freed the extension while the length still counts it
 ;;
 ;; So the caller-side release does not cause this; it turns a wrong length into a read of
-;; reclaimed memory. `elf/compile.wat`'s `own?` at the `conj` site is where the gate belongs.
+;; reclaimed memory. It was NOT fixed at the `conj` site, which cannot see where a value came
+;; from: excursus 001 stone 0 counts a pointer at the moment it is read out of a container
+;; (`:c::count-read`), which closes this and `own-shadow.wat` at one root (F-188).
 (:wat::core::typealias :user::Row (:wat::core::Vector :- [:wat::core::i64]))
 (:wat::core::typealias :user::Grid (:wat::core::Vector :- [:user::Row]))
 

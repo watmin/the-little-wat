@@ -1,9 +1,9 @@
 # Excursus 001 — reclamation beyond scope
 
-**Status: 2026-09-23.** **Stone 1 is STRUCK and HELD** on branch `excursus-001-stone-1` (`a7551a6`):
-it works -- `escape.wat` goes flat -- and it widens F-188, a silent wrong answer already at HEAD, so
-it does not merge until **stone 0** (drawn) has closed F-188 on `main`. See the SCORE's
-ORCHESTRATOR section for why, by the four questions.
+**Status: 2026-09-23.** **Stone 0 LANDED** on `main`: F-188 closed, all eight doors, at a measured
++10.64% on the compiler (F-189). **Stone 0b** recovers that cost and is next. **Stone 1** is STRUCK
+and HELD on branch `excursus-001-stone-1`; it rebases onto stone 0, takes an `allocates?` gate and a
+real §7 flatness gate, and merges only with every F-188 probe agreeing.
 
 > Builder: *"i explicitly do not want a gc that pauses anything.. can we do this inline as we make
 > forward progress in programs?"* — and, on ordering: *"do the hard, correct thing first and

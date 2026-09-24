@@ -1864,6 +1864,8 @@
                 [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
                  o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)]
+                ;; a read out of a container: counted, F-188
+                (:c::count-read (:c::type-of a env pg)
                 (:wat::core::if
                   (:wat::string::starts-with? (:c::type-of (:wat::core::nth ks 1) env pg) "rec:")
                   ;; a record never conj's, so it is the array arm for ever: one load, no test
@@ -1877,7 +1879,7 @@
                       "0f8507000000"                ;; jne +7                  -- the tree
                       "488b44c808"                  ;; mov rax,[rax+rcx*8+8]   -- the array
                       "eb05"))                      ;; jmp +5                  -- over the call
-                    (:c::at-tget rt))))))
+                    (:c::at-tget rt)))))))
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
               (:wat::core::let
@@ -1910,15 +1912,19 @@
                 ;; `mov 0x8(%rbx),%rax`. `:c::load-at` hardcodes rax as the base, which is
                 ;; right when the pointer arrived there and a wasted `mov` when it did not.
                 ;; C-183. A scalarised parameter has no pointer left: the register IS the field.
+                ;; It is still a read out of a container -- the prologue loaded it from one --
+                ;; so all three arms are counted, F-188.
                 (:wat::core::cond
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::not= sf (:c::acc-index pg head)))
                     (:c::fail "scalar field" a pg))
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::>= r 0))
-                    (:c::emit o (:c::mov-rr r (:c::rax))))
-                  ((:wat::core::>= r 0) (:c::emit o (:c::mov-rm r d (:c::rax))))
+                    (:c::count-read (:c::acc-ty pg head) (:c::emit o (:c::mov-rr r (:c::rax)))))
+                  ((:wat::core::>= r 0)
+                    (:c::count-read (:c::acc-ty pg head) (:c::emit o (:c::mov-rm r d (:c::rax)))))
                   (:else
-                    (:c::emit (:c::expr opnd o env pg rt tb slot (:c::no-tail))
-                      (:c::load-at d)))))))
+                    (:c::count-read (:c::acc-ty pg head)
+                      (:c::emit (:c::expr opnd o env pg rt tb slot (:c::no-tail))
+                        (:c::load-at d))))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
           ;; `=` on two Strings must compare CONTENT. The type pass knows both operands, so
@@ -3003,6 +3009,11 @@
 ;; `(conj rows n)` chain cheap. So the runtime guard asks "count 1?", gets the truth, and draws
 ;; the wrong conclusion. `elf/src/strown.wat` is that in three shapes.
 ;;
+;; (That was true of every read until F-188. A pointer read out of a container is now COUNTED
+;; at the read -- `:c::count-read`, below `:c::share` -- so the runtime guard sees 2 for a
+;; borrowed element. This predicate still earns its place: it is a STATIC proof, and it lets
+;; `concat` skip the owning routine for a borrowed operand without paying the runtime test.)
+;;
 ;; What IS true of an operand is that it is fresh when whatever produced it allocated it. Three
 ;; verbs always do -- `concat`, `subs` and `i64/to-string` each write a new block and answer it,
 ;; on every path, with no early return of an argument. Everything else -- a field read, an `nth`,
@@ -3025,11 +3036,13 @@
         (:wat::core::or (:wat::string::starts-with? t "henum:")
                         (:wat::string::starts-with? t "penum:"))))))
 
-;; **the increment, and the only one there is.** A pointer read out of a variable and then stored
+;; **the increment, and one of its two callers.** A pointer read out of a variable and then stored
 ;; somewhere durable is now reachable twice, so the count goes up. It never comes down: this is
 ;; not reclamation, it is a "has this ever been shared?" flag that can only become more
 ;; conservative. A freshly computed value is not incremented -- the slot takes the count of 1
-;; that the allocator already gave it.
+;; that the allocator already gave it. The other caller is `:c::count-read`, below: a pointer
+;; read out of a CONTAINER, which is the one way a value reaches a name or an argument already
+;; held somewhere else without passing through here.
 (:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
   (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                     (:c::ptr-ty? (:c::type-of a env pg)))
@@ -3045,14 +3058,42 @@
     (:wat::core::let [key (:c::share-key a env pg)]
     (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::Out/shared o) key 0) 0) o
     (:wat::core::assoc
-      (:c::emit o
-      (:wat::core::if (:c::maybe-unit? (:c::type-of a env pg))
-        (:wat::string::concat "483d00100000"                    ;; cmp rax, 0x1000
-          (:wat::string::concat "720b"                          ;; jb  +11 (skip both)
-                                "488378f800740448ff40f8"))
-        "488378f800740448ff40f8"))                              ;; cmp [rax-8],0 ; je +4 ; incq
+      (:c::emit o (:c::count-hex (:c::type-of a env pg)))
       :shared (:wat::core::conj (:c::Out/shared o) key))))
     o))
+
+;; **the bytes of the increment, guarded twice**, for a value of type `t` already in rax -- or
+;; nothing at all when `t` is not a pointer. `:c::share` above explains both guards; they are
+;; spelled once, here, so the two callers cannot drift apart.
+(:wat::core::defn :c::count-hex [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::not (:c::ptr-ty? t)) "")
+    ((:c::maybe-unit? t)
+      (:wat::string::concat "483d00100000"                      ;; cmp rax, 0x1000
+        (:wat::string::concat "720b"                            ;; jb  +11 (skip both)
+                              "488378f800740448ff40f8")))
+    (:else "488378f800740448ff40f8")))                          ;; cmp [rax-8],0 ; je +4 ; incq
+
+;; **a pointer read OUT OF A CONTAINER is counted at the read (F-188).** A value stored into a
+;; Vector, a record or a payload variant is stored by MOVE and keeps count 1 -- that is what
+;; keeps a `(conj rows row)` chain cheap. So when it is read back out it is indistinguishable
+;; from a value nobody else holds, and `vec_conj_own` / `str_cat_own` extend it in place while
+;; the container still points at it. Two doors reach that, and a gate at either one is a stem:
+;;
+;;   * passed on as an ARGUMENT, `(bump (nth g 3))` -- not a Symbol, so no `:c::share` fires;
+;;   * bound by a `let` or a `match` arm under a name that SHADOWS a linear parameter -- `own?`
+;;     is keyed on the spelling, so the binding inherits the parameter's ownership.
+;;
+;; Both begin at the read, so the count goes up there: `elf/probe/callrel-borrow.wat` and
+;; `elf/probe/own-shadow.wat`, and the String forms beside them. There are three reads out of
+;; a heap container -- `nth`, a record field accessor, and a tier-2/3 `match` payload binding --
+;; and each emits this after the load. A tier-1 payload is the subject ITSELF, not a read out
+;; of it, and the subject was counted wherever it came from.
+;;
+;; The cost is the monotone flag's: an element read out once loses in-place growth for good,
+;; which is correct -- the container still holds it -- and an `i64` element pays nothing.
+(:wat::core::defn :c::count-read [t <- :wat::core::String o <- :c::Out] -> :c::Out
+  (:wat::core::if (:c::ptr-ty? t) (:c::emit o (:c::count-hex t)) o))
 
 ;; **the key is the BINDING, not the name.** Keying on the name alone corrupts under shadowing:
 ;; `(let [s ...] (hold s) (let [s ...] (hold s)))` elides the second share, so the inner `s`
@@ -3307,9 +3348,13 @@
                 (:c::emit o (:wat::string::concat
                   (:c::load (:c::fp o sd) (:c::Out/fpr o))
                   (:wat::string::concat
-                    ;; tier 1's payload IS the value -- nothing to index into
+                    ;; tier 1's payload IS the value -- nothing to index into. Tiers 2 and 3
+                    ;; read the field OUT of the subject, so it is counted, F-188.
                     (:wat::core::if (:wat::core::= tier 1) ""
-                      (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1)))))
+                      (:wat::string::concat
+                        (:c::load-at (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1))))
+                        (:c::count-hex (:wat::core::if (:wat::core::< fi (:wat::core::length ftys))
+                                         (:wat::core::nth ftys fi) "i64"))))
                     (:c::store (:c::fp o disp) (:c::Out/fpr o)))))
                 :rax ""))
             (:wat::core::conj env
@@ -6030,6 +6075,7 @@
   (:wat::core::do
     (:c::compile "elf/src/four.wat"   "elf/out/four.elf")
     (:c::compile "elf/src/escape.wat" "elf/out/escape.elf")
+    (:c::compile "elf/src/borrowed.wat" "elf/out/borrowed.elf")
     (:c::compile "elf/src/fnref.wat"  "elf/out/fnref.elf")
     (:c::compile "elf/src/fnvec.wat"  "elf/out/fnvec.elf")
     (:c::compile "elf/src/enums.wat"  "elf/out/enums.elf")

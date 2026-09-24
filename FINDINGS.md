@@ -14930,6 +14930,14 @@ Four findings were written on top of it before the crawl caught it.
 
 ### F-188: a pointer read out of a container keeps count 1, so in-place `conj` extends a LIVE element -- two doors, one root
 
+**CLOSED by excursus 001 stone 0 -- and it was EIGHT doors, not two.** The strike found six more,
+each reproduced at HEAD by the orchestrator on its own builds: the String forms of both doors
+(`str-borrow`, `str-shadow` -- `:c::fresh-str?` guarded only a non-symbol concat operand), both
+record-field forms (`field-borrow` reaches `vec_conj_own` path TWO, `arm-own`, not path 3;
+`field-shadow`), `match-shadow`, and `tier1-borrow`. All eight probes are in `elf/probe/`;
+`elf/src/borrowed.wat` carries every site in the corpus, where `elf-run` guards it for good. The
+cost of the fix is F-189.
+
 **Fix.** A silent wrong answer present at HEAD `e35a682`, found by the shadowdancer's STOP-1 on
 excursus 001 stone 1, reproduced independently by the orchestrator, and widened into a second
 door by the orchestrator's own disconfirming probe.
@@ -14979,3 +14987,37 @@ comment diagnosing the class sat twelve lines above the predicate that fixed hal
 **Blast radius.** Excursus 001 stone 1's caller-side release turns door 1's wrong length into a
 read of reclaimed memory (`30|240000|4|1|0`), which is why stone 1 is held on branch
 `excursus-001-stone-1` and does not land until stone 0 has.
+
+
+### F-189: counting at the read costs the compiler +10.64% -- the guard, not the increment
+
+**Improve.** The price of closing F-188, measured and attributed, recorded the moment it was paid.
+
+Excursus 001 stone 0 raises a pointer's count when it is read out of a container. It is correct
+(F-188's eight doors, all closed) and it is not free. The compiler compiling the corpus, HEAD's
+compiler proved at its own fixpoint (stage2 == stage3, 249,978 B) against stone 0's (254,006 B),
+on identical input trees with the one program only the new compiler builds swapped for a no-op,
+best of 9, user-mode, pinned:
+
+```
+HEAD      2,071,654,800
+stone 0   2,292,062,459     +10.64%
+```
+
+Every `vs-c.sh` program is at most +3.3% (`optmh`); 16 of its 17 are byte-identical. The cost
+lands on READ-DENSE code, and the compiler is the most read-dense program in the tree: it gains
+311 counted sites.
+
+**Attribution, from the shadowdancer's ablations** (each a variant compiler built to its own
+fixpoint): replacing `incq` with a NOP, so no count is ever raised, costs +11.081% against
++11.082% -- **the cost is the guard (`cmp [rax-8],0 ; je`), not the increment, and not lost
+in-place growth**. By site: `nth` ~5.2 points, field reads ~5.6, `match` ~0. Dropping either large
+site re-opens its doors, so narrowing is not an option -- it is a stem.
+
+**Landed anyway, by the four questions.** Holding a correctness fix for its performance means
+shipping known wrong answers; that is Honest? NO. The contrast with stone 1, held for fib32's
++9.86%, is deliberate: a leak fix may wait for its performance, a correctness fix may not.
+
+**The recovery is drawn as stone 0b**, with three unmeasured mechanisms: count at the STORE rather
+than the read; a cheaper guard for types that can never be a read-only literal; count only types
+that can reach an own path. `elf/src/borrowed.wat` is the oracle for every one of them.
