@@ -15154,3 +15154,42 @@ cost in TIME (~5-7%) is real, and stone 0b's time recovery over 0a (1.1-1.5%) is
 **The rule that replaces the misuse:** a noise floor is a property of a WORKLOAD, measured, not a
 constant inherited from a finding about a different one. F-154 stands for tight loops. The
 layout-shift method above is how to get the floor for any other workload, in about twenty minutes.
+
+
+### F-193: the read counts' WRITES cost the compiler 3.5% of its time -- and on its own run they protect nothing
+
+**Improve (measured), and the answer to "are we slower because we're correct?"** The builder asked
+it; F-192's floor made it answerable; this measures it with the floor taken out of the question.
+
+**Method: a same-layout control.** Two compilers built from one source structure -- `:c::read-out`
+given its own copy of `:c::count-hex`, identical in both -- differing ONLY in that copy's four
+literals: `incq [rax-8]` (`48ff40f8`) in one, the same-length NOP `nopl 0x0(%rax)` (`0f1f4000`)
+in the other. Both proved at their own fixpoint, 243,025 B each. Byte-diffed: **313 read-count
+sites swapped in place, plus 20 bytes of those literals' text in the data tail; nothing else.**
+Every function at the same address, so layout is not a variable at all.
+
+`:c::share` was deliberately LEFT counting in both. The first attempt NOP'd `:c::count-hex`
+itself, which also silenced `share` -- and that compiler could not run itself ("stage 1 did not
+finish"): `share`'s increments are what its own in-place `conj` chains depend on. Stone 0a is why
+the two callers could be separated.
+
+**The NOP compiler computes the same thing.** All 75 corpus outputs are byte-identical to the incq
+compiler's apart from the swaps themselves -- so on this corpus, the compiler's own 313 read counts
+never change what it computes. (That is "protected nothing on this input", not "can never
+protect".)
+
+**The cost, eleven interleaved rounds, pinned, user-mode:**
+
+| | cycles, min | cycles, median | instructions, min |
+|---|---|---|---|
+| read counts ON (`incq`) | 1,151,878,503 | 1,160,438,469 | 2,141,918,237 |
+| read counts NOP'd | 1,113,213,165 | 1,119,908,712 | 2,141,900,136 |
+
+**+3.47% (min) / +3.62% (median) cycles for the same instructions** -- 18,101 apart in 2.14
+billion, 0.0008%. The cost is the memory write: each counted read dirties the header line of the
+object it read. That confirms the hypothesis stone 0b's strike raised and the orchestrator wrongly
+dismissed, and it accounts for about 3.5 of stone 0's ~5-7% time cost.
+
+**The count census this exposed:** of the compiler's 2,654 counted sites, **313 are reads** (stone
+0's) and **~2,341 are `:c::share` increments** -- the counting that predates this excursus is the
+large majority. Whether most counts protect anything is excursus 001 stone 0c.
