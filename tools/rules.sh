@@ -7,9 +7,14 @@
 # positions -- then feed those lines to tools/rules/check.wat, where wat-rs's rete joins them
 # with wat-grep's facts and reports every argument whose type is not its parameter's.
 #
-# **REPORT mode**: it prints every finding and the counts, and exits 0 whatever it finds. It
-# exits non-zero only when it could not do the check: the exporter would not build, the export
-# moved an emitted byte, or the checker died.
+# **MUST-BE-ZERO** (excursus 002 stone 4; stones 1 and 2 ran it in report mode). It prints every
+# finding and the counts, and exits 1 when the compiler disagrees with itself (a boundary
+# CONFLICT) or with the language (a TYPE-CONFLICT), or when the join is not whole -- a fact it
+# could not place or join, a type it could not translate, a type the checker left unresolved --
+# because a join that has gone blind would report zero conflicts too. `refined` stays allowed:
+# the checker knowing the VARIANT where the compiler knows the enum is representation, not a
+# disagreement. It exits 1 as well when the export moved an emitted byte, and 2 when it could not
+# do the check at all: the exporter would not build or the checker died.
 #
 # With no arguments: the whole corpus -- every program elf/compile.wat's driver compiles, the
 # compiler itself included -- and every elf/probe/*.wat.
@@ -152,9 +157,20 @@ timeout -s KILL 1800 "$WAT" tools/rules/check.wat < "$BOX/facts" > "$BOX/check" 
 tchk=$(ms $s)
 sed -e 's/^"//' -e 's/"$//' -e 's/\\"/"/g' "$BOX/check" > "$BOX/check.txt"
 [ -n "${RULES_DETAIL:-}" ] && cp "$BOX/check.txt" "$RULES_DETAIL"
-grep -v '^  ~' "$BOX/check.txt" | grep -v '^rules: .*CONFLICT 0  unplaced 0  unjoined 0  mismatch 0$' \
+grep -v '^  ~' "$BOX/check.txt" | grep -v '^rules: [^T].*CONFLICT 0  unplaced 0  unjoined 0  mismatch 0$' \
   | grep -v '^types: [^T].*TYPE-CONFLICT 0  partial [0-9]*  untranslatable 0  unresolved 0  checker-multi 0  compiler-multi 0 '
 echo "rules: checked in $tchk ms; total $(ms $t0) ms"
 [ $rc -eq 0 ] || { echo "rules: the checker died (exit $rc)"; exit 2; }
-[ $moved -eq 0 ] || exit 1
-exit 0
+# ---- the verdict, from the two TOTAL lines. A missing one is a check that was not made.
+rtl=$(grep '^rules: TOTAL ' "$BOX/check.txt"); ttl=$(grep '^types: TOTAL ' "$BOX/check.txt")
+[ -n "$rtl" ] && [ -n "$ttl" ] || { echo "rules: the checker printed no TOTAL -- no verdict"; exit 2; }
+num () { printf '%s\n' "$1" | sed -n "s/.*  $2 \([0-9]*\).*/\1/p"; }
+bad=0
+for f in CONFLICT unplaced unjoined mismatch; do
+  v=$(num "$rtl" "$f"); [ "${v:-x}" = 0 ] || { echo "rules: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
+done
+for f in TYPE-CONFLICT untranslatable unresolved; do
+  v=$(num "$ttl" "$f"); [ "${v:-x}" = 0 ] || { echo "types: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
+done
+[ $moved -eq 0 ] || bad=1
+exit $bad

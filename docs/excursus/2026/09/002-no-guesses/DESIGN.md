@@ -1,11 +1,11 @@
 # Excursus 002 — no guesses: every place the compiler knows less than the language
 
-**Status: 2026-09-24.** **Stones 1 and 2 LANDED** -- two rete gates, run by `elf-run` in report mode.
-Stone 1: the compiler must agree WITH ITSELF at every call boundary (representation -- F-194). Stone 2:
-the compiler's type for every node it types must agree WITH THE LANGUAGE's checker (type -- F-195).
-Current reports: 8 boundary conflicts; 9 type conflicts in 17,367 jointly-typed nodes. Stone 2 also
-found that `wat --check` skips function bodies spelled with namespaced symbols (F-196) -- most of this
-corpus. Next: one total derivation behind the compiler's type waist, and both gates to MUST-BE-ZERO.
+**Status: 2026-09-24.** **Stones 1-4 LANDED.** Two rete gates run on every `elf-run` and are at
+**ZERO, and FAIL the build on any conflict**: the compiler agrees with itself at every call boundary
+(10,739 pairs) and with wat's own checker at every node both type (17,960). The compiler's typer is one
+derivation behind its waist, and every guess is a compile-time refusal (the builder's totality ruling).
+Found and closed on the way: F-194, F-195, F-196 (in wat-rs), F-199. Left, by the builder's decision:
+D9, whose four-questions answer is bidirectional argument typing.
 
 > Builder: *"wat should deliver perfect knowledge... i want to know every place where perfect
 > knowledge isn't known... at runtime dynamic values can arrive... but they are bounded... ints are

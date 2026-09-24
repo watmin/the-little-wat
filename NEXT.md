@@ -17,36 +17,32 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — make the compiler's types one derivation; turn the rules gate to zero
+### NEXT STRIKE — bidirectional argument typing (D9), then closures
 
-**Read `docs/excursus/2026/09/002-no-guesses/` first** (DESIGN, the `rete/` experiment, stone 1's
-SCORE), then `001-reclamation-beyond-scope/`. Those directories are the truth; this points at them.
+**Read `docs/excursus/2026/09/002-no-guesses/` first** -- DESIGN, then SCOREs 1-4 in order.
 
-**The pivot (2026-09-23):** the builder chose rules. Phase 1 has landed -- `tools/rules.sh`, run by
-`elf-run` in REPORT mode, has wat-rs's native rete check that the compiler AGREES WITH ITSELF at every
-call boundary (the compiler exports its own decisions; the rules only join them; no type is derived
-twice). Phase 2 is one fact, one derivation inside the compiler. Phase 3 is the compiler compiling
-rule sets, with wat-rs's rete as the oracle.
+**Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
+compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
+`elf-run`, read ZERO, and FAIL the build on any conflict. F-194, F-195, F-196 and F-199 are closed.
 
-**Two gates now (stone 2 landed 2026-09-24): `rules:` (self-agreement, 8 conflicts) and `types:` (the
-compiler against wat-rs's checker, 9 conflicts in 17,367 jointly-typed nodes). Stone 2 also found F-196:
-`wat --check` does not type-check bodies spelled with namespaced symbols -- most of this corpus -- and
-F-197: the wat-rs floor has been red since this repo's 09-20 stones. Both are in wat-rs; the builder
-decides.**
+**Next, in order:**
+1. **Bidirectional argument typing (D9).** A unit variant of a generic enum where nothing fixes `T`
+   (`elf/probe/generic-unit-unfixed.wat`) runs correctly but fails both gates. wat's checker infers `T`
+   from the parameter the argument feeds; the compiler's typer must do the same. Four questions: only
+   this passes (keep-the-default fails Honest, refuse fails Good UX).
+2. **Closures** -- the builder's goal. A `fn` value, closure conversion (code + a record of captured
+   values; wat's immutability makes capture a copy), typed on day one. Fixtures with known interpreter
+   answers are in the session scratch: capture of a value (126), of a closure (86), closures returned
+   from functions and composed (16, 27). A capture is a STORE into a container -- the F-188 class -- so
+   the ownership count and both gates must cover it.
+3. Then stone 0b (per-type count guard) re-lands on this typer, then stone 1 (caller-side release,
+   branch `excursus-001-stone-1`).
 
-**The boundary gate's 8 conflicts, 4 causes, all real:**
-- F-194: `:c::type-of-form`'s variant arm ignores the TIER (`henum:` vs `penum:`)
-- the same arm drops `;arg` (`elf/src/option.wat`, inliner-dependent)
-- F-195: no `match` arm in `:c::type-of-form`, so a match-bound value is guessed `"i64"` -- a SILENT
-  WRONG ANSWER on `main` (`elf/probe/match-i64.wat`: native `4|5`, interpreter `4|4`)
-
-The next stone fixes these at the root -- ONE function answers a value's type, every path calls it --
-and flips the rules gate from report to MUST-BE-ZERO. Then stone 0b (per-type count guard) re-lands on
-top of it, and stone 1 (caller-side release, branch `excursus-001-stone-1`) after.
-
-**Also open:** stage 0 is +12-15% since stone 1 (408 s vs 348-365 s) · F-190, F-191 · `reads.sh`'s
-in-literal load gap · the primitives question -- maps and symbols are on every path (rete memories, the
-REPL, the compiler's own linear scans), and where the compiler spends its time has never been profiled.
+**Open, recorded:** F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
+yet traced) · F-197 (the wat-rs floor's pre-existing reds) · F-198 (`eval-step!`: namespaced quoted
+heads; an empty capture called a closure — four-questions answer: "a captured environment that binds
+nothing is not a closure") · the two wat-rs step tests stone 3 left red, for the builder · pushing
+wat-rs, for the builder.
 
 ### LANDED since this section last read "next" (2026-09-23)
 

@@ -15206,6 +15206,10 @@ large majority. Whether most counts protect anything is excursus 001 stone 0c.
 
 ### F-194: stone 0b shipped a segfault -- one enum value, two type spellings, and the rules that catch it
 
+**ROOT FIXED by excursus 002 stone 4** -- a constructor is typed through `:c::enum-ty` (tier and
+instantiation) on every path, so one enum value has one spelling; both rete gates are at zero and fail
+`elf-run` on any recurrence. Stone 0b (the per-type count guard) can now re-land on top of this.
+
 **Fix (a crash on a valid program, landed by the orchestrator), and the first result of excursus 002.**
 Found by the shadowdancer's STOP-2 on excursus 001 stone 0c; reproduced by the orchestrator.
 
@@ -15246,6 +15250,10 @@ reports as a compile-time error.
 
 
 ### F-195: a value bound from a `match` is typed `i64` -- a silent wrong answer on `main`, found by the rules first
+
+**FIXED by excursus 002 stone 4** -- `:c::type-of-form` has a `match` arm (the join of its arms);
+`elf/probe/match-i64.wat` agrees `4|4`, and the compiler's own `lo` in `:c::read-out` is now typed
+`rec::c::Out` and shared.
 
 **Fix.** The first bug excursus 002's checker found that nobody knew about. `elf/probe/match-i64.wat`.
 
@@ -15361,3 +15369,31 @@ stays correctly refused until Phase 3 teaches substitution to carry captured val
 
 **Also confirmed:** the native compiler refuses `fn` outright (*"cannot compile call: (wat.core/fn …)"*)
 -- already on the queue as NEXT.md's "Anonymous `fn`", the builder's call of 2026-09-20.
+
+
+### F-199: a generic enum written as a bare parameter type -- two more silent wrong answers, now refused
+
+**Fix.** Found by excursus 002 stone 4's guess census; reproduced by the orchestrator on HEAD's compiler.
+`elf/probe/generic-bare-tier.wat`, `elf/probe/generic-bare-share.wat`.
+
+A generic enum used as a parameter type WITHOUT its argument -- `(o :- :user::Opt)` -- passes
+`wat --check`. The native compiler read the missing `T` as `i64` (a SEVENTH `"i64"` default the crawl
+had not listed, `elf/compile.wat` ~899) and chose representation from that guess:
+
+| | interpreter | HEAD native, exit 0 |
+|---|---|---|
+| `generic-bare-tier.wat` | `1\|0` | **`4197723\|0`** -- one value read in two tiers, F-194's class |
+| `generic-bare-share.wat` | `44` | **`127073741684752`** -- a raw pointer printed as a number |
+
+Both are now refused at compile time by `:c::ty-node` (*"cannot type a generic enum with no type
+argument…"*) -- the builder's totality ruling doing what it says: a program the compiler cannot know is
+refused, not guessed. No corpus program writes a bare generic.
+
+**What is left of the seventh default (D9, the builder's decision):** a UNIT variant of a generic enum
+where nothing fixes `T`, e.g. `(user/shows (:user::Opt.None {}))`. It runs correctly (a unit variant is
+its tag in every tier) but is spelled `henum:` against the parameter's `penum:…;str`, so BOTH gates flag
+it and `rules.sh` exits 1 -- it cannot ship silently. It fires 0 times in the corpus, the compiler and
+every probe. **wat already knows the answer:** the checker types that `None` as
+`(:user::Opt.None :- [:wat::core::String])`, inferring `T` from the parameter the argument feeds. The
+honest fix is the same bidirectional step in the compiler's typer: an argument's type is completed by
+the parameter it feeds.

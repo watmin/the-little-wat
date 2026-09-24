@@ -750,11 +750,14 @@
     ((:wat::core::= (:c::Bind/name (:wat::core::nth env i)) name) (:c::Bind/disp (:wat::core::nth env i)))
     (:else (:c::lookup env name (:wat::core::- i 1)))))
 
-(:wat::core::defn :c::lookup-ty [env <- :c::Env name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
+;; **a name the environment does not hold has no type, and saying `i64` for it was a guess**
+;; (excursus 002 stone 4). `a` is the node that asked, so the refusal can say where.
+(:wat::core::defn :c::lookup-ty [env <- :c::Env name <- :wat::core::String i <- :wat::core::i64
+                                 a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::< i 0) "i64")
+    ((:wat::core::< i 0) (:c::ty-fail "a name the environment does not hold" a pg))
     ((:wat::core::= (:c::Bind/name (:wat::core::nth env i)) name) (:c::Bind/ty (:wat::core::nth env i)))
-    (:else (:c::lookup-ty env name (:wat::core::- i 1)))))
+    (:else (:c::lookup-ty env name (:wat::core::- i 1) a pg))))
 
 (:wat::core::defrecord :c::Fn
   [name <- :wat::core::String  node <- :wat::core::i64  addr <- :wat::core::i64
@@ -1089,6 +1092,10 @@
    track <- :wat::core::bool
    exp <- :wat::core::bool
    cur <- :wat::core::String
+   ;; **the type each node the inliner made stands for** (stone 4), indexed from `obase` -- the
+   ;; arena's length when the reader finished. See `:c::mknode-ty`.
+   obase <- :wat::core::i64
+   otys <- (:wat::core::Vector :- [:wat::core::String])
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -1135,14 +1142,17 @@
             :srcs (:wat::core::Vector :- [:c::Src])
             :locs (:wat::core::Vector :- [:wat::core::i64])
             :track false :exp false :cur ""
+            :obase 0 :otys (:wat::core::Vector :- [:wat::core::String])
             :src (rd/read "")))
 
-(:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
+(:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64
+                              a <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let [v (:c::Prog/fns pg)]
     (:wat::core::cond
-      ((:wat::core::>= i (:wat::core::length v)) "i64")
+      ((:wat::core::>= i (:wat::core::length v))
+        (:c::ty-fail (:wat::string::concat "the return of a function the program does not define, " name) a pg))
       ((:wat::core::= (:c::Fn/name (:wat::core::nth v i)) name) (:c::Fn/ret (:wat::core::nth v i)))
-      (:else (:c::fn-ret pg name (:wat::core::+ i 1))))))
+      (:else (:c::fn-ret pg name (:wat::core::+ i 1) a)))))
 
 (:wat::core::defn :c::fn-nargs [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::let [v (:c::Prog/fns pg)]
@@ -1190,7 +1200,7 @@
   (:c::ty-node a pg 8))
 
 (:wat::core::defn :c::ty-node [a <- :wat::core::i64 pg <- :c::Prog depth <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::if (:wat::core::<= depth 0) "i64"
+  (:wat::core::if (:wat::core::<= depth 0) (:c::ty-fail "a type nested too deep (a self-referential alias?)" a pg)
     ;; `[ArgType... :-> RetType]` -- a FUNCTION type, and a vector node rather than a list.
     ;; `:wat::core::fn` is wat's one and only function constructor and `defn` is a macro over
     ;; `(def :name (fn ...))` (wat-rs/wat/core.wat:667), so this is not an extra shape bolted on
@@ -1200,11 +1210,11 @@
     (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
       (:wat::core::let [ks (:c::kidsof pg a)]
         (:wat::core::cond
-          ((:wat::core::< (:wat::core::length ks) 3) "i64")
+          ((:wat::core::< (:wat::core::length ks) 3) (:c::ty-fail "a type form with no `:- [...]`" a pg))
           ;; (Vector :- [T]) -- the element type is the type vector's first child
           ((:c::vector? (:c::text pg (:wat::core::nth ks 0)))
             (:wat::core::let [tv (:c::kidsof pg (:wat::core::nth ks 2))]
-              (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
+              (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) (:c::ty-fail "a Vector type with no element type" a pg)
                 (:wat::string::concat "vec:" (:c::ty-node (:wat::core::nth tv 0) pg
                                                (:wat::core::- depth 1))))))
           ;; `(Option :- [i64])` -- a parametric ENUM. The argument rides in the type after a
@@ -1218,7 +1228,7 @@
               (:c::enum-ty pg ei
                 (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) ""
                   (:c::ty-node (:wat::core::nth tv 0) pg (:wat::core::- depth 1))))))
-          (:else "i64")))
+          (:else (:c::ty-fail "a type form this compiler does not know" a pg))))
       (:wat::core::let [src (:c::text pg a)
                         ri (:c::rec-index (:c::Prog/recs pg) src 0)
                         ai (:c::alias-index (:c::Prog/aliases pg) src 0)]
@@ -1226,8 +1236,19 @@
           ((:wat::core::>= ri 0) (:wat::string::concat "rec:" src))
           ;; a unit-variant enum is a TAG, so its values are machine words -- which is why
           ;; `:c::ptr-ty?` must stay false for `enum:` and no ownership machinery touches it
+          ;;
+          ;; **A GENERIC enum named bare has no representation** (excursus 002 stone 4). Its tier
+          ;; depends on `T` -- `(Opt :- [String])` is the pointer itself, `(Opt :- [i64])` a heap
+          ;; block -- and `(o :- :user::Opt)` fixes no `T`. The language accepts it and infers `T`
+          ;; per call; this compiler has one body per function and would pick the tier for
+          ;; `T = i64`, so a String payload arriving there was read as a heap block: a valid
+          ;; program printed a pointer. It is a refusal until functions are specialised per
+          ;; instantiation.
           ((:wat::core::>= (:c::enum-index (:c::Prog/enums pg) src 0) 0)
-            (:c::enum-ty pg (:c::enum-index (:c::Prog/enums pg) src 0) ""))
+            (:wat::core::let [ei (:c::enum-index (:c::Prog/enums pg) src 0)]
+              (:wat::core::if (:wat::core::> (:wat::core::length (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei))) 0)
+                (:c::ty-fail "a generic enum with no type argument -- its representation depends on it" a pg)
+                (:c::enum-ty pg ei ""))))
           ((:wat::core::>= ai 0)
             (:c::ty-node (:c::Alias/node (:wat::core::nth (:c::Prog/aliases pg) ai)) pg
               (:wat::core::- depth 1)))
@@ -1251,8 +1272,8 @@
 ;; answer nonsense. **There is no `index-of` in the subset this compiler can compile** (C-131),
 ;; and `:wat::string::to-i64` answers an Option, which needs `match` -- so the separator scan
 ;; and the digit fold are by hand, exactly as `:c::digit-val` already is.
-;; like `:c::lookup-ty`, but "" for a name the environment does not hold -- which
-;; `:c::lookup-ty` cannot say, since it answers "i64" for both "absent" and "an i64".
+;; like `:c::lookup-ty`, but "" for a name the environment does not hold, where `:c::lookup-ty`
+;; refuses -- the question for a caller that has somewhere else to look.
 (:wat::core::defn :c::lookup-ty-opt [env <- :c::Env name <- :wat::core::String
                                      i <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond
@@ -1262,12 +1283,12 @@
     (:else (:c::lookup-ty-opt env name (:wat::core::- i 1)))))
 
 ;; the type of a top-level function used as a value: `[A B :-> R]` as `"fn:2:R"`
-(:wat::core::defn :c::fn-value-ty [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::String
+(:wat::core::defn :c::fn-value-ty [pg <- :c::Prog name <- :wat::core::String a <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let [fi (:c::fn-of pg name 0)]
-    (:wat::core::if (:wat::core::< fi 0) "i64"
+    (:wat::core::if (:wat::core::< fi 0) (:c::ty-fail "a name nothing binds" a pg)
       (:wat::string::concat "fn:" (:wat::string::concat
         (:wat::i64::to-string (:c::arity-at pg fi))
-        (:wat::string::concat ":" (:c::fn-ret pg name 0)))))))
+        (:wat::string::concat ":" (:c::fn-ret pg name 0 a)))))))
 
 (:wat::core::defn :c::fn-ty? [t <- :wat::core::String] -> :wat::core::bool
   (:wat::string::starts-with? t "fn:"))
@@ -1291,7 +1312,9 @@
 
 (:wat::core::defn :c::fn-ret-ty [t <- :wat::core::String] -> :wat::core::String
   (:wat::core::let [c (:c::colon-from t 3)]
-    (:wat::core::if (:wat::core::< c 0) "i64"
+    (:wat::core::if (:wat::core::< c 0)
+      (:wat::kernel::assertion-failed!
+        :message (:wat::string::concat "compile: cannot type the return of a malformed function type " t))
       (:wat::string::subs t (:wat::core::+ c 1) (:wat::string::length t)))))
 
 ;; the `:->` marker splits arguments from the single return type; its index IS the arity
@@ -1317,7 +1340,9 @@
 ;; the element type of a vector type, and the declared type of a record's field
 (:wat::core::defn :c::elem-ty [t <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::string::starts-with? t "vec:")
-    (:wat::string::subs t 4 (:wat::string::length t)) "i64"))
+    (:wat::string::subs t 4 (:wat::string::length t))
+    (:wat::kernel::assertion-failed!
+      :message (:wat::string::concat "compile: cannot type an element of something that is not a Vector: " t))))
 
 (:wat::core::defn :c::rec-name-of [t <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::string::starts-with? t "rec:")
@@ -1337,6 +1362,13 @@
 ;; **the waist.** `:c::type-of` is every question about an expression's type; asked with the
 ;; export on (excursus 002 stone 2), it also SAYS each answer -- `:c::fact-type` -- and this is
 ;; the answer.
+;;
+;; **It is TOTAL, and it does not guess** (excursus 002 stone 4). Every arm answers a type the
+;; language fixes -- a literal's, a binding's, a declaration's, or a builtin's -- and anything
+;; else is `:c::ty-fail`: a compile-time refusal that names the form and where it is. This used
+;; to end in `(:else "i64")` in four places, and an `i64` is never shared or counted, so a value
+;; this pass did not understand was silently treated as a machine word: F-195, where a Vector
+;; bound from a `match` was extended in place under its caller.
 (:wat::core::defn :c::type-of-node [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
   (:wat::core::let [k (:c::kindv a pg)]
     (:wat::core::cond
@@ -1345,98 +1377,266 @@
       ((:wat::core::= k (:rd::Kind.Bool {})) "bool")
       ((:wat::core::= k (:rd::Kind.Symbol {}))
         (:wat::core::let [nm (:c::text pg a)
-                          ;; **the fallback is load-bearing, via the INLINER.** `:c::ty-bind`
-                          ;; types a `let` binding from `:c::type-of` of its initialiser, and
+                          ;; **a bare top-level function name is a value, via the INLINER.**
                           ;; `:c::inl-call` rewrites `(user/go user/add)` into
-                          ;; `(let [op user/add] (op 6 7))`. Without a function type for the
-                          ;; bare name, `op` binds as "i64" and the call refuses -- measured,
-                          ;; by taking the fallback out and watching fnref.wat stop compiling.
+                          ;; `(let [op user/add] (op 6 7))`, and `op` has to bind as a function.
                           ;;
-                          ;; **One scan, not two.** Asking `bound?` and then `lookup-ty` walked
-                          ;; the environment twice for every symbol in every program, and this
-                          ;; is a hot path. "" means the environment does not hold the name;
-                          ;; only then is it maybe a top-level function.
+                          ;; **One scan, not two.** "" means the environment does not hold the
+                          ;; name; only then is it maybe a top-level function -- and if it is
+                          ;; not that either, nothing binds it and it has no type.
                           t (:c::lookup-ty-opt env nm (:wat::core::- (:wat::core::length env) 1))]
-          (:wat::core::if (:wat::core::= t "") (:c::fn-value-ty pg nm) t)))
-      ((:wat::core::= k (:rd::Kind.List {})) (:c::type-of-form (:c::kidsof pg a) env pg))
-      (:else "i64"))))
+          (:wat::core::if (:wat::core::= t "") (:c::fn-value-ty pg nm a) t)))
+      ((:wat::core::= k (:rd::Kind.List {}))
+        (:wat::core::let [ot (:c::origin-ty a pg)]
+          (:wat::core::if (:wat::core::= ot "") (:c::type-of-form a (:c::kidsof pg a) env pg) ot)))
+      ((:wat::core::= k (:rd::Kind.Int {})) "i64")
+      (:else (:c::ty-fail "an expression of this kind" a pg)))))
 
-(:wat::core::defn :c::type-of-form [ks <- :c::Kids env <- :c::Env pg <- :c::Prog] -> :wat::core::String
-  (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) "i64"
+;; the refusal: what could not be typed, where, and the form itself
+(:wat::core::defn :c::ty-fail [what <- :wat::core::String a <- :wat::core::i64 pg <- :c::Prog]
+    -> :wat::core::String
+  (:wat::kernel::assertion-failed!
+    :message (:wat::string::concat "compile: cannot type " what " at " (:c::where pg a) ": "
+               (:wat::core::if (:wat::core::< a 0) "-" (:c::text pg a)))))
+
+;; the type an inlined call stands for, or "" for a node the reader made (see `:c::mknode-ty`)
+(:wat::core::defn :c::origin-ty [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [j (:wat::core::- a (:c::Prog/obase pg))]
+    (:wat::core::if (:wat::core::or (:wat::core::< j 0)
+                                    (:wat::core::>= j (:wat::core::length (:c::Prog/otys pg))))
+      "" (:wat::core::nth (:c::Prog/otys pg) j))))
+
+;; can the head of a call be typed at all -- a computed head, or a name something binds? The
+;; generator asks before typing it, so that an unknown head is refused as a CALL it cannot
+;; compile (`elf/bad/unsupported.wat`), which is what it is.
+(:wat::core::defn :c::head-typed? [h <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [k (:c::kindv h pg)]
+    (:wat::core::cond
+      ((:wat::core::= k (:rd::Kind.List {})) true)
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
+        (:wat::core::or
+          (:wat::core::not= (:c::lookup-ty-opt env (:c::text pg h) (:wat::core::- (:wat::core::length env) 1)) "")
+          (:wat::core::>= (:c::fn-of pg (:c::text pg h) 0) 0)))
+      (:else false))))
+
+(:wat::core::defn :c::type-of-form [a <- :wat::core::i64 ks <- :c::Kids env <- :c::Env
+                                    pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) (:c::ty-fail "an empty form" a pg)
     (:wat::core::let [head (:c::text pg (:wat::core::nth ks 0))
-                      last (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))]
+                      last (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
+                      op (:c::binop head)]
       (:wat::core::cond
         ((:c::concat? head) "str")
         ((:c::println? head) "nil")
         ((:wat::core::or (:c::die? head) (:c::asserteq? head)) "nil")
-        ;; a branch is typed by its consequent; the alternative has to agree, and if it does not
-        ;; the program is wrong in a way this compiler does not check
-        ((:c::if? head) (:c::type-of (:wat::core::nth ks 2) env pg))
+        ;; **a branching form is the JOIN of its branches** -- see `:c::join-ty`. It used to be
+        ;; typed by its first branch alone, which is how `(if c (:Opt.None {}) (:Opt.Some ...))`
+        ;; lost its instantiation.
+        ((:c::if? head) (:c::join-from ks 2 "" a env pg))
         ((:c::not? head) "bool")
-        ;; and / or answer one of their operands, so the last one's type is the honest guess
-        ((:wat::core::or (:c::and? head) (:c::or? head)) (:c::type-of last env pg))
-        ;; a cond is typed by its first clause's body, the way an if is by its consequent
-        ((:c::cond? head)
-          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
-            (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks 1))]
-              (:wat::core::if (:wat::core::< (:wat::core::length cks) 2) "i64"
-                (:c::type-of (:wat::core::nth cks (:wat::core::- (:wat::core::length cks) 1)) env pg)))))
+        ;; `and` and `or` are boolean in wat -- the checker's `infer_boolean_shortcircuit`
+        ((:wat::core::or (:c::and? head) (:c::or? head)) "bool")
+        ((:c::cond? head) (:c::cond-join ks 1 "" a env pg))
         ((:c::do? head) (:c::type-of last env pg))
         ((:c::let? head)
-          (:c::type-of last
-            (:c::ty-bind (:c::kidsof pg (:wat::core::nth ks 1)) 0 env pg) pg))
-        ((:c::cmp? (:c::binop head)) "bool")
-        ((:wat::core::>= (:c::fn-addr pg head 0) 0) (:c::fn-ret pg head 0))
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::ty-fail "a let with no body" a pg)
+            (:c::type-of last
+              (:c::ty-bind (:c::kidsof pg (:wat::core::nth ks 1)) 0 env pg) pg)))
+        ;; F-195: the arms' join, each arm typed with its pattern's bindings in scope
+        ((:c::match? head) (:c::match-ty ks a env pg))
+        ((:c::cmp? op) "bool")
+        ;; the arithmetic and the bitwise six: i64 in, i64 out
+        ((:wat::core::not= op "") "i64")
+        ((:wat::core::>= (:c::fn-addr pg head 0) 0) (:c::fn-ret pg head 0 a))
         ;; a Vector carries its element type, so `nth` and `conj` can say what they answer
         ((:c::vector? head)
-          (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) "vec:i64"
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::ty-fail "a Vector with no `:- [T]`" a pg)
             (:wat::core::let [tv (:c::kidsof pg (:wat::core::nth ks 2))]
-              (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) "vec:i64"
+              (:wat::core::if (:wat::core::= (:wat::core::length tv) 0) (:c::ty-fail "a Vector with no element type" a pg)
                 (:wat::string::concat "vec:" (:c::ty-of-node (:wat::core::nth tv 0) pg))))))
         ((:c::codeat? head) "i64")
         ((:wat::core::or (:c::subs? head) (:c::tostr? head)) "str")
         ((:wat::core::or (:c::rdhex? head) (:c::rdfile? head)) "str")
         ((:wat::core::or (:c::starts? head) (:c::contains? head)) "bool")
         ((:c::nth? head)
-          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
-            (:c::elem-ty (:c::type-of (:wat::core::nth ks 1) env pg))))
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::ty-fail "nth with no operand" a pg)
+            (:wat::core::let [vt (:c::type-of (:wat::core::nth ks 1) env pg)]
+              (:wat::core::if (:wat::string::starts-with? vt "vec:") (:c::elem-ty vt)
+                (:c::ty-fail "nth: operand is not a Vector" a pg)))))
         ((:wat::core::or (:c::conj? head) (:c::assoc? head))
-          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) "i64"
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::ty-fail "conj/assoc with no operand" a pg)
             (:c::type-of (:wat::core::nth ks 1) env pg)))
         ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) head 0) 0)
           (:wat::string::concat "rec:" head))
         ((:wat::core::>= (:c::acc-index pg head) 0) (:c::acc-ty pg head))
+        ;; **a constructor's type is `:c::enum-ty`'s, at the instantiation the site writes** --
+        ;; the same function every declared use of the type goes through, so a value and the
+        ;; parameter it reaches cannot spell the tier two ways (F-194) or drop `;arg`
         ((:wat::core::>= (:c::variant-tag (:c::Prog/enums pg) head 0) 0)
-          (:wat::string::concat
-            (:wat::core::if (:c::Enum/heap (:wat::core::nth (:c::Prog/enums pg)
-                              (:c::variant-owner (:c::Prog/enums pg) head 0)))
-              "henum:" "enum:")
-            (:c::variant-enum (:c::Prog/enums pg) head 0)))
-        ;; calling a name that holds a function: the fn type carries what it answers. In the
-        ;; `:else` rather than an arm of its own, so a form that matched anything above never
-        ;; pays for the lookup.
+          (:c::enum-ty pg (:c::variant-owner (:c::Prog/enums pg) head 0) (:c::variant-arg a env pg)))
+        ;; the builtins that answer a machine word
+        ((:c::bit-not? head) "i64")
+        ((:wat::core::or (:c::len? head) (:c::strlen? head)) "i64")
+        ((:wat::core::>= (:c::syscall-nr head) 0) "i64")
+        ((:wat::core::or (:c::mmap? head) (:c::clone? head)) "i64")
+        ((:wat::core::or (:c::peek? head) (:c::wait? head)) "i64")
+        ;; `elf/lib/prim.wat` declares it `-> :wat::core::i64`
+        ((:c::wrhex? head) "i64")
+        ;; calling a name that holds a function: the fn type carries what it answers. Anything
+        ;; else is a form this pass does not know, and that is a refusal, not a machine word.
         (:else
-          (:wat::core::let [ht (:c::lookup-ty env head
-                                 (:wat::core::- (:wat::core::length env) 1))]
-            (:wat::core::if (:c::fn-ty? ht) (:c::fn-ret-ty ht) "i64")))))))
+          (:wat::core::let [ht (:wat::core::if (:c::head-typed? (:wat::core::nth ks 0) env pg)
+                                 (:c::type-of (:wat::core::nth ks 0) env pg) "")]
+            (:wat::core::if (:c::fn-ty? ht) (:c::fn-ret-ty ht)
+              (:c::ty-fail "a call this pass does not know" a pg))))))))
+
+;; ---------------------------------------------------------------- the join of branches
+;;
+;; `if`, `cond` and `match` answer one of several branches, and the language requires them to
+;; agree. The compiler's spelling can differ where the language's types do not, in exactly one
+;; way: an enum's INSTANTIATION is fixed only by a branch that carries a payload --
+;; `(:Opt.None {})` says nothing about `T`, `(:Opt.Some {:value 7})` says `i64`. So the join
+;; takes the instantiated spelling, which is also the one whose tier is right. A branch that
+;; cannot return (`assertion-failed!`) contributes nothing. Any other disagreement is two
+;; derivations of one type saying different things, and that is refused, not resolved.
+(:wat::core::defn :c::join-ty [t1 <- :wat::core::String t2 <- :wat::core::String a <- :wat::core::i64
+                               pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= t1 "") t2)
+    ((:wat::core::= t2 "") t1)
+    ((:wat::core::= t1 t2) t1)
+    ((:wat::core::and (:wat::core::>= (:c::ty-tier t1) 0)
+                      (:wat::core::= (:c::enum-base t1) (:c::enum-base t2)))
+      (:wat::core::cond
+        ((:wat::core::= (:c::enum-arg t2) "") t1)
+        ((:wat::core::= (:c::enum-arg t1) "") t2)
+        (:else (:c::ty-fail (:wat::string::concat "branches instantiating one enum two ways, "
+                              (:wat::string::concat t1 (:wat::string::concat " and " t2))) a pg))))
+    (:else (:c::ty-fail (:wat::string::concat "branches of two types, "
+                          (:wat::string::concat t1 (:wat::string::concat " and " t2))) a pg))))
+
+;; an enum type's name, without its tier or its argument: `penum:user::Opt;str` -> `user::Opt`
+(:wat::core::defn :c::enum-base [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [b (:wat::core::+ (:c::colon-from t 0) 1)
+                    s (:c::semi-from t 0)]
+    (:wat::string::subs t b (:wat::core::if (:wat::core::< s 0) (:wat::string::length t) s))))
+
+;; a branch's type, or "" for one that cannot return
+(:wat::core::defn :c::branch-ty [b <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv b pg) (:rd::Kind.List {}))
+                    (:wat::core::and (:wat::core::> (:wat::core::length (:c::kidsof pg b)) 0)
+                                     (:c::die? (:c::text pg (:wat::core::nth (:c::kidsof pg b) 0)))))
+    "" (:c::type-of b env pg)))
+
+;; every branch that cannot return: the form is a statement, and a statement is `nil`
+(:wat::core::defn :c::joined [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::= t "") "nil" t))
+
+;; `if`: kids from `i` on are its branches
+(:wat::core::defn :c::join-from [ks <- :c::Kids i <- :wat::core::i64 acc <- :wat::core::String
+                                 a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::joined acc)
+    (:c::join-from ks (:wat::core::+ i 1)
+      (:c::join-ty acc (:c::branch-ty (:wat::core::nth ks i) env pg) a pg) a env pg)))
+
+;; `cond`: each clause `(test body...)` answers its last form
+(:wat::core::defn :c::cond-join [ks <- :c::Kids i <- :wat::core::i64 acc <- :wat::core::String
+                                 a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::joined acc)
+    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:wat::core::if (:wat::core::< (:wat::core::length cks) 2) (:c::ty-fail "a cond clause with no body" a pg)
+        (:c::cond-join ks (:wat::core::+ i 1)
+          (:c::join-ty acc (:c::branch-ty (:wat::core::nth cks (:wat::core::- (:wat::core::length cks) 1)) env pg)
+            a pg)
+          a env pg)))))
+
+;; `match`: each arm `[:Enum.Variant {:field name ...} body...]` answers its last form, typed
+;; with the arm's bindings in scope -- each at its declared field type, at the instantiation the
+;; SUBJECT's type carries, exactly as `:c::match-arms` binds them
+(:wat::core::defn :c::match-ty [ks <- :c::Kids a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog]
+    -> :wat::core::String
+  (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::ty-fail "a match with no arm" a pg)
+    (:wat::core::let [ei (:c::arm-enum pg (:wat::core::nth ks 2))]
+      (:wat::core::if (:wat::core::< ei 0) (:c::ty-fail "a match arm that is not an enum variant" a pg)
+        (:c::arms-join ks 2 ei (:c::enum-arg (:c::type-of (:wat::core::nth ks 1) env pg)) "" a env pg)))))
+
+(:wat::core::defn :c::arms-join [ks <- :c::Kids i <- :wat::core::i64 ei <- :wat::core::i64
+                                 sarg <- :wat::core::String acc <- :wat::core::String
+                                 a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) (:c::joined acc)
+    (:wat::core::let [arm (:wat::core::nth ks i)
+                      aks (:c::kidsof pg arm)]
+      (:wat::core::if (:wat::core::< (:wat::core::length aks) 3) (:c::ty-fail "a match arm with no body" arm pg)
+        (:c::arms-join ks (:wat::core::+ i 1) ei sarg
+          (:c::join-ty acc
+            (:c::branch-ty (:wat::core::nth aks (:wat::core::- (:wat::core::length aks) 1))
+              (:c::arm-env pg arm ei sarg env) pg)
+            a pg)
+          a env pg)))))
+
+;; the environment an arm's body sees: the pattern's names, at the variant's field types
+(:wat::core::defn :c::arm-env [pg <- :c::Prog arm <- :wat::core::i64 ei <- :wat::core::i64
+                               sarg <- :wat::core::String env <- :c::Env] -> :c::Env
+  (:wat::core::let [tg (:c::arm-tag pg arm)]
+    (:wat::core::if (:wat::core::< tg 0) (:c::env-fail "a match arm that is not a variant" arm pg)
+      (:c::arm-env-binds pg (:c::kidsof pg (:wat::core::nth (:c::kidsof pg arm) 1)) 0
+        (:c::arm-fields pg ei tg) (:c::arm-ftys pg ei tg sarg) arm env))))
+
+(:wat::core::defn :c::arm-env-binds [pg <- :c::Prog mks <- :c::Kids j <- :wat::core::i64
+                                     fields <- (:wat::core::Vector :- [:wat::core::String])
+                                     ftys <- (:wat::core::Vector :- [:wat::core::String])
+                                     arm <- :wat::core::i64 env <- :c::Env] -> :c::Env
+  (:wat::core::if (:wat::core::>= (:wat::core::+ j 1) (:wat::core::length mks)) env
+    (:wat::core::let [kt (:c::text pg (:wat::core::nth mks j))
+                      fi (:c::field-index fields (:wat::string::subs kt 1 (:wat::string::length kt)) 0)]
+      (:wat::core::if (:wat::core::or (:wat::core::< fi 0) (:wat::core::>= fi (:wat::core::length ftys)))
+        (:c::env-fail "a match field the variant does not declare" arm pg)
+        (:c::arm-env-binds pg mks (:wat::core::+ j 2) fields ftys arm
+          (:wat::core::conj env
+            (:c::Bind :name (:c::text pg (:wat::core::nth mks (:wat::core::+ j 1))) :disp 0 :reg -1
+                      :ty (:wat::core::nth ftys fi))))))))
+
+(:wat::core::defn :c::env-fail [what <- :wat::core::String a <- :wat::core::i64 pg <- :c::Prog] -> :c::Env
+  (:wat::kernel::assertion-failed!
+    :message (:wat::string::concat "compile: cannot type " what " at " (:c::where pg a) ": " (:c::text pg a))))
+
+;; a variant's field names, and their types at an instantiation -- asked by the generator
+;; (`:c::match-arms`) and by the type pass (`:c::arm-env`), so the two cannot differ
+(:wat::core::defn :c::arm-fks [pg <- :c::Prog ei <- :wat::core::i64 tg <- :wat::core::i64] -> :c::Kids
+  (:wat::core::let [fv (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg)]
+    (:wat::core::if (:wat::core::< fv 0) (:wat::core::Vector :- [:wat::core::i64]) (:c::kidsof pg fv))))
+
+(:wat::core::defn :c::arm-fields [pg <- :c::Prog ei <- :wat::core::i64 tg <- :wat::core::i64]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:c::field-names (:c::arm-fks pg ei tg) 0 (:wat::core::Vector :- [:wat::core::String]) pg))
+
+(:wat::core::defn :c::arm-ftys [pg <- :c::Prog ei <- :wat::core::i64 tg <- :wat::core::i64
+                                sarg <- :wat::core::String] -> (:wat::core::Vector :- [:wat::core::String])
+  (:c::variant-ftys (:c::arm-fks pg ei tg) 0
+    (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei)) sarg pg
+    (:wat::core::Vector :- [:wat::core::String])))
 
 ;; the declared type of the field an accessor reads
 (:wat::core::defn :c::acc-ty [pg <- :c::Prog head <- :wat::core::String] -> :wat::core::String
   (:wat::core::let [at (:c::slash-at head (:wat::core::- (:wat::string::length head) 1))]
-    (:wat::core::if (:wat::core::< at 0) "i64"
+    (:wat::core::if (:wat::core::< at 0)
+      (:wat::kernel::assertion-failed! :message (:wat::string::concat "compile: cannot type an accessor with no record: " head))
       (:wat::core::let [ri (:c::rec-index (:c::Prog/recs pg) (:wat::string::subs head 0 at) 0)
                         fi (:c::acc-index pg head)]
-        (:wat::core::if (:wat::core::or (:wat::core::< ri 0) (:wat::core::< fi 0)) "i64"
+        (:wat::core::if (:wat::core::or (:wat::core::< ri 0) (:wat::core::< fi 0))
+          (:wat::kernel::assertion-failed! :message (:wat::string::concat "compile: cannot type an accessor with no field: " head))
           (:wat::core::nth (:c::Rec/ftypes (:wat::core::nth (:c::Prog/recs pg) ri)) fi))))))
 
 ;; the same left-to-right walk `:c::bind-each` does, carrying types instead of displacements
 (:wat::core::defn :c::ty-bind [bs <- :c::Kids i <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :c::Env
   (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) env
-    (:c::ty-bind bs (:wat::core::+ i 2)
-      (:wat::core::conj env
-        (:c::Bind :name (:c::text pg (:wat::core::nth bs i)) :disp 0 :reg -1
-                  :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env pg)))
-      pg)))
+    (:c::ty-bind bs (:wat::core::+ i 2) (:c::ty-bind1 bs i env pg) pg)))
+
+;; one binding: its name, typed from its initialiser in the environment so far
+(:wat::core::defn :c::ty-bind1 [bs <- :c::Kids i <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :c::Env
+  (:wat::core::conj env
+    (:c::Bind :name (:c::text pg (:wat::core::nth bs i)) :disp 0 :reg -1
+              :ty (:c::type-of (:wat::core::nth bs (:wat::core::+ i 1)) env pg))))
 
 ;; ---------------------------------------------------------------- string literals, as values
 ;;
@@ -1940,7 +2140,7 @@
                 ;; C-183. A scalarised parameter has no pointer left: the register IS the field.
                 ;; It is still a read out of a container -- the prologue loaded it from one --
                 ;; so all three arms go through `:c::read-out`, F-188. `acc-ty` is the DECLARED
-                ;; field type: `acc-index >= 0` above means its "i64" fallbacks cannot fire here.
+                ;; field type: `acc-index >= 0` above means its refusals cannot fire here.
                 (:wat::core::cond
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::not= sf (:c::acc-index pg head)))
                     (:c::fail "scalar field" a pg))
@@ -2029,7 +2229,8 @@
                 ;; a bare name bound to a function, and a computed head like
                 ;; `((wat.core/nth ops i) v)`. A head that IS a top-level function never reaches
                 ;; here -- `fn-of` answered above -- so the direct call keeps its `call rel32`.
-                (:wat::core::let [ht (:c::type-of (:wat::core::nth ks 0) env pg)]
+                (:wat::core::let [ht (:wat::core::if (:c::head-typed? (:wat::core::nth ks 0) env pg)
+                                       (:c::type-of (:wat::core::nth ks 0) env pg) "")]
                   (:wat::core::if (:wat::core::not (:c::fn-ty? ht)) (:c::fail "call" a pg)
                     (:wat::core::if (:wat::core::not= (:c::fn-arity ht)
                                       (:wat::core::- (:wat::core::length ks) 1))
@@ -2136,20 +2337,59 @@
 ;; the site: `(:Opt.Some {:value "x"})` instantiates `T` to `str`, which is a pointer, which is
 ;; tier 1. A unit variant carries no field and so fixes nothing -- "" -- which is why the tier
 ;; for `(:Opt.None {})` comes from the enum, not from here.
+;;
+;; **Only a field DECLARED with the type parameter instantiates it** (excursus 002 stone 4). This
+;; used to answer the type of a variant's one field whatever it was declared, and since only the
+;; tier read it -- which ignores the argument of an enum that has no parameter -- nothing showed.
+;; Once a constructor's TYPE came from `:c::enum-ty`, `(:user::S.Some {:s "xy"})` of the plain
+;; enum `:user::S` would have been typed `(:user::S :- [String])`. A non-generic enum is
+;; instantiated by nothing, so this answers "" for it.
 (:wat::core::defn :c::variant-arg [a <- :wat::core::i64 env <- :c::Env
                                    pg <- :c::Prog] -> :wat::core::String
-  (:wat::core::let [ks (:c::kidsof pg a)]
-    (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) ""
-      (:wat::core::let [mks (:c::kidsof pg (:wat::core::nth ks 1))]
-        (:wat::core::if (:wat::core::not= (:wat::core::length mks) 2) ""
-          (:c::type-of (:wat::core::nth mks 1) env pg))))))
+  (:wat::core::let [ks (:c::kidsof pg a)
+                    h (:c::text pg (:wat::core::nth ks 0))
+                    ei (:c::variant-owner (:c::Prog/enums pg) h 0)]
+    (:wat::core::if (:wat::core::or (:wat::core::< ei 0) (:wat::core::not= (:wat::core::length ks) 2)) ""
+      (:wat::core::let [params (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei))]
+        (:wat::core::if (:wat::core::= (:wat::core::length params) 0) ""
+          (:c::param-field-arg
+            (:c::arm-fks pg ei (:c::variant-tag (:c::Prog/enums pg) h 0)) 0 params
+            (:c::kidsof pg (:wat::core::nth ks 1)) env pg))))))
+
+;; the first field declared `<- :T` for a parameter `T`: the type of the value the site gives it
+(:wat::core::defn :c::param-field-arg [fks <- :c::Kids i <- :wat::core::i64
+                                       params <- (:wat::core::Vector :- [:wat::core::String])
+                                       mks <- :c::Kids env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= (:wat::core::+ i 2) (:wat::core::length fks)) ""
+    (:wat::core::let [raw (:c::text pg (:wat::core::nth fks (:wat::core::+ i 2)))
+                      tt (:wat::core::if (:wat::string::starts-with? raw ":")
+                           (:wat::string::subs raw 1 (:wat::string::length raw)) raw)]
+      (:wat::core::if (:wat::core::>= (:c::index-of-str params tt 0) 0)
+        (:c::map-value-ty mks 0 (:wat::string::concat ":" (:c::text pg (:wat::core::nth fks i))) env pg)
+        (:c::param-field-arg fks (:wat::core::+ i 3) params mks env pg)))))
+
+;; the type of the value a `{:key value ...}` map gives `key`, or "" if it gives none
+(:wat::core::defn :c::map-value-ty [mks <- :c::Kids j <- :wat::core::i64 key <- :wat::core::String
+                                    env <- :c::Env pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::>= (:wat::core::+ j 1) (:wat::core::length mks)) "")
+    ((:wat::core::= (:c::text pg (:wat::core::nth mks j)) key)
+      (:c::type-of (:wat::core::nth mks (:wat::core::+ j 1)) env pg))
+    (:else (:c::map-value-ty mks (:wat::core::+ j 2) key env pg))))
 
 (:wat::core::defn :c::quiet-variant? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog
                                       h <- :wat::core::String] -> :wat::core::bool
   (:wat::core::let [ei (:c::variant-owner (:c::Prog/enums pg) h 0)]
     (:wat::core::and (:wat::core::>= ei 0)
-      (:wat::core::not= (:c::enum-tier (:c::Prog/enums pg) ei
-                          (:c::variant-arg a env pg) pg) 3))))
+      ;; **a UNIT variant is its tag in every tier** -- `:c::form` emits `mov rax, tag` for it
+      ;; before it asks anything else -- so it is quiet without asking the tier. Asking was a
+      ;; guess for a generic enum: `(:Opt.None {})` fixes no `T`, and the tier was computed at
+      ;; `T = i64` (excursus 002 stone 4).
+      (:wat::core::or
+        (:wat::core::= (:c::variant-arity (:c::Prog/enums pg) ei
+                         (:c::variant-tag (:c::Prog/enums pg) h 0) pg) 0)
+        (:wat::core::not= (:c::enum-tier (:c::Prog/enums pg) ei
+                            (:c::variant-arg a env pg) pg) 3)))))
 
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
@@ -2166,7 +2406,42 @@
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
           (:wat::core::and (:wat::core::or (:c::quiet-head? h) (:c::quiet-variant? a env pg h))
             (:wat::core::and (:c::word-cmp? h ks env pg)
-                             (:c::all-safe? ks 1 env pg))))))))
+                             (:c::kids-safe? h ks env pg))))))))
+
+;; **the kids of a form, each in the scope it is evaluated in** (excursus 002 stone 4). A `let`'s
+;; body sees its bindings and a `match` arm's body sees its pattern's names; asking about them in
+;; the enclosing scope typed those names by a guess. `elf/bench/parse.wat`'s `(= proto 6)` was
+;; one: `proto` is a `let` binding, and `:c::word-cmp?` asked for its type where it is unbound.
+(:wat::core::defn :c::kids-safe? [h <- :wat::core::String ks <- :c::Kids env <- :c::Env
+                                  pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::and (:c::let? h) (:wat::core::>= (:wat::core::length ks) 3))
+      (:wat::core::let [bs (:c::kidsof pg (:wat::core::nth ks 1))]
+        (:wat::core::and (:c::binds-safe? bs 0 env pg)
+                         (:c::all-safe? ks 2 (:c::ty-bind bs 0 env pg) pg))))
+    ((:wat::core::and (:c::match? h) (:wat::core::>= (:wat::core::length ks) 3))
+      (:wat::core::let [ei (:c::arm-enum pg (:wat::core::nth ks 2))]
+        (:wat::core::if (:wat::core::< ei 0) (:c::all-safe? ks 1 env pg)
+          (:wat::core::and (:c::scratch-safe? (:wat::core::nth ks 1) env pg)
+            (:c::arms-safe? ks 2 ei (:c::enum-arg (:c::type-of (:wat::core::nth ks 1) env pg)) env pg)))))
+    (:else (:c::all-safe? ks 1 env pg))))
+
+;; a binding vector: each initialiser in the scope of the bindings before it
+(:wat::core::defn :c::binds-safe? [bs <- :c::Kids i <- :wat::core::i64 env <- :c::Env
+                                   pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= (:wat::core::+ i 1) (:wat::core::length bs)) true
+    (:wat::core::and (:c::scratch-safe? (:wat::core::nth bs (:wat::core::+ i 1)) env pg)
+                     (:c::binds-safe? bs (:wat::core::+ i 2) (:c::ty-bind1 bs i env pg) pg))))
+
+;; each arm's body, in the scope of its pattern (the variant keyword and the pattern map are
+;; leaves, and emit nothing)
+(:wat::core::defn :c::arms-safe? [ks <- :c::Kids i <- :wat::core::i64 ei <- :wat::core::i64
+                                  sarg <- :wat::core::String env <- :c::Env
+                                  pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) true
+    (:wat::core::let [arm (:wat::core::nth ks i)]
+      (:wat::core::and (:c::all-safe? (:c::kidsof pg arm) 2 (:c::arm-env pg arm ei sarg env) pg)
+                       (:c::arms-safe? ks (:wat::core::+ i 1) ei sarg env pg)))))
 
 ;; `=` and `not=` compile to a machine-word compare, or to a call into `str_eq` -- and which one
 ;; is a question the type pass can answer, exactly as it does for the `if` condition in
@@ -3468,13 +3743,8 @@
        aks (:c::kidsof pg arm)
        tg (:c::arm-tag pg arm)
        tier (:c::enum-tier (:c::Prog/enums pg) ei sarg pg)
-       fv (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg)
-       fks (:wat::core::if (:wat::core::< fv 0) (:wat::core::Vector :- [:wat::core::i64])
-             (:c::kidsof pg fv))
-       fields (:c::field-names fks 0 (:wat::core::Vector :- [:wat::core::String]) pg)
-       ftys (:c::variant-ftys fks 0
-              (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei)) sarg pg
-              (:wat::core::Vector :- [:wat::core::String]))
+       fields (:c::arm-fields pg ei tg)
+       ftys (:c::arm-ftys pg ei tg sarg)
        ;; **two-phase, because a unit variant and a payload variant are different SHAPES.**
        ;; A unit is its tag, a small integer; a payload is a pointer, always at or above a
        ;; page. So a unit arm is one compare against the tag -- no pointer can equal it -- and
@@ -4588,8 +4858,18 @@
         ;; `let` and `cond` and disagreed on `and`/`or`, which neither of them had (F-169).
         (:wat::core::let [tn (:c::tail-nodes pg a)]
           (:wat::core::if (:wat::core::> (:wat::core::length tn) 0)
-            (:wat::core::and (:c::all-quiet? (:c::quiet-nodes pg a) 0 env pg)
-                             (:c::all-noret? tn 0 tail? name arity env pg))
+            (:wat::core::if (:wat::core::and (:c::let? (:c::text pg (:wat::core::nth ks 0)))
+                                             (:wat::core::>= (:wat::core::length ks) 3))
+              ;; a `let`: its initialisers each in the scope before them, its body in its own
+              (:wat::core::let [bs (:c::kidsof pg (:wat::core::nth ks 1))
+                                env2 (:c::ty-bind bs 0 env pg)]
+                (:wat::core::and (:c::binds-safe? bs 0 env pg)
+                  (:wat::core::and
+                    (:c::all-quiet? (:c::conj-range pg (:wat::core::Vector :- [:wat::core::i64]) ks 2
+                                      (:wat::core::- (:wat::core::length ks) 1)) 0 env2 pg)
+                    (:c::all-noret? tn 0 tail? name arity env2 pg))))
+              (:wat::core::and (:c::all-quiet? (:c::quiet-nodes pg a) 0 env pg)
+                               (:c::all-noret? tn 0 tail? name arity env pg)))
             ;; a call, or a head this does not take apart: quiet subtrees pass, and the one
             ;; call that passes is the self tail call with its arguments quiet
             (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))
@@ -5266,7 +5546,7 @@
     (:wat::core::let
       [nm (:c::text pg (:wat::core::nth pv i))
        ei (:wat::core::- (:wat::core::length env) 1)
-       ty (:c::lookup-ty env nm ei)
+       ty (:c::lookup-ty env nm ei (:wat::core::nth pv i) pg)
        reg (:c::lookup-reg env nm ei)
        rn (:c::rec-name-of ty)
        go? (:wat::core::and (:wat::core::>= reg 0) (:wat::core::not= rn ""))
@@ -5279,7 +5559,7 @@
 
 (:wat::core::defn :c::scalar-of [pv <- :c::Kids ks <- :c::Kids start <- :wat::core::i64
                                  fname <- :wat::core::String env <- :c::Env pg <- :c::Prog] -> :c::Sc
-  (:wat::core::if (:wat::string::starts-with? (:c::fn-ret pg fname 0) "rec:")
+  (:wat::core::if (:wat::string::starts-with? (:c::fn-ret pg fname 0 -1) "rec:")
     (:c::Sc :names (:wat::core::Vector :- [:wat::core::String])
             :fields (:wat::core::Vector :- [:wat::core::i64]))
     (:c::scalar-params pv 0 ks start fname env pg
@@ -5723,6 +6003,15 @@
 ;; source position of the call that was written.
 (:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :rd::Kind text <- :wat::core::String
                               kids <- :rd::Kids org <- :wat::core::i64] -> :c::NodeR
+  (:c::mknode-ty pg kind text kids org ""))
+
+;; **`ty` is the type the node's ORIGIN has** (excursus 002 stone 4): an inlined call becomes a
+;; `let`, and that `let` is typed as the call it replaces -- the callee's declared return -- so an
+;; expression's type never depends on whether the inliner fired. "" for every other made node,
+;; which is typed from its shape like any node the reader made.
+(:wat::core::defn :c::mknode-ty [pg <- :c::Prog kind <- :rd::Kind text <- :wat::core::String
+                                 kids <- :rd::Kids org <- :wat::core::i64
+                                 ty <- :wat::core::String] -> :c::NodeR
   (:wat::core::let [st (:c::Prog/src pg)
                     lc (:wat::core::if (:c::Prog/track pg)
                          (:wat::core::conj (:c::Prog/locs pg)
@@ -5730,7 +6019,8 @@
                              (:wat::core::nth (:c::Prog/locs pg) org)))
                          (:c::Prog/locs pg))]
     (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
-               :pg (:wat::core::assoc (:wat::core::assoc pg :locs lc) :src
+               :pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc pg :locs lc)
+                                        :otys (:wat::core::conj (:c::Prog/otys pg) ty)) :src
                      (:wat::core::assoc st :arena
                        (:wat::core::conj (:rd::St/arena st)
                          ;; **`:k` must be set here too, and forgetting it was silent.** The
@@ -5903,9 +6193,10 @@
           (:wat::core::Vector :- [:wat::core::i64]))
      lr (:c::mknode (:c::KidsR/pg bo) (:rd::Kind.Symbol {}) ":wat::core::let"
           (:wat::core::Vector :- [:wat::core::i64]) -1)]
-    (:c::mknode (:c::NodeR/pg lr) (:rd::Kind.List {}) (:c::text pg a)
+    (:c::mknode-ty (:c::NodeR/pg lr) (:rd::Kind.List {}) (:c::text pg a)
       (:c::inl-cons (:c::NodeR/node lr) (:c::NodeR/node vr) (:c::KidsR/kids bo) 0
-        (:wat::core::Vector :- [:wat::core::i64])) a)))
+        (:wat::core::Vector :- [:wat::core::i64])) a
+      (:c::Fn/ret (:wat::core::nth (:c::Prog/fns pg) fi)))))
 
 (:wat::core::defn :c::inl-cons [l <- :wat::core::i64 v <- :wat::core::i64 body <- :rd::Kids
                                 i <- :wat::core::i64 acc <- :rd::Kids] -> :rd::Kids
@@ -6234,8 +6525,19 @@
 
 ;; "<file> <line> <col>", or "? 0 0" for a node the inliner made up -- which the checker counts
 (:wat::core::defn :c::loc-str [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let [l (:wat::core::if (:wat::core::< a (:wat::core::length (:c::Prog/locs pg)))
-                        (:wat::core::nth (:c::Prog/locs pg) a) -1)]
+  (:c::loc-in pg (:c::Prog/locs pg) a))
+
+;; **where a refusal happened**, in a build that is not tracking positions too: they are
+;; recovered here, on the one path that stops the compile, so a normal build pays nothing
+(:wat::core::defn :c::where [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::String
+  (:c::loc-in pg (:wat::core::if (:c::Prog/track pg) (:c::Prog/locs pg)
+                   (:c::loc-files pg 0 (:wat::core::Vector :- [:wat::core::i64]))) a))
+
+(:wat::core::defn :c::loc-in [pg <- :c::Prog locs <- (:wat::core::Vector :- [:wat::core::i64])
+                              a <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [l (:wat::core::if (:wat::core::and (:wat::core::>= a 0)
+                                                       (:wat::core::< a (:wat::core::length locs)))
+                        (:wat::core::nth locs a) -1)]
     (:wat::core::if (:wat::core::< l 0) "? 0 0"
       (:wat::string::concat
         (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) (:wat::core::quot l 10000000000)))
@@ -6342,7 +6644,8 @@
             (:c::dir-of src-path))
      ;; where every node the reader made starts -- before the inliner makes more, so that each
      ;; node it makes can inherit the position of the one it replaces (`:c::mknode`)
-     pg-x (:wat::core::if exp? (:c::with-locs pg-c) pg-c)
+     pg-o (:wat::core::assoc pg-c :obase (:wat::core::length (:rd::St/arena (:c::Prog/src pg-c))))
+     pg-x (:wat::core::if exp? (:c::with-locs pg-o) pg-o)
      ;; which functions reach a `poke`, transitively, before any code is emitted
      ;; every record and alias is known now, so the types can be resolved in any order
      pg-r (:c::fill-recs pg-x 0 (:wat::core::Vector :- [:c::Rec]))
