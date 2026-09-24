@@ -15234,3 +15234,39 @@ spell by tier, the conflict is gone and an agreement witness fires at the same s
 `penum:user/S` -- so the joins reach the site both ways and only the verdict changes. What the
 hand-written compiler shipped as a segfault, one boundary constraint over two stated derivations
 reports as a compile-time error.
+
+
+### F-195: a value bound from a `match` is typed `i64` -- a silent wrong answer on `main`, found by the rules first
+
+**Fix.** The first bug excursus 002's checker found that nobody knew about. `elf/probe/match-i64.wat`.
+
+```clojure
+(wat.core/defn user/mk [] :- :user::M (:user::M.Has {:xs (wat.core/Vector :- [wat.type/i64] 1 2 3)}))
+(wat.core/defn user/bump [v :- :user::Row] :- wat.type/i64 (wat.core/length (wat.core/conj v 99)))
+(wat.core/let [m  (user/mk)
+               v  (:wat::core::match m [:user::M.Has {:xs xs} xs] [:user::M.Empty {} (wat.core/Vector :- [wat.type/i64])])
+               k1 (user/bump v)
+               k2 (user/bump v)]
+  (wat.kernel/println k1) (wat.kernel/println k2))
+```
+
+Interpreter `4 | 4`. **Native `4 | 5`, exit 0** -- a silent wrong answer on a valid program.
+
+**The chain.** `:c::type-of-form` has no `match` arm, so a `let` binding initialised by a `match` is
+typed by the fallback, `"i64"` -- one of the six guesses excursus 002's DESIGN lists (`:c::type-of`,
+`elf/compile.wat:1327`). An `i64` is not a pointer, so passing `v` shares nothing; `user/bump`'s
+linear parameter reaches `vec_conj_own`, which extends the caller's live vector in place; the second
+call sees four elements.
+
+**Found by structural reasoning before any binary ran.** The checker was pointed at the compiler's
+OWN source and reported `elf/compile.wat:3173:24` -- `lo`, bound to a `match` inside
+`:c::read-out`, typed `i64` against `:c::emit`'s `rec::c::Out`. That site is harmless (`lo` is used
+once). The CLASS is not, and the probe above was written from the rule's report. Run through the
+checker, it is flagged at both calls: `15:21` and `16:21`, `user/bump`, `i64` against `vec:i64`.
+
+**A louder sibling.** The same guess makes the compiler REFUSE a valid program: with `(length v)`
+directly on the match-bound `v`, the native compiler fails *"operand is not a String, Vector or
+record"* where the interpreter answers.
+
+**Not fixed here.** Its root is the same shape as F-194's -- a type the compiler reconstructs
+instead of knows -- and the checker from excursus 002 stone 1 is its gate.

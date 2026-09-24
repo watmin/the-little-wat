@@ -241,11 +241,24 @@ refuses elf/refuse-arity.wat    'wrong number of arguments' \
 refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
         "refused elf/bad/ptradd.wat, naming the type:        arithmetic on a str  (F-128)"
 
+# **the compiler must agree with itself at every boundary** (excursus 002 stone 1). The compiler,
+# asked, says the type it gave every argument of every call to a user function and every
+# parameter of every `defn`; wat-rs's rete joins the two and reports each argument whose type is
+# not its parameter's. REPORT mode: every conflict is printed and counted, and a conflict does
+# not fail this run yet. What DOES fail it is a check that could not be made -- the exporter did
+# not build, the checker died, or the export moved an emitted byte.
+echo
+echo "== the compiler agrees with itself at every boundary: tools/rules.sh (report mode) =="
+rout=$(tools/rules.sh 2>&1); rrc=$?
+printf '%s\n' "$rout" | sed 's/^/  /'
+[ $rrc -eq 0 ] || { echo "  FAIL: tools/rules.sh could not make the check (exit $rrc)"; fail=1; }
+rtot=$(printf '%s\n' "$rout" | sed -n 's/.*TOTAL over \([0-9]*\) programs.*pairs \([0-9]*\).*CONFLICT \([0-9]*\).*/\3 conflicts in \2 argument-parameter pairs over \1 programs/p')
+
 echo
 if [ $fail -eq 0 ]; then
   echo "elf-run: ok -- $(ls elf/out/*.elf | wc -l) native binaries. $agreed agree with the interpreter;"
   echo "         $natively more use syscalls it has no implementation of (F-119); $refused refusals and"
-  echo "         $trapped traps, both ways."
+  echo "         $trapped traps, both ways. rules: ${rtot:-no total}."
 else
   echo "elf-run: FAILED"
 fi

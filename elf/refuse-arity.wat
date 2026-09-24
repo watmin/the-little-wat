@@ -1049,6 +1049,12 @@
 (:wat::core::defrecord :c::Alias [name <- :wat::core::String  node <- :wat::core::i64])
 (:wat::core::typealias :c::Aliases (:wat::core::Vector :- [:c::Alias]))
 
+;; one file a program was read from: its path, the arena index its first node got, and its
+;; top-level forms. `load-file!` reads into the SAME arena, so a program's files are contiguous
+;; runs of it, in the order they were read.
+(:wat::core::defrecord :c::Src
+  [path <- :wat::core::String  base <- :wat::core::i64  tops <- :c::Kids])
+
 ;; everything the compiler knows about the program it is compiling, threaded as one value so
 ;; that adding a table does not mean another parameter on every function
 (:wat::core::defrecord :c::Prog
@@ -1073,6 +1079,16 @@
    ;; **what this branch has proved about the values in scope.** See `:c::Bnd`; a name that is
    ;; not in here is not unknown-as-a-special-case, it simply has the bound that admits anything.
    bnds <- :c::Bnds
+   ;; **what the export reads, and nothing that emits a byte does** (excursus 002 stone 1).
+   ;; `srcs` is every file this program was read from, in reading order; `locs` is where each
+   ;; arena node starts in them, filled only when `track` is set; `exp` says pass two should
+   ;; SAY what it decided, and `cur` is the function it is deciding it in. A normal build
+   ;; leaves `locs` empty and `track`/`exp` false, and prints nothing more than it did.
+   srcs <- (:wat::core::Vector :- [:c::Src])
+   locs <- (:wat::core::Vector :- [:wat::core::i64])
+   track <- :wat::core::bool
+   exp <- :wat::core::bool
+   cur <- :wat::core::String
    src <- :rd::St])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
@@ -1116,6 +1132,9 @@
             :scalar (:wat::core::Vector :- [:wat::core::String])
             :sfield (:wat::core::Vector :- [:wat::core::i64])
             :nlr 0 :regbase 0
+            :srcs (:wat::core::Vector :- [:c::Src])
+            :locs (:wat::core::Vector :- [:wat::core::i64])
+            :track false :exp false :cur ""
             :src (rd/read "")))
 
 (:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::String
@@ -2011,7 +2030,10 @@
                 (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
                                   (:wat::core::- (:wat::core::length ks) 1))
                   (:c::fail "wrong number of arguments" a pg)
-                  (:c::call-user ks head fi o env pg rt tb slot tc))))))))))
+                  (:wat::core::if (:c::Prog/exp pg)
+                    (:wat::core::do (:c::fact-args a ks 1 head env pg)
+                                    (:c::call-user ks head fi o env pg rt tb slot tc))
+                    (:c::call-user ks head fi o env pg rt tb slot tc)))))))))))
 
 ;; left fold: the first argument lands in rax, and each one after it is pushed, computed and
 ;; popped back -- the stack discipline a compiler without a register allocator has to use
@@ -5432,10 +5454,13 @@
           (:c::expr (:wat::core::nth (:c::kidsof pg (:wat::core::nth ks start)) 3)
             o1 env pg rt tb 0 tc)
           (:c::seq ks start o1 env pg rt tb 0 tc))]
-    (:c::at-depth0 o2 (:wat::string::concat
-      (:c::reg-restores (:wat::core::- nsave 1) "")
-      ;; `leave` is `mov rbp,rsp ; pop rbp`; without a frame pointer the same job is one `add`
-      (:wat::core::if fpr? "c9" (:c::add-rsp frame)) (:c::ret)))))
+    (:wat::core::do
+      ;; the environment the body was compiled in is the one the parameters' types are read from
+      (:c::fact-params pv 0 fname env pg)
+      (:c::at-depth0 o2 (:wat::string::concat
+        (:c::reg-restores (:wat::core::- nsave 1) "")
+        ;; `leave` is `mov rbp,rsp ; pop rbp`; without a frame pointer the same job is one `add`
+        (:wat::core::if fpr? "c9" (:c::add-rsp frame)) (:c::ret))))))
 
 ;; ---------------------------------------------------------------- the driver
 ;;
@@ -5489,10 +5514,14 @@
         ((:c::load? head)
           (:wat::core::let
             [path (:wat::string::concat dir (:c::lit-text pg (:wat::core::nth ks 1)))
+             ;; where this file's nodes will start -- measured BEFORE the read extends the arena
+             base (:wat::core::length (:rd::St/arena (:c::Prog/src pg)))
              ;; read it into the SAME arena, so node indices from every file a program is made
              ;; of live in one space -- two arenas would give two node 7s
              st2 (rd/read-into (:rd::St/arena (:c::Prog/src pg)) (:wat::io::read-file path))
-             pg2 (:wat::core::assoc pg :src st2)]
+             pg2 (:wat::core::assoc (:wat::core::assoc pg :src st2) :srcs
+                   (:wat::core::conj (:c::Prog/srcs pg)
+                     (:c::Src :path path :base base :tops (:rd::St/kids st2))))]
             (:c::collect-in tops (:wat::core::+ i 1)
               (:c::collect-in (:rd::St/kids st2) 0 pg2 (:c::dir-of path))
               dir)))
@@ -5561,7 +5590,9 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) acc
     (:wat::core::let
       [f (:wat::core::nth (:c::Prog/fns pg) i)
-       o (:c::compile-fn (:c::Fn/node f) (:c::Fn/addr f) pg rt tb (:c::PassR/tail acc))]
+       o (:c::compile-fn (:c::Fn/node f) (:c::Fn/addr f)
+           (:wat::core::if (:c::Prog/exp pg) (:wat::core::assoc pg :cur (:c::Fn/name f)) pg)
+           rt tb (:c::PassR/tail acc))]
       (:c::pass pg (:wat::core::+ i 1) rt tb
         ;; one function's code, flattened once and appended as a single chunk: the flatten is
         ;; linear and happens once per function, so the whole program's code is still O(n)
@@ -5678,11 +5709,20 @@
 (:wat::core::defrecord :c::NodeR [pg <- :c::Prog  node <- :wat::core::i64])
 (:wat::core::defrecord :c::KidsR [pg <- :c::Prog  kids <- :rd::Kids  same <- :wat::core::bool])
 
+;; **`org` is the node this one replaces, or -1 for one the inliner made up** (a temporary, a
+;; binding vector, the `let` word). When the export is tracking positions, a copy stands where
+;; its original stood -- so a call rebuilt around an inlined argument is still found at the
+;; source position of the call that was written.
 (:wat::core::defn :c::mknode [pg <- :c::Prog kind <- :rd::Kind text <- :wat::core::String
-                              kids <- :rd::Kids] -> :c::NodeR
-  (:wat::core::let [st (:c::Prog/src pg)]
+                              kids <- :rd::Kids org <- :wat::core::i64] -> :c::NodeR
+  (:wat::core::let [st (:c::Prog/src pg)
+                    lc (:wat::core::if (:c::Prog/track pg)
+                         (:wat::core::conj (:c::Prog/locs pg)
+                           (:wat::core::if (:wat::core::< org 0) -1
+                             (:wat::core::nth (:c::Prog/locs pg) org)))
+                         (:c::Prog/locs pg))]
     (:c::NodeR :node (:wat::core::length (:rd::St/arena st))
-               :pg (:wat::core::assoc pg :src
+               :pg (:wat::core::assoc (:wat::core::assoc pg :locs lc) :src
                      (:wat::core::assoc st :arena
                        (:wat::core::conj (:rd::St/arena st)
                          ;; **`:k` must be set here too, and forgetting it was silent.** The
@@ -5795,7 +5835,7 @@
   (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
     (:wat::core::let [r (:c::inl-node pg (:wat::core::nth ks (:wat::core::+ i 1)) d false)
                       t (:c::mknode (:c::NodeR/pg r) (:rd::Kind.Symbol {}) (:c::inl-tmp i)
-                          (:wat::core::Vector :- [:wat::core::i64]))]
+                          (:wat::core::Vector :- [:wat::core::i64]) -1)]
       (:c::inl-temps (:c::NodeR/pg t) ks (:wat::core::+ i 1) n d
         (:wat::core::conj (:wat::core::conj acc (:c::NodeR/node t)) (:c::NodeR/node r))))))
 
@@ -5803,7 +5843,7 @@
                                   acc <- :rd::Kids] -> :c::KidsR
   (:wat::core::if (:wat::core::>= i n) (:c::KidsR :pg pg :kids acc :same true)
     (:wat::core::let [t (:c::mknode pg (:rd::Kind.Symbol {}) (:c::inl-tmp i)
-                          (:wat::core::Vector :- [:wat::core::i64]))]
+                          (:wat::core::Vector :- [:wat::core::i64]) -1)]
       (:c::inl-params (:c::NodeR/pg t) pv (:wat::core::+ i 1) n
         (:wat::core::conj (:wat::core::conj acc (:wat::core::nth pv (:wat::core::* i 3)))
                           (:c::NodeR/node t))))))
@@ -5849,15 +5889,15 @@
      fks (:c::kidsof pg nd)
      pv (:c::kidsof pg (:wat::core::nth fks 2))
      br (:c::inl-binds pg pv ks 0 d (:wat::core::Vector :- [:wat::core::i64]))
-     vr (:c::mknode (:c::KidsR/pg br) (:rd::Kind.Vector {}) "[]" (:c::KidsR/kids br))
+     vr (:c::mknode (:c::KidsR/pg br) (:rd::Kind.Vector {}) "[]" (:c::KidsR/kids br) -1)
      bo (:c::inl-body (:c::NodeR/pg vr) fks (:c::body-start fks 3 (:c::NodeR/pg vr))
           (:c::imin (:wat::core::- d 1) (:c::inl-depth-for pg head))
           (:wat::core::Vector :- [:wat::core::i64]))
      lr (:c::mknode (:c::KidsR/pg bo) (:rd::Kind.Symbol {}) ":wat::core::let"
-          (:wat::core::Vector :- [:wat::core::i64]))]
+          (:wat::core::Vector :- [:wat::core::i64]) -1)]
     (:c::mknode (:c::NodeR/pg lr) (:rd::Kind.List {}) (:c::text pg a)
       (:c::inl-cons (:c::NodeR/node lr) (:c::NodeR/node vr) (:c::KidsR/kids bo) 0
-        (:wat::core::Vector :- [:wat::core::i64])))))
+        (:wat::core::Vector :- [:wat::core::i64])) a)))
 
 (:wat::core::defn :c::inl-cons [l <- :wat::core::i64 v <- :wat::core::i64 body <- :rd::Kids
                                 i <- :wat::core::i64 acc <- :rd::Kids] -> :rd::Kids
@@ -5885,13 +5925,13 @@
                                    (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
                                                      (:wat::core::nth ks 0)) true)]
               (:wat::core::if (:c::KidsR/same cr) (:c::NodeR :pg (:c::KidsR/pg cr) :node a)
-                (:c::mknode (:c::KidsR/pg cr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids cr))))
+                (:c::mknode (:c::KidsR/pg cr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids cr) a)))
           (:wat::core::let
             [kr (:c::inl-kids pg ks 0 d
                   (:wat::core::and tail? (:c::tail-through? head))
                   (:wat::core::Vector :- [:wat::core::i64]) true)]
             (:wat::core::if (:c::KidsR/same kr) (:c::NodeR :pg (:c::KidsR/pg kr) :node a)
-              (:c::mknode (:c::KidsR/pg kr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids kr))))))))))
+              (:c::mknode (:c::KidsR/pg kr) (:rd::Kind.List {}) (:c::text pg a) (:c::KidsR/kids kr) a)))))))))
 
 ;; each clause is `(test body...)`: the test is never in tail position and every body form is in
 ;; whatever position the `cond` itself was. elf/src/logic.wat's `gcd` is a tail call in one.
@@ -5914,7 +5954,7 @@
                                                (:c::NodeR/node r))
                              (:wat::core::= (:c::NodeR/node r) (:wat::core::nth ks 0)))]
         (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node a)
-          (:c::mknode (:c::KidsR/pg br) (:c::kindv a pg) (:c::text pg a) (:c::KidsR/kids br)))))))
+          (:c::mknode (:c::KidsR/pg br) (:c::kindv a pg) (:c::text pg a) (:c::KidsR/kids br) a))))))
 
 ;; every function's `defn` rewritten, with the Fn pointing at the new one
 (:wat::core::defn :c::inl-fns [pg <- :c::Prog i <- :wat::core::i64 acc <- :c::FnV] -> :c::Prog
@@ -5929,7 +5969,8 @@
          nr (:wat::core::if (:c::KidsR/same br) (:c::NodeR :pg (:c::KidsR/pg br) :node (:c::Fn/node f))
               (:c::mknode (:c::KidsR/pg br) (:rd::Kind.List {}) (:c::text pg (:c::Fn/node f))
                 (:c::inl-head ks start 0 (:c::KidsR/kids br)
-                  (:wat::core::Vector :- [:wat::core::i64]))))]
+                  (:wat::core::Vector :- [:wat::core::i64]))
+                (:c::Fn/node f)))]
         (:c::inl-fns (:c::NodeR/pg nr) (:wat::core::+ i 1)
           (:wat::core::conj acc (:wat::core::assoc f :node (:c::NodeR/node nr))))))))
 
@@ -6075,14 +6116,179 @@
                     base (:c::lvl-scan pg 0 n false 0)]
     (:c::lvl-scan pg 0 n (:wat::core::>= base 10) base)))
 
+;; ---------------------------------------------------------------- what it decided, said out loud
+;;
+;; **Excursus 002 stone 1: the compiler must agree with itself at every boundary.** F-194 was
+;; one enum value typed `henum:` as the argument and `penum:` as the parameter it fed, and the
+;; binary segfaulted. Nothing in here checks that; this only SAYS it -- one line per decision,
+;; at the source position wat-grep gives the same node -- and `tools/rules/` joins the lines
+;; with rete. The rules derive no type: every type they compare is one printed here.
+;;
+;;   CArg   <file> <line> <col> <index> <callee> <compiled-in> <type>   at a call's `(`
+;;   CParam <file> <line> <col> <index> <function> <type>              at a parameter's name
+;;   FILE   <file>                                                     every file read
+;;
+;; Positions are wat-grep's, measured: 1-based line and column of a node's first character,
+;; columns in characters. They are recovered AFTER reading rather than carried by the reader,
+;; so that `elf/lib/reader.wat` -- which `elf/src/reader.wat` compiles into a program of its
+;; own -- is not touched. Each is checked: a node's text must be the source bytes at the
+;; position found, and positions must come out in exactly the order the reader numbered the
+;; nodes. Either failing stops the compile.
+
+(:wat::core::defrecord :c::LocW
+  [locs <- (:wat::core::Vector :- [:wat::core::i64])
+   i <- :wat::core::i64  line <- :wat::core::i64  col <- :wat::core::i64])
+
+;; a position as one word: file index, line, column
+(:wat::core::defn :c::loc-pack [fi <- :wat::core::i64 w <- :c::LocW] -> :wat::core::i64
+  (:wat::core::+ (:wat::core::* (:wat::core::+ (:wat::core::* fi 1000000) (:c::LocW/line w)) 10000)
+                 (:c::LocW/col w)))
+
+;; move the cursor to byte `j`, counting lines and CHARACTERS: a UTF-8 continuation byte is part
+;; of the character before it. Either sign of byte is accepted, so the answer does not depend on
+;; whether `byte-at` widens with or without it.
+(:wat::core::defn :c::loc-adv [src <- :wat::core::String j <- :wat::core::i64 w <- :c::LocW] -> :c::LocW
+  (:wat::core::if (:wat::core::>= (:c::LocW/i w) j) w
+    (:wat::core::let [b (wat.string/byte-at src (:c::LocW/i w))
+                      i2 (:wat::core::+ (:c::LocW/i w) 1)]
+      (:c::loc-adv src j
+        (:wat::core::cond
+          ((:wat::core::= b 10)
+            (:c::LocW :locs (:c::LocW/locs w) :i i2 :line (:wat::core::+ (:c::LocW/line w) 1) :col 1))
+          ((:wat::core::or (:wat::core::and (:wat::core::>= b 128) (:wat::core::< b 192))
+                           (:wat::core::and (:wat::core::>= b -128) (:wat::core::< b -64)))
+            (:c::LocW :locs (:c::LocW/locs w) :i i2 :line (:c::LocW/line w) :col (:c::LocW/col w)))
+          (:else
+            (:c::LocW :locs (:c::LocW/locs w) :i i2 :line (:c::LocW/line w)
+                      :col (:wat::core::+ (:c::LocW/col w) 1))))))))
+
+;; one node: skip what the reader skips, note where it starts, walk its children, and step past
+;; it. The reader numbers a node AFTER its children, so its position is appended after theirs.
+(:wat::core::defn :c::loc-node [src <- :wat::core::String n <- :wat::core::i64 fi <- :wat::core::i64
+                                a <- :wat::core::i64 pg <- :c::Prog w <- :c::LocW] -> :c::LocW
+  (:wat::core::let
+    [s (rd/skip src n (:c::LocW/i w))
+     w1 (:c::loc-adv src s w)
+     here (:c::loc-pack fi w1)
+     t (:c::text pg a)
+     e (:wat::core::+ s (wat.string/byte-length t))
+     k (:c::kindv a pg)
+     w2 (:wat::core::if (:wat::core::or (:wat::core::= k (:rd::Kind.List {}))
+                          (:wat::core::or (:wat::core::= k (:rd::Kind.Vector {}))
+                                          (:wat::core::= k (:rd::Kind.Map {}))))
+          (:c::loc-kids src n fi (:c::kidsof pg a) 0 pg (:c::loc-adv src (:wat::core::+ s 1) w1))
+          w1)
+     w3 (:c::loc-adv src e w2)]
+    (:wat::core::cond
+      ((:wat::core::> e n)
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "export: node " (:wat::i64::to-string a) " runs past its file")))
+      ((:wat::core::not= (wat.string/byte-subs src s e) t)
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "export: node " (:wat::i64::to-string a)
+                     " is not where the reader put it")))
+      ((:wat::core::not= (:wat::core::length (:c::LocW/locs w3)) a)
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "export: node " (:wat::i64::to-string a)
+                     " is out of the reader's order")))
+      (:else
+        (:c::LocW :locs (:wat::core::conj (:c::LocW/locs w3) here)
+                  :i (:c::LocW/i w3) :line (:c::LocW/line w3) :col (:c::LocW/col w3))))))
+
+(:wat::core::defn :c::loc-kids [src <- :wat::core::String n <- :wat::core::i64 fi <- :wat::core::i64
+                                ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog
+                                w <- :c::LocW] -> :c::LocW
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) w
+    (:c::loc-kids src n fi ks (:wat::core::+ i 1) pg
+      (:c::loc-node src n fi (:wat::core::nth ks i) pg w))))
+
+;; every file, in reading order; each must begin exactly where the previous one ended
+(:wat::core::defn :c::loc-files [pg <- :c::Prog fi <- :wat::core::i64
+                                 locs <- (:wat::core::Vector :- [:wat::core::i64])]
+    -> (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::>= fi (:wat::core::length (:c::Prog/srcs pg))) locs
+    (:wat::core::let [sr (:wat::core::nth (:c::Prog/srcs pg) fi)
+                      src (:wat::io::read-file (:c::Src/path sr))]
+      (:wat::core::if (:wat::core::not= (:wat::core::length locs) (:c::Src/base sr))
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "export: " (:c::Src/path sr)
+                     " does not start where it was read"))
+        (:c::loc-files pg (:wat::core::+ fi 1)
+          (:c::LocW/locs (:c::loc-kids src (wat.string/byte-length src) fi (:c::Src/tops sr) 0 pg
+                           (:c::LocW :locs locs :i 0 :line 1 :col 1))))))))
+
+(:wat::core::defn :c::with-locs [pg <- :c::Prog] -> :c::Prog
+  (:wat::core::let [locs (:c::loc-files pg 0 (:wat::core::Vector :- [:wat::core::i64]))]
+    (:wat::core::if (:wat::core::not= (:wat::core::length locs)
+                                      (:wat::core::length (:rd::St/arena (:c::Prog/src pg))))
+      (:wat::kernel::assertion-failed! :message "export: a node the reader made has no position")
+      (:wat::core::assoc pg :locs locs))))
+
+;; "<file> <line> <col>", or "? 0 0" for a node the inliner made up -- which the checker counts
+(:wat::core::defn :c::loc-str [pg <- :c::Prog a <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [l (:wat::core::if (:wat::core::< a (:wat::core::length (:c::Prog/locs pg)))
+                        (:wat::core::nth (:c::Prog/locs pg) a) -1)]
+    (:wat::core::if (:wat::core::< l 0) "? 0 0"
+      (:wat::string::concat
+        (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) (:wat::core::quot l 10000000000)))
+        " " (:wat::i64::to-string (:wat::core::rem (:wat::core::quot l 10000) 1000000))
+        " " (:wat::i64::to-string (:wat::core::rem l 10000))))))
+
+;; at a call to a user function: the type `:c::type-of` gives each argument in the environment
+;; the call is compiled in -- the same question every decision about that argument asks
+(:wat::core::defn :c::fact-args [a <- :wat::core::i64 ks <- :c::Kids i <- :wat::core::i64
+                                 head <- :wat::core::String env <- :c::Env pg <- :c::Prog]
+    -> :wat::core::nil
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) nil
+    (:wat::core::do
+      (:wat::kernel::println
+        (:wat::string::concat "CArg " (:c::loc-str pg a)
+          " " (:wat::i64::to-string (:wat::core::- i 1)) " " head " " (:c::Prog/cur pg)
+          " " (:c::type-of (:wat::core::nth ks i) env pg)))
+      (:c::fact-args a ks (:wat::core::+ i 1) head env pg))))
+
+;; for a `defn`: the type each parameter has in the environment its body is compiled in
+(:wat::core::defn :c::fact-params [pv <- :c::Kids i <- :wat::core::i64 fname <- :wat::core::String
+                                   env <- :c::Env pg <- :c::Prog] -> :wat::core::nil
+  (:wat::core::if (:wat::core::or (:wat::core::not (:c::Prog/exp pg))
+                                  (:wat::core::>= i (:wat::core::length env))) nil
+    (:wat::core::do
+      (:wat::kernel::println
+        (:wat::string::concat "CParam " (:c::loc-str pg (:wat::core::nth pv (:wat::core::* i 3)))
+          " " (:wat::i64::to-string i) " " fname " " (:c::Bind/ty (:wat::core::nth env i))))
+      (:c::fact-params pv (:wat::core::+ i 1) fname env pg))))
+
+(:wat::core::defn :c::fact-files [pg <- :c::Prog i <- :wat::core::i64] -> :wat::core::nil
+  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/srcs pg))) nil
+    (:wat::core::do
+      (:wat::kernel::println
+        (:wat::string::concat "FILE " (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) i))))
+      (:c::fact-files pg (:wat::core::+ i 1)))))
+
 (:wat::core::defn :c::compile [src-path <- :wat::core::String out-path <- :wat::core::String] -> :wat::core::nil
+  (:c::compile-as src-path out-path false))
+
+;; **`exp?` asks the compiler to SAY what it decided** (excursus 002 stone 1): at every call to
+;; a user function, the type it gave each argument; for every `defn`, the type it gave each
+;; parameter -- both at the source position wat-grep would give the same node. It changes what
+;; is PRINTED and nothing that is emitted: `tools/rules.sh` compiles every program both ways and
+;; compares the binaries byte for byte.
+(:wat::core::defn :c::compile-as [src-path <- :wat::core::String out-path <- :wat::core::String
+                                  exp? <- :wat::core::bool] -> :wat::core::nil
   (:wat::core::let
     [st (rd/read (:wat::io::read-file src-path))
      pg-c (:c::collect-in (:rd::St/kids st) 0
-            (:wat::core::assoc (:c::empty-prog) :src st) (:c::dir-of src-path))
+            (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:c::empty-prog) :src st)
+                                 :track exp?)
+              :srcs (:wat::core::conj (:wat::core::Vector :- [:c::Src])
+                      (:c::Src :path src-path :base 0 :tops (:rd::St/kids st))))
+            (:c::dir-of src-path))
+     ;; where every node the reader made starts -- before the inliner makes more, so that each
+     ;; node it makes can inherit the position of the one it replaces (`:c::mknode`)
+     pg-x (:wat::core::if exp? (:c::with-locs pg-c) pg-c)
      ;; which functions reach a `poke`, transitively, before any code is emitted
      ;; every record and alias is known now, so the types can be resolved in any order
-     pg-r (:c::fill-recs pg-c 0 (:wat::core::Vector :- [:c::Rec]))
+     pg-r (:c::fill-recs pg-x 0 (:wat::core::Vector :- [:c::Rec]))
      pg-f (:c::fill-fns pg-r 0 (:wat::core::Vector :- [:c::Fn]))
      pg-p (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
      ;; the calls that become `let`s, before either pass sees a node
@@ -6115,14 +6321,17 @@
      main-addr (:wat::core::if (:wat::core::>= main-clj 0) main-clj
                  (:c::fn-addr pg1 ":user::main" 0))
 
-     ;; PASS TWO: now they do
-     p2 (:c::pass pg1 0 rt tail-base (:c::empty-pass))
+     ;; PASS TWO: now they do -- and, asked, it says what it decided (pass one would say it
+     ;; twice)
+     p2 (:c::pass (:wat::core::if exp? (:wat::core::assoc pg1 :exp true) pg1)
+                  0 rt tail-base (:c::empty-pass))
      text (:wat::string::concat (:c::stub main-addr rt) (:c::buf-str (:c::PassR/code p2))
             rt-hex)
      written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)
         (:wat::kernel::assertion-failed! :message "compile: no user/main") nil)
+      (:wat::core::if exp? (:c::fact-files pg1 0) nil)
       ;; the invariant the two-pass technique rests on
       (:c::same-lens (:c::PassR/lens p1) (:c::PassR/lens p2) 0)
       (:wat::test::assert-eq (:c::buf-len (:c::PassR/tail p1))

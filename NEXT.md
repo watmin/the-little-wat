@@ -17,28 +17,30 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 001 stone 1, un-held: rebase the caller-side release onto `main`
+### NEXT STRIKE — make the compiler's types one derivation; turn the rules gate to zero
 
-**Read `docs/excursus/2026/09/001-reclamation-beyond-scope/` top to bottom** -- DESIGN, then every
-SCORE in stone order. That directory is the truth; this points at it.
+**Read `docs/excursus/2026/09/002-no-guesses/` first** (DESIGN, the `rete/` experiment, stone 1's
+SCORE), then `001-reclamation-beyond-scope/`. Those directories are the truth; this points at them.
 
-**Where it stands.** Stones 0, 0a, 0b LANDED: F-188 closed (nine doors, every one a probe in
-`elf/probe/`, all in `elf/src/borrowed.wat`); every read out of a container goes through
-`:c::read-out`, which `tools/reads.sh` checks from inside `elf-run`; F-189's cost 71% recovered
-in INSTRUCTIONS (+2.382% over `dada88f`) -- but NOT shown recovered in TIME: stone 0 costs the
-compiler ~5-7% in cycles and 0b's gain is inside this workload's measured 1.8% layout floor
-(F-192). The ~5% is real and unexplained; the memory touch is the hypothesis.
+**The pivot (2026-09-23):** the builder chose rules. Phase 1 has landed -- `tools/rules.sh`, run by
+`elf-run` in REPORT mode, has wat-rs's native rete check that the compiler AGREES WITH ITSELF at every
+call boundary (the compiler exports its own decisions; the rules only join them; no type is derived
+twice). Phase 2 is one fact, one derivation inside the compiler. Phase 3 is the compiler compiling
+rule sets, with wat-rs's rete as the oracle.
 
-**Stone 1** (the caller-side release, `escape.wat` flat) is HELD on branch `excursus-001-stone-1`
-(`a7551a6`). To merge it must: rebase onto `main`; show `callrel-borrow` and every other F-188
-probe AGREEING with the release on; take an `allocates?` gate so fib32 stops paying +9.86% for a
-release with nothing to free -- `:c::allocates?` does NOT exist yet, it is new work; and replace
-`mem.sh` §7's hardcoded "FLAT" echo with a real gate (n = 200,000: ~1 MB released vs ~13.7 MB
-leaking discriminates).
+**The gate currently reports 8 conflicts, 4 causes, all real:**
+- F-194: `:c::type-of-form`'s variant arm ignores the TIER (`henum:` vs `penum:`)
+- the same arm drops `;arg` (`elf/src/option.wat`, inliner-dependent)
+- F-195: no `match` arm in `:c::type-of-form`, so a match-bound value is guessed `"i64"` -- a SILENT
+  WRONG ANSWER on `main` (`elf/probe/match-i64.wat`: native `4|5`, interpreter `4|4`)
 
-**Also open, recorded not drawn:** F-190 (checker, parameter re-binding) · F-191 (a valid program
-segfaults natively, mechanism not established) · `reads.sh` misses a load placed after another
-instruction in the same hex literal (the 0a SCORE has the tightening).
+The next stone fixes these at the root -- ONE function answers a value's type, every path calls it --
+and flips the rules gate from report to MUST-BE-ZERO. Then stone 0b (per-type count guard) re-lands on
+top of it, and stone 1 (caller-side release, branch `excursus-001-stone-1`) after.
+
+**Also open:** stage 0 is +12-15% since stone 1 (408 s vs 348-365 s) · F-190, F-191 · `reads.sh`'s
+in-literal load gap · the primitives question -- maps and symbols are on every path (rete memories, the
+REPL, the compiler's own linear scans), and where the compiler spends its time has never been profiled.
 
 ### LANDED since this section last read "next" (2026-09-23)
 

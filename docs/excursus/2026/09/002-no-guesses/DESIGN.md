@@ -1,6 +1,10 @@
 # Excursus 002 — no guesses: every place the compiler knows less than the language
 
-**Status: DRAWN 2026-09-23.** A discovery sweep, not a change. Its output is a verified ledger.
+**Status: 2026-09-23.** **Stone 1 LANDED** -- rete checks the compiler: `tools/rules.sh` (run by
+`elf-run`, report mode) joins what the compiler DECIDED at every call boundary and reports where it
+disagrees with itself. First run: 8 conflicts across 4 causes -- F-194 (tier ignored), `;arg` dropped
+(inliner-dependent), and the `match` → `"i64"` guess, which led to F-195, a silent wrong answer on
+`main`. The discovery sweep and the gate's growth continue from here.
 
 > Builder: *"wat should deliver perfect knowledge... i want to know every place where perfect
 > knowledge isn't known... at runtime dynamic values can arrive... but they are bounded... ints are
