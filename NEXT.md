@@ -52,7 +52,10 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    never ending. The builder: *"let's get this fixed - we have a strong habit of fixing what's broken
    when we encounter it"*. Grok builds wat-rs in its OWN target dir until 003 stone 1 is weighed.
 2a'. **DONE — excursus 005, the compiler's reader is total (F-205).** Five standing refusals.
-2b. **Then persistent collections, excursus 006** -- the builder's ruling (2026-09-24): *"in our
+2a''. **Excursus 006 — a macro says what it returns (F-206), BEFORE 004's renderer lands.** The
+   builder's four-questions ruling: candidate E. `CRAWL.md` sized it: one declaration changes; the
+   real work is type-checking macro bodies at all. 004's stepping is credited and waits on it.
+2b. **Then persistent collections, excursus 007** -- the builder's ruling (2026-09-24): *"in our
    compiler - all of the collections must be persistent - the only thing that differs between our
    compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The
    compiled Vector included; model wat-rs's `PVec`/`PMap` (array, then an rpds trie, promotion

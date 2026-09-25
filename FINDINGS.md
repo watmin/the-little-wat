@@ -15566,3 +15566,22 @@ The class is the one F-204 found in `eval-step!` the same day: a step that makes
 fix is structural -- every read consumes at least one byte or refuses; a closer that does not
 match, or end of input inside a list, is a compile-time refusal naming the position -- not a
 guard on this one character.
+
+### F-206: `wat --check` does not type-check a macro body, and a macro's declared return can lie
+
+**Open -- excursus 006.** Found sizing the builder's "a macro says what it returns" (candidate E).
+`probes/macro-body-untyped.wat`, `probes/macro-declared-form-returns-int.wat`, at wat-rs `75fcc7638`:
+
+| program | `wat --check` | `wat` |
+|---|---|---|
+| a macro arm `(:wat::string::length 7)` -- an integer to a string function -- never taken | passes | prints `3` |
+| the same body in a macro nobody calls | passes | prints `1` |
+| `(defmacro :my::answer [] -> :wat::WatAST 42)` -- declared a form, returns an integer | passes | prints `42` |
+| `(defmacro :my::answer [] -> :wat::core::i64 42)` -- declared honestly | **refused**: "a macro always expands to a form" | -- |
+
+The parser forces every macro to declare `:wat::WatAST`, and nothing checks the body against it:
+the honest declaration is refused and the dishonest one accepted. What refuses a macro whose body
+produces a record or a Vector today is `value_to_watast` failing on aggregates, which arc 249's
+test and `src/kernel/source.rs:97` lean on as the contract. The crawl
+(`docs/excursus/2026/09/006-macros-say-what-they-return/CRAWL.md`): of 934 macros expanded across
+2,616 programs, 933 return a form and one (`:t::deep-answer`) returns an integer.
