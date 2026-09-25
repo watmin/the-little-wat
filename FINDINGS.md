@@ -15477,3 +15477,30 @@ and the compiler already agrees).
 
 The second row is the totality ruling broken outright: the compiler did not know the argument
 type and emitted code anyway. Closures make function types common, so this is fixed first.
+
+### F-203: a function type written as a collection's type argument passed `--check` and was refused at run time
+
+**Fixed in wat-rs**, branch `the-little-wat` commit `STONE(the-little-wat/fn-bracket-ctor)` (local, not pushed). Found weighing excursus 003 stone
+1: an adversarial probe that wanted a Vector of functions inside an enum died in the interpreter,
+not the compiler. `probes/fnty-vector-*.wat`.
+
+| spelling | `wat --check` | `wat` before | after |
+|---|---|---|---|
+| `(Vector :- [:user::Op] …)`, `Op` an alias of `[i64 :-> i64]` | ok | `11` | `11` |
+| `(Vector :- [[i64 :-> i64]])`, then `conj` | ok | **malformed :wat::core::Vector** | `11` |
+| `(Vector :- [[i64 :-> i64]] user/inc)` | ok | **malformed** | `11` |
+| the same, keyword spelling | ok | **malformed** | `11` |
+
+`eval_vector_ctor` and `eval_hashset_ctor` (`wat-rs/src/collection/eval.rs`) matched their type
+argument's SYNTAX: a `Keyword` passed, a `List` went through `parse_type_node`, and everything
+else fell to a catch-all `_` arm -- "first argument must be a `(Head :- [T …])` type form". The
+function-type bracket (arc 251.4c) is a `WatAST::Vector`, so it fell there. The checker reads every
+shape through `parse_type_node` -- the comment above the match calls it *"the substrate's one door
+reading all four type node shapes"* -- so the two disagreed on one shape. A catch-all arm written
+before the fourth shape existed turned it into "malformed": the reason this repo writes no `_` arms.
+
+The fix routes `List | Vector` through the one door in both constructors; the Keyword arm is
+unchanged and a bracket with no `:->` is still refused. Three unit tests
+(`f203_*` in `collection::eval`); the two acceptance tests FAIL with the old arm restored.
+`src/macros/parse.rs:163` has the same match shape for `defmacro`'s return type -- a different
+rule (a macro returns syntax), not changed.
