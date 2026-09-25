@@ -15585,3 +15585,22 @@ produces a record or a Vector today is `value_to_watast` failing on aggregates, 
 test and `src/kernel/source.rs:97` lean on as the contract. The crawl
 (`docs/excursus/2026/09/006-macros-say-what-they-return/CRAWL.md`): of 934 macros expanded across
 2,616 programs, 933 return a form and one (`:t::deep-answer`) returns an integer.
+
+### F-207: `keyword::to-string` disagrees with `str` -- the verb named "to string" drops the colon
+
+**Open -- excursus 007.** Found when excursus 006's first check refused 17 stdlib macro sites that
+call `:wat::keyword::to-string` on a keyword FORM. Measured at wat-rs `75fcc7638`:
+
+| | wat | Clojure 1.12.6 |
+|---|---|---|
+| `(str :foo)` | `":foo"` | `":foo"` |
+| `(:wat::keyword::to-string :foo)` | **`"foo"`** | no such verb; `(name :foo)` is `"foo"` |
+| `(from-string "foo")` | `:foo` | `(keyword "foo")` is `:foo` |
+| `(from-string ":foo")` | refused | `(keyword ":foo")` is `::foo`, a different keyword |
+
+The pair is consistent with itself (`src/intrinsic/keyword.rs`: to-string drops the sigil,
+from-string refuses one, they round-trip) and named for something else: two answers to "this
+keyword as a string". The builder, 2026-09-25, on seeing Clojure's `name`: *"that feels good. I
+accept that 4 YES derivation"* -- `to-string`/`from-string` are the WRITTEN form (`":foo"` <->
+`:foo`, from-string requiring the colon); `name`/`from-name` are the colon-free name. 49 calls to
+`to-string` and 168 to `from-string` across wat-rs and the-little-wat.
