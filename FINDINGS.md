@@ -15397,3 +15397,36 @@ every probe. **wat already knows the answer:** the checker types that `None` as
 `(:user::Opt.None :- [:wat::core::String])`, inferring `T` from the parameter the argument feeds. The
 honest fix is the same bidirectional step in the compiler's typer: an argument's type is completed by
 the parameter it feeds.
+
+### F-200: an enum over an enum was laid out as its payload -- `Some(None)` read as `None`, and stone 6 turned it into a segfault
+
+**Open -- the root fix is proven on a scratch copy and handed back with stone 6.** Found by the
+orchestrator's adversarial probes while weighing excursus 002 stone 6.
+`elf/probe/nested-enum-collide.wat`, `elf/probe/nested-enum-count.wat`.
+
+`:c::enum-tier` (`elf/compile.wat:964`) gives an enum tier 1 -- "the value IS its payload" -- when
+its one payload's type is a pointer (`:c::ptr-ty?`, `:3705`). `penum:` and `henum:` are pointer
+types, so `Opt<Opt<String>>` is tier 1: the outer `Some`'s value is the inner `Opt` itself. But
+tier 1 works only because a payload is never below `:c::unit-threshold`, and an inner enum CAN be:
+the inner `None` is its tag. The outer `Some(None)` and the outer `None` become the same word.
+
+| | interpreter | HEAD `b6787ad` native | stone 6 as struck |
+|---|---|---|---|
+| `nested-enum-collide.wat` (`match` on `Some(None)`, then on `None`) | `1\|0` | **`0\|0`**, exit 0 | -- |
+| `nested-enum-count.wat` (a `Some` of a parent `Opt`, passed twice) | `-2\|-2\|6` | agrees | **signal 11** |
+
+At HEAD it is a silent wrong answer. Stone 6 then derived "a payload variant is never a unit tag",
+which is true only when the tiering is right: it dropped the tag test in front of a tier-1 `Some`
+whose payload was the `None` tag, and `cmp [rax-8],0` read below address 4096.
+
+**The root fix, one predicate:** tier 1 only when the payload is a pointer that is never a unit tag
+-- `(and (:c::ptr-ty? p) (not (:c::maybe-unit? p)))`. On a scratch copy of the stone-6 tree, both
+probes above agree, as do `penum-str-let`, `count-literal`, `count-some-str`, `count-some-vec`,
+`count-none`, `penum-spelled-henum`, `keys-tier1-alias`, `tier1-borrow`, and three new adversarial
+probes (`variant-vec-mixed`, `variant-if-join`, `variant-match-join`). Corpus effect, gates and bootstrap
+are not yet measured -- that is the re-strike.
+
+**The lesson for the weighing.** Every fixture stone 6 was given, and every one it wrote, used a
+payload of `String` or `Vector`. The derivation table's row "payload variant, tier 1: the payload
+itself, never a unit tag" was true of every fixture and false of the type system. A derivation row
+has to be checked against a payload of every KIND the tier admits -- including another enum.
