@@ -17,16 +17,16 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — closures: excursus 003 stone 1 (whole function types) with Grok
+### NEXT STRIKE — excursus 004 (eval-step!) with Grok; then closures' stone 2
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** 003 stone 1 was drawn and handed to Grok (`kind=briefed`). Read
-`/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored`, weigh it against
-`EXPECTATIONS-stone-1-whole-function-types.md` on your OWN runs, and hunt adversarially -- nested
-function types, a function type inside a Vector and an enum argument -- until two rounds are dry.
+**On waking:** 003 stone 1 LANDED (`edba38e`, `WEIGH-stone-1-credited.md`). 004 stone 1 is with
+Grok, in wat-rs, building in its OWN target dir. Read `/home/watmin/Work/holon/.pulsare/to-claude`;
+on `kind=scored` weigh 004 against its EXPECTATIONS on your own runs. Then draw 003 stone 2 -- its
+brief MUST carry "the gate sees an indirect call's arguments" as a row (003 stone 1's named gap).
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
@@ -41,8 +41,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    Refuted once: it exposed **F-200** (an enum over an enum laid out as its payload, `Some(None)`
    read as `None`), fixed at the root in `:c::enum-tier`. Lesson: check a derivation row against a
    payload of EVERY kind the tier admits, including another enum.
-2. **Closures** -- the builder's goal, excursus 003. Stone 1 in flight; stones 2 and 3 are drawn in
-   its DESIGN, and stone 3 needs its disconfirming probe (capture types) before its brief. Fixtures with known interpreter
+2. **Closures** -- the builder's goal, excursus 003. Stone 1 DONE (whole function types, F-202);
+   stones 2 and 3 are drawn in its DESIGN; stone 3 needs its disconfirming probe (capture types). Fixtures with known interpreter
    answers are `probes/closure-captures.wat` (126, 86: capture of a value, of a function, of a
    closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
    The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so

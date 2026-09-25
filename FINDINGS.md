@@ -15456,7 +15456,8 @@ constructor is the first read.
 
 ### F-202: a function type is only its arity to the compiler -- a type-wrong program compiled and segfaulted, a valid one was refused
 
-**Open -- excursus 003 stone 1.** Found by the orchestrator's disconfirming probe while drawing
+**Fixed** by excursus 003 stone 1 (`edba38e`): every row below now refuses or agrees exactly as
+`wat --check` does. Found by the orchestrator's disconfirming probe while drawing
 closures. `elf/probe/fnty-*.wat`.
 
 `[A B :-> R]` is spelled `"fn:2:R"` (`elf/compile.wat:1387-1460`): the arity and the return, no
