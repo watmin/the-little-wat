@@ -1774,11 +1774,17 @@
 (:wat::core::defn :c::let-binds [lt <- :wat::core::i64 pg <- :c::Prog] -> :c::Kids
   (:c::kidsof pg (:wat::core::nth (:c::kidsof pg lt) 1)))
 
-;; one binding: its name, at the type `:c::bind-ty` gives it in the environment so far
+;; one binding: its name, at the type `:c::bind-ty` gives it in the environment so far.
+;; A `{:keys ...}` pattern is several names, each at the field's declared type (`:c::key-ty`).
 (:wat::core::defn :c::ty-bind1 [lt <- :wat::core::i64 i <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :c::Env
-  (:wat::core::conj env
-    (:c::Bind :name (:c::text pg (:wat::core::nth (:c::let-binds lt pg) i)) :disp 0 :reg -1
-              :ty (:c::bind-ty lt i env pg))))
+  (:wat::core::let [bs (:c::let-binds lt pg)
+                    pat (:wat::core::nth bs i)]
+    (:wat::core::if (:c::keys? pat pg)
+      (:c::keys-env (:c::kidsof pg (:c::keys-vec pat pg)) 0
+        (:c::agg-of (:wat::core::nth bs (:wat::core::+ i 1)) pat env pg) env pg)
+      (:wat::core::conj env
+        (:c::Bind :name (:c::text pg pat) :disp 0 :reg -1
+                  :ty (:c::bind-ty lt i env pg))))))
 
 ;; ---------------------------------------------------------------- where a value is WANTED
 ;;
@@ -2063,9 +2069,9 @@
       (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) 0
         (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
           (:wat::core::cond
-            ;; one per `name expr` pair in the binding vector
+            ;; one slot per bound name, plus the subject a `{:keys}` pattern keeps
             ((:wat::core::and (:c::let? h) (:wat::core::>= (:wat::core::length ks) 2))
-              (:wat::core::/ (:wat::core::length (:c::kidsof pg (:wat::core::nth ks 1))) 2))
+              (:c::bind-slots (:c::kidsof pg (:wat::core::nth ks 1)) 0 pg))
             ;; the subject, stored once before any arm runs
             ((:wat::core::and (:c::match? h) (:wat::core::>= (:wat::core::length ks) 3)) 1)
             (:else 0)))))))
@@ -4300,13 +4306,160 @@
       (:c::patch o3 at (:asm::le (:wat::core::- (:c::codelen o3) (:wat::core::+ at 4)) 4)))))
 
 ;; ---------------------------------------------------------------- let
+;;
+;; `{:keys [f g]}` binds each named field of one aggregate. The aggregate is a variant or a
+;; record; the parent enum is not one, and wat's checker refuses it ("expects an aggregate
+;; type"), so this does too. The bound name's type is the field's declared type -- a variant's
+;; `:c::arm-ftys`, a record's `:c::Rec/ftypes` -- which is the same table `:c::arm-env` and
+;; `:c::acc-ty` already read. The load is `:c::arm-binds`'s: tier 1's payload IS the value, and
+;; every other field comes out through `:c::read-out`.
 
 (:wat::core::defrecord :c::BindR [o <- :c::Out  env <- :c::Env  slot <- :wat::core::i64])
+
+;; what an aggregate offers a destructure: its field names, their declared types at this
+;; instantiation, and the tier the value is laid out as. `-1` is a record (no tag slot).
+(:wat::core::defrecord :c::Agg
+  [fields <- (:wat::core::Vector :- [:wat::core::String])
+   ftys <- (:wat::core::Vector :- [:wat::core::String])
+   tier <- :wat::core::i64])
+
+(:wat::core::defn :c::keys? [p <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:wat::core::= (:c::kindv p pg) (:rd::Kind.Map {}))
+    (:wat::core::let [ks (:c::kidsof pg p)]
+      (:wat::core::and (:wat::core::>= (:wat::core::length ks) 2)
+        (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 0) pg) (:rd::Kind.Keyword {}))
+          (:wat::core::and (:wat::core::= (:c::text pg (:wat::core::nth ks 0)) ":keys")
+            (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Vector {}))))))))
+
+(:wat::core::defn :c::keys-vec [p <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::nth (:c::kidsof pg p) 1))
+
+(:wat::core::defn :c::keys-n [p <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::length (:c::kidsof pg (:c::keys-vec p pg))))
+
+;; the subject, plus one slot per bound name. A tier-1 alias does not use its extra slot; the
+;; frame still reserves it, so this count does not have to know the tier.
+(:wat::core::defn :c::pat-slots [p <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:c::keys? p pg) (:wat::core::+ 1 (:c::keys-n p pg)) 1))
+
+(:wat::core::defn :c::bind-slots [bs <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) 0
+    (:wat::core::+ (:c::pat-slots (:wat::core::nth bs i) pg)
+      (:c::bind-slots bs (:wat::core::+ i 2) pg))))
+
+;; `:c::ty-fail` answers a String. This answers an `:c::Agg`, so a refusing arm and a succeeding
+;; one are the same type to the checker -- the same shape as `:c::env-fail`.
+(:wat::core::defn :c::agg-fail [what <- :wat::core::String a <- :wat::core::i64 pg <- :c::Prog]
+    -> :c::Agg
+  (:wat::kernel::assertion-failed!
+    :message (:wat::string::concat "compile: cannot type " what " at " (:c::where pg a) ": "
+               (:c::text pg a))))
+
+;; the initialiser's type, classified. A variant type names the variant; the parent enum names
+;; the enum, and that is the refusal. A free `T` is refused for the same reason a `match` on
+;; one is: the tier, which is the load, would be chosen from nothing.
+(:wat::core::defn :c::agg-of [init <- :wat::core::i64 pat <- :wat::core::i64 env <- :c::Env
+                              pg <- :c::Prog] -> :c::Agg
+  (:wat::core::let [t (:c::type-of init env pg)
+                    rn (:c::rec-name-of t)
+                    no (:wat::string::concat "a keys-destructure of a value that is not an aggregate"
+                         " -- a variant or a record")]
+    (:wat::core::if (:wat::core::not= rn "")
+      (:wat::core::let [ri (:c::rec-index (:c::Prog/recs pg) rn 0)]
+        (:wat::core::if (:wat::core::< ri 0)
+          (:c::agg-fail "a keys-destructure of a record this compiler does not know" pat pg)
+          (:wat::core::let [r (:wat::core::nth (:c::Prog/recs pg) ri)]
+            (:c::Agg :fields (:c::Rec/fields r) :ftys (:c::Rec/ftypes r) :tier -1))))
+      (:wat::core::let [ei (:c::ty-enum t pg)]
+        (:wat::core::if (:wat::core::or (:wat::core::< ei 0)
+                          (:wat::core::= (:c::ty-name t)
+                            (:c::Enum/name (:wat::core::nth (:c::Prog/enums pg) ei))))
+          (:c::agg-fail no pat pg)
+          (:wat::core::if (:c::free-ty? t)
+            (:c::agg-fail "a keys-destructure of a variant whose type parameter nothing has fixed" pat pg)
+            (:wat::core::let [tg (:c::variant-tag (:c::Prog/enums pg) (:c::ty-name t) 0)]
+              (:wat::core::if (:wat::core::< tg 0)
+                (:c::agg-fail "a keys-destructure of a variant this compiler does not know" pat pg)
+                (:c::Agg :fields (:c::arm-fields pg ei tg)
+                         :ftys (:c::arm-ftys pg ei tg (:c::enum-arg t))
+                         :tier (:c::enum-tier (:c::Prog/enums pg) ei (:c::enum-arg t) pg))))))))))
+
+;; the field's declared type. The typer (`:c::keys-env`) and the generator (`:c::keys-each`)
+;; both ask here, so a bound local is not typed a second way.
+(:wat::core::defn :c::key-ty [ag <- :c::Agg nm <- :wat::core::String sym <- :wat::core::i64
+                              pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [fi (:c::field-index (:c::Agg/fields ag) nm 0)]
+    (:wat::core::if (:wat::core::or (:wat::core::< fi 0)
+                      (:wat::core::>= fi (:wat::core::length (:c::Agg/ftys ag))))
+      (:c::ty-fail "a keys-destructure field the aggregate does not declare" sym pg)
+      (:wat::core::nth (:c::Agg/ftys ag) fi))))
+
+(:wat::core::defn :c::keys-env [ks <- :c::Kids i <- :wat::core::i64 ag <- :c::Agg env <- :c::Env
+                                pg <- :c::Prog] -> :c::Env
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) env
+    (:wat::core::let [sym (:wat::core::nth ks i)
+                      nm (:c::text pg sym)]
+      (:c::keys-env ks (:wat::core::+ i 1) ag
+        (:wat::core::conj env
+          (:c::Bind :name nm :disp 0 :reg -1 :ty (:c::key-ty ag nm sym pg)))
+        pg))))
+
+;; a record field sits at `8+8*fi`; a heap variant keeps the tag in slot 0, so field `fi` is
+;; one slot further -- the same address `:c::arm-binds` reads.
+(:wat::core::defn :c::field-disp [tier <- :wat::core::i64 fi <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::< tier 0)
+    (:wat::core::+ 8 (:wat::core::* 8 fi))
+    (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1)))))
+
+(:wat::core::defn :c::keys-each [ks <- :c::Kids i <- :wat::core::i64 ag <- :c::Agg
+                                 sd <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                 pg <- :c::Prog a <- :wat::core::i64 slot <- :wat::core::i64]
+    -> :c::BindR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
+    (:c::BindR :o o :env env :slot slot)
+    (:wat::core::let
+      [sym (:wat::core::nth ks i)
+       nm (:c::text pg sym)
+       ty (:c::key-ty ag nm sym pg)
+       fi (:c::field-index (:c::Agg/fields ag) nm 0)
+       ;; tier 1: the payload IS the subject, exactly as a match arm binds it. There is no
+       ;; field to read out. The slot is still consumed so `:c::pat-slots` stays honest.
+       alias? (:wat::core::= (:c::Agg/tier ag) 1)
+       disp (:wat::core::if alias? sd (:wat::core::* -8 (:wat::core::+ slot 1)))
+       o1 (:wat::core::if alias? o
+            (:wat::core::let
+              [ld (:c::emit o (:c::load (:c::fp o sd) (:c::Out/fpr o)))
+               rd (:c::read-out ty
+                    (:c::Read.At {:d (:c::field-disp (:c::Agg/tier ag) fi)}) ld a pg)]
+              (:c::emit rd (:c::store (:c::fp rd disp) (:c::Out/fpr rd)))))]
+      (:c::keys-each ks (:wat::core::+ i 1) ag sd o1
+        (:wat::core::conj env (:c::Bind :name nm :disp disp :reg -1 :ty ty))
+        pg a (:wat::core::+ slot 1)))))
+
+(:wat::core::defn :c::bind-keys [pat <- :wat::core::i64 init <- :wat::core::i64 o <- :c::Out
+                                 env <- :c::Env pg <- :c::Prog rt <- :c::Layout
+                                 tb <- :wat::core::i64 slot <- :wat::core::i64
+                                 a <- :wat::core::i64] -> :c::BindR
+  (:wat::core::let
+    [ag (:c::agg-of init pat env pg)
+     sd (:wat::core::* -8 (:wat::core::+ slot 1))
+     o1 (:c::share init env pg
+          (:c::expr init o env pg rt tb slot (:c::no-tail)))
+     o2 (:wat::core::assoc
+          (:c::emit o1 (:c::store (:c::fp o1 sd) (:c::Out/fpr o1))) :rax "")]
+    (:c::keys-each (:c::kidsof pg (:c::keys-vec pat pg)) 0 ag sd o2 env pg a
+      (:wat::core::+ slot 1))))
 
 (:wat::core::defn :c::bind-each [lt <- :wat::core::i64 bs <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
                                  slot <- :wat::core::i64] -> :c::BindR
   (:wat::core::if (:wat::core::>= i (:wat::core::length bs)) (:c::BindR :o o :env env :slot slot)
+    (:wat::core::if (:c::keys? (:wat::core::nth bs i) pg)
+      (:wat::core::let [r (:c::bind-keys (:wat::core::nth bs i)
+                             (:wat::core::nth bs (:wat::core::+ i 1))
+                             o env pg rt tb slot lt)]
+        (:c::bind-each lt bs (:wat::core::+ i 2) (:c::BindR/o r) (:c::BindR/env r)
+          pg rt tb (:c::BindR/slot r)))
     (:wat::core::let
       [name (:c::text pg (:wat::core::nth bs i))
        ;; the initialiser is compiled in the OUTER scope, which is what makes `let` not `letrec`
@@ -4334,7 +4487,7 @@
           (:c::Bind :name name :disp disp :reg r
                     ;; the typer's own answer for this binding (excursus 002 stone 5)
                     :ty (:c::bind-ty lt i env pg)))
-        pg rt tb (:wat::core::+ slot 1)))))
+        pg rt tb (:wat::core::+ slot 1))))))
 
 ;; **a binding of the same name is a different value**, so whatever an enclosing branch proved
 ;; about the old one stops being true in the body -- and what the INITIALISER can be takes its

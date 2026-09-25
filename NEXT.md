@@ -28,8 +28,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 **Next, in order:**
 1. **DONE — stone 5, variant types (D9 closed).** The compiler knows `Opt.Some`/`Opt.None` as types,
    enforces Liskov itself, and a unit variant's `T` is fixed by its use. `refined 0`.
-1b. **Stone 5b — `{:keys […]}` destructuring** of a variant or record (the builder's own shape), the
-   parent refused. Drawn; Grok is the shadowdancer from here, via pulsare.
+1b. **DONE — stone 5b, `{:keys […]}` destructuring** of a variant or record; the parent refused. First
+   strike by Grok via pulsare.
 1c. **Stone 6 — no tag check** for a value known to be one variant.
 2. **Closures** -- the builder's goal. A `fn` value, closure conversion (code + a record of captured
    values; wat's immutability makes capture a copy), typed on day one. Fixtures with known interpreter
