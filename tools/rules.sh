@@ -13,8 +13,10 @@
 # could not place or join, a type it could not translate, a type the checker left unresolved --
 # because a join that has gone blind would report zero conflicts too. Since stone 5 `refined` is
 # must-be-zero too: the compiler knows variant types, so a node where the checker knows the
-# VARIANT and the compiler only the enum is knowledge lost. A boundary where a variant is passed
-# to its enum is not a conflict -- `:ck::a-fits` states the language's one rule. It exits 1 as
+# VARIANT and the compiler only the enum is knowledge lost. Since excursus 003 stone 1 `partial`
+# is must-be-zero too: a function type is its whole type, and one exported as `partial:` is a
+# type the gate did not compare. A boundary where a variant is passed to its enum is not a
+# conflict -- `:ck::fits?` states the language's one rule, function types included. It exits 1 as
 # well when the export moved an emitted byte, and 2 when it could not do the check at all: the
 # exporter would not build or the checker died.
 #
@@ -171,7 +173,7 @@ bad=0
 for f in CONFLICT unplaced unjoined mismatch; do
   v=$(num "$rtl" "$f"); [ "${v:-x}" = 0 ] || { echo "rules: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
 done
-for f in TYPE-CONFLICT refined untranslatable unresolved; do
+for f in TYPE-CONFLICT refined untranslatable unresolved partial; do
   v=$(num "$ttl" "$f"); [ "${v:-x}" = 0 ] || { echo "types: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
 done
 [ $moved -eq 0 ] || bad=1

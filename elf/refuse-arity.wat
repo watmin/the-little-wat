@@ -1039,10 +1039,15 @@
 ;; ---------------------------------------------------------------- ASSIGNABILITY, the one
 ;;
 ;; **May a value of type `from` go where `to` is wanted?** The language's rule, and the ONLY
-;; place this compiler states it (excursus 002 stone 5): Liskov over enums, and nothing else.
+;; place this compiler states it: Liskov over enums (excursus 002 stone 5) and over function
+;; types (excursus 003 stone 1). Nothing else.
 ;;   - a type is assignable to itself;
 ;;   - a variant `E.V` is assignable to its enum `E` AT THE SAME INSTANTIATION -- a function that
 ;;     wants an `Opt` accepts a `Some` or a `None`;
+;;   - two function types of equal arity: each argument of `to` is assignable to the argument of
+;;     `from` (contravariant -- a function that accepts an `Opt` may go where one that accepts a
+;;     `Some` is wanted, and not the other way), and the return of `from` is assignable to the
+;;     return of `to` (covariant). The same rule, recursively;
 ;;   - nothing else: not a variant to a sibling, not an enum to one of its variants (a function
 ;;     that wants a `Some` may not be given an `Opt` or a `None`), not `(Opt :- [i64])` to
 ;;     `(Opt :- [String])`, and nothing inside a Vector (the checker refuses
@@ -1055,14 +1060,17 @@
 (:wat::core::defn :c::assignable? [from <- :wat::core::String to <- :wat::core::String
                                    pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::or (:wat::core::= from to)
-    (:wat::core::let [ei (:c::ty-enum to pg)]
-      (:wat::core::and (:wat::core::>= ei 0)
-        (:wat::core::and (:wat::core::= (:c::ty-enum from pg) ei)
-          (:wat::core::and
-            (:wat::core::or (:wat::core::= (:c::ty-name to) (:c::Enum/name (:wat::core::nth (:c::Prog/enums pg) ei)))
-                            (:wat::core::= (:c::ty-name from) (:c::ty-name to)))
-            (:wat::core::or (:wat::core::= (:c::enum-arg from) (:c::enum-arg to))
-                            (:wat::core::= (:c::enum-arg from) "?"))))))))
+    (:wat::core::or
+      (:wat::core::and (:c::fn-ty? from)
+        (:wat::core::and (:c::fn-ty? to) (:c::fn-assignable? from to pg)))
+      (:wat::core::let [ei (:c::ty-enum to pg)]
+        (:wat::core::and (:wat::core::>= ei 0)
+          (:wat::core::and (:wat::core::= (:c::ty-enum from pg) ei)
+            (:wat::core::and
+              (:wat::core::or (:wat::core::= (:c::ty-name to) (:c::Enum/name (:wat::core::nth (:c::Prog/enums pg) ei)))
+                              (:wat::core::= (:c::ty-name from) (:c::ty-name to)))
+              (:wat::core::or (:wat::core::= (:c::enum-arg from) (:c::enum-arg to))
+                              (:wat::core::= (:c::enum-arg from) "?")))))))))
 
 ;; **a free `T` is fixed by what the value flows into**: `(Opt.None :- [?])` wanted as
 ;; `(Opt :- [String])` is `(Opt.None :- [String])`, at that instantiation's tier. Any other
@@ -1392,9 +1400,13 @@
 
 ;; ---------------------------------------------------------------- function types
 ;;
-;; `[A B :-> R]` is encoded `"fn:2:R"`. The arity is carried because an indirect call has no
-;; declaration to check against -- without it, `(f 1 2)` on a `[i64 :-> i64]` would compile and
-;; answer nonsense. **There is no `index-of` in the subset this compiler can compile** (C-131),
+;; `[A B :-> R]` is encoded with every argument type and the return, each length-prefixed:
+;; `fn:` then, for each argument and finally the return, the decimal length, `:`, and that many
+;; bytes. `[i64 str :-> i64]` is `fn:3:i643:str3:i64`. A length is how the spelling nests. An
+;; argument type carries its own `:` (`penum::user::Opt;str`, a `vec:`, another `fn:`) and its
+;; own `;`, and a scan that stopped at the first of either would read the wrong type and still
+;; return one. The arity is the number of arguments, because an indirect call has no declaration
+;; to check against. **There is no `index-of` in the subset this compiler can compile** (C-131),
 ;; and `:wat::string::to-i64` answers an Option, which needs `match` -- so the separator scan
 ;; and the digit fold are by hand, exactly as `:c::digit-val` already is.
 ;; like `:c::lookup-ty`, but "" for a name the environment does not hold, where `:c::lookup-ty`
@@ -1407,13 +1419,29 @@
       (:c::Bind/ty (:wat::core::nth env i)))
     (:else (:c::lookup-ty-opt env name (:wat::core::- i 1)))))
 
-;; the type of a top-level function used as a value: `[A B :-> R]` as `"fn:2:R"`
+;; one component of a function type: its length, a colon, then exactly those bytes
+(:wat::core::defn :c::ty-enc [s <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat (:wat::i64::to-string (:wat::string::length s))
+    (:wat::string::concat ":" s)))
+
+(:wat::core::defn :c::fn-ty-join [args <- (:wat::core::Vector :- [:wat::core::String])
+                                  i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length args)) acc
+    (:c::fn-ty-join args (:wat::core::+ i 1)
+      (:wat::string::concat acc (:c::ty-enc (:wat::core::nth args i))))))
+
+;; arguments first, the return last. `fn:` is the prefix `:c::fn-ty?` and `:c::word-ty?` test.
+(:wat::core::defn :c::fn-ty-of [args <- (:wat::core::Vector :- [:wat::core::String])
+                                ret <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat "fn:"
+    (:wat::string::concat (:c::fn-ty-join args 0 "") (:c::ty-enc ret))))
+
+;; the type of a top-level function used as a value: its declared parameter types and its return
 (:wat::core::defn :c::fn-value-ty [pg <- :c::Prog name <- :wat::core::String a <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let [fi (:c::fn-of pg name 0)]
     (:wat::core::if (:wat::core::< fi 0) (:c::ty-fail "a name nothing binds" a pg)
-      (:wat::string::concat "fn:" (:wat::string::concat
-        (:wat::i64::to-string (:c::arity-at pg fi))
-        (:wat::string::concat ":" (:c::fn-ret pg name 0 a)))))))
+      (:c::fn-ty-of (:c::Fn/ptys (:wat::core::nth (:c::Prog/fns pg) fi))
+                    (:c::fn-ret pg name 0 a)))))
 
 (:wat::core::defn :c::fn-ty? [t <- :wat::core::String] -> :wat::core::bool
   (:wat::string::starts-with? t "fn:"))
@@ -1431,16 +1459,64 @@
       (:wat::core::+ (:wat::core::* acc 10)
                      (:c::digit-val (:wat::string::subs t i (:wat::core::+ i 1)))))))
 
+;; every component, arguments then the return. `i` is the start of the next length.
+(:wat::core::defn :c::fn-parts [t <- :wat::core::String i <- :wat::core::i64
+                                acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::string::length t)) acc
+    (:wat::core::let [c (:c::colon-from t i)]
+      (:wat::core::if (:wat::core::< c 0)
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "compile: malformed function type " t))
+        (:wat::core::let [n (:c::digits-int t i c 0)
+                          a (:wat::core::+ c 1)
+                          b (:wat::core::+ a n)]
+          (:wat::core::if (:wat::core::> b (:wat::string::length t))
+            (:wat::kernel::assertion-failed!
+              :message (:wat::string::concat "compile: malformed function type " t))
+            (:c::fn-parts t b (:wat::core::conj acc (:wat::string::subs t a b)))))))))
+
+;; every component but the last, which is the return
+(:wat::core::defn :c::fn-but-last [ps <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 n <- :wat::core::i64
+                                   acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i n) acc
+    (:c::fn-but-last ps (:wat::core::+ i 1) n
+      (:wat::core::conj acc (:wat::core::nth ps i)))))
+
+(:wat::core::defn :c::fn-args [t <- :wat::core::String] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::let [ps (:c::fn-parts t 3 (:wat::core::Vector :- [:wat::core::String]))
+                    n (:wat::core::length ps)]
+    (:wat::core::if (:wat::core::<= n 0) (:wat::core::Vector :- [:wat::core::String])
+      (:c::fn-but-last ps 0 (:wat::core::- n 1) (:wat::core::Vector :- [:wat::core::String])))))
+
 (:wat::core::defn :c::fn-arity [t <- :wat::core::String] -> :wat::core::i64
-  (:wat::core::let [c (:c::colon-from t 3)]
-    (:wat::core::if (:wat::core::< c 0) -1 (:c::digits-int t 3 c 0))))
+  (:wat::core::- (:wat::core::length (:c::fn-parts t 3 (:wat::core::Vector :- [:wat::core::String]))) 1))
 
 (:wat::core::defn :c::fn-ret-ty [t <- :wat::core::String] -> :wat::core::String
-  (:wat::core::let [c (:c::colon-from t 3)]
-    (:wat::core::if (:wat::core::< c 0)
+  (:wat::core::let [ps (:c::fn-parts t 3 (:wat::core::Vector :- [:wat::core::String]))
+                    n (:wat::core::length ps)]
+    (:wat::core::if (:wat::core::<= n 0)
       (:wat::kernel::assertion-failed!
         :message (:wat::string::concat "compile: cannot type the return of a malformed function type " t))
-      (:wat::string::subs t (:wat::core::+ c 1) (:wat::string::length t)))))
+      (:wat::core::nth ps (:wat::core::- n 1)))))
+
+;; contravariant arguments, covariant return. `:c::assignable?` is the one caller.
+(:wat::core::defn :c::fn-args-fit [to-args <- (:wat::core::Vector :- [:wat::core::String])
+                                   from-args <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length to-args)) true
+    (:wat::core::and (:c::assignable? (:wat::core::nth to-args i) (:wat::core::nth from-args i) pg)
+                     (:c::fn-args-fit to-args from-args (:wat::core::+ i 1) pg))))
+
+(:wat::core::defn :c::fn-assignable? [from <- :wat::core::String to <- :wat::core::String
+                                      pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [fa (:c::fn-args from)
+                    ta (:c::fn-args to)]
+    (:wat::core::and (:wat::core::= (:wat::core::length fa) (:wat::core::length ta))
+      (:wat::core::and (:c::fn-args-fit ta fa 0 pg)
+                       (:c::assignable? (:c::fn-ret-ty from) (:c::fn-ret-ty to) pg)))))
 
 ;; the `:->` marker splits arguments from the single return type; its index IS the arity
 (:wat::core::defn :c::arrow-at [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64] -> :wat::core::i64
@@ -1449,6 +1525,14 @@
     ((:wat::core::= (:c::text pg (:wat::core::nth ks i)) ":->") i)
     (:else (:c::arrow-at pg ks (:wat::core::+ i 1)))))
 
+(:wat::core::defn :c::ty-fn-args [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                   m <- :wat::core::i64 depth <- :wat::core::i64
+                                   acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i m) acc
+    (:c::ty-fn-args pg ks (:wat::core::+ i 1) m depth
+      (:wat::core::conj acc (:c::ty-node (:wat::core::nth ks i) pg (:wat::core::- depth 1))))))
+
 (:wat::core::defn :c::ty-fn-node [a <- :wat::core::i64 pg <- :c::Prog depth <- :wat::core::i64]
     -> :wat::core::String
   (:wat::core::let [ks (:c::kidsof pg a)
@@ -1456,11 +1540,10 @@
     (:wat::core::if (:wat::core::< m 0)
       (:wat::kernel::assertion-failed!
         :message "compile: a function type needs a `:->` arrow: [ArgType... :-> RetType]")
-      (:wat::string::concat "fn:" (:wat::string::concat (:wat::i64::to-string m)
-        (:wat::string::concat ":"
-          (:wat::core::if (:wat::core::>= (:wat::core::+ m 1) (:wat::core::length ks)) "nil"
-            (:c::ty-node (:wat::core::nth ks (:wat::core::+ m 1)) pg
-                         (:wat::core::- depth 1)))))))))
+      (:c::fn-ty-of (:c::ty-fn-args pg ks 0 m depth (:wat::core::Vector :- [:wat::core::String]))
+        (:wat::core::if (:wat::core::>= (:wat::core::+ m 1) (:wat::core::length ks)) "nil"
+          (:c::ty-node (:wat::core::nth ks (:wat::core::+ m 1)) pg
+                       (:wat::core::- depth 1)))))))
 
 ;; the element type of a vector type, and the declared type of a record's field
 (:wat::core::defn :c::elem-ty [t <- :wat::core::String] -> :wat::core::String
@@ -1853,6 +1936,21 @@
               " " t))
           nil)
         (:c::check-args a ks (:wat::core::+ i 1) head fi env pg)))))
+
+;; an indirect call has no declaration: each argument is checked against the function type's
+;; argument, the same `:c::fit` a direct call uses. There is no `CArg`. A `CArg` is joined to a
+;; `defn` parameter by the call's source position, and an indirect call has none -- the line
+;; would be `arg-unjoined`, which must be zero. The gate's function-type rule is on the direct
+;; call that passes the function value, whose `CArg` and `CParam` are already exported.
+(:wat::core::defn :c::check-fn-args [a <- :wat::core::i64 ks <- :c::Kids i <- :wat::core::i64
+                                     ht <- :wat::core::String env <- :c::Env pg <- :c::Prog]
+    -> :wat::core::nil
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) nil
+    (:wat::core::let [t (:c::fit (:wat::core::nth ks i)
+                          (:wat::core::nth (:c::fn-args ht) (:wat::core::- i 1))
+                          (:wat::string::concat "argument " (:wat::i64::to-string (:wat::core::- i 1)))
+                          a env pg)]
+      (:c::check-fn-args a ks (:wat::core::+ i 1) ht env pg))))
 
 ;; **the type a `let` binding takes** -- asked by the typer (`:c::ty-bind1`) and the generator
 ;; (`:c::bind-each`) alike, so the two cannot differ.
@@ -2599,7 +2697,10 @@
                     (:wat::core::if (:wat::core::not= (:c::fn-arity ht)
                                       (:wat::core::- (:wat::core::length ks) 1))
                       (:c::fail "wrong number of arguments" a pg)
-                      (:c::call-indirect ks o env pg rt tb slot))))
+                      (:wat::core::do
+                        (:wat::core::if (:c::Prog/final pg)
+                          (:c::check-fn-args a ks 1 ht env pg) nil)
+                        (:c::call-indirect ks o env pg rt tb slot)))))
                 (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
                                   (:wat::core::- (:wat::core::length ks) 1))
                   (:c::fail "wrong number of arguments" a pg)
@@ -7186,9 +7287,10 @@
 ;; The compiler's strings are a wat type PLUS its representation; wat's checker states only the
 ;; type. So every representation tier of an enum -- `enum:` (a tag), `penum:` (one pointer
 ;; payload), `henum:` (a heap block) -- is the one enum type, and `;arg` is its type argument.
-;; A function type is spelled here with only its arity and its return, so it cannot be a whole
-;; wat type: it comes back marked `partial:`, and anything this does not know comes back
-;; marked `untranslatable:` -- neither is ever passed off as a type.
+;; A function type is the whole type: `[` each argument in wat's spelling, ` :-> `, the return,
+;; `]`, which is what `WAT_CHECK_TYPES=1 wat --check` prints. Anything this does not know comes
+;; back marked `untranslatable:` and is never passed off as a type. `partial:` is no longer
+;; produced; the gate treats one as a failure.
 (:wat::core::defn :c::wat-ty [t <- :wat::core::String] -> :wat::core::String
   (:wat::core::let [n (:wat::string::length t)]
     (:wat::core::cond
@@ -7217,8 +7319,26 @@
                     (:c::wat-ty (:wat::string::subs body (:wat::core::+ semi 1)
                                   (:wat::string::length body)))
                     "])")))))))
-      ((:c::fn-ty? t) (:wat::string::concat "partial:" t))
+      ((:c::fn-ty? t) (:c::wat-fn t))
       (:else (:wat::string::concat "untranslatable:" t)))))
+
+;; wat's spelling of a function type. Zero arguments is `[:-> R]`; otherwise `[A B :-> R]`.
+(:wat::core::defn :c::wat-fn-args [args <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length args)) acc
+    (:c::wat-fn-args args (:wat::core::+ i 1)
+      (:wat::core::if (:wat::core::= acc "") (:c::wat-ty (:wat::core::nth args i))
+        (:wat::string::concat acc
+          (:wat::string::concat " " (:c::wat-ty (:wat::core::nth args i))))))))
+
+(:wat::core::defn :c::wat-fn [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [as (:c::wat-fn-args (:c::fn-args t) 0 "")
+                    ret (:c::wat-ty (:c::fn-ret-ty t))]
+    (:wat::core::if (:wat::core::= as "")
+      (:wat::string::concat "[:-> " (:wat::string::concat ret "]"))
+      (:wat::string::concat "["
+        (:wat::string::concat as
+          (:wat::string::concat " :-> " (:wat::string::concat ret "]")))))))
 
 ;; at the type waist: the node, the function it is being compiled in, the compiler's own type
 ;; and that type in wat's spelling -- which runs to the end of the line, as it holds spaces.

@@ -28,8 +28,8 @@
 ;;   type-AGREES        equal to the checker's type                        (counted)
 ;;   type-refined       equal only once the checker's variant is widened to its enum -- the
 ;;                      compiler knows the enum, the language knows the variant (counted)
-;;   type-partial       the compiler's spelling is not a whole wat type (a function type: arity
-;;                      and return only) -- joined, not compared            (counted)
+;;   type-partial       the compiler's spelling is not a whole wat type. A function type is
+;;                      whole now, so this must be zero (excursus 003 stone 1)  (a FINDING)
 ;;   type-untranslatable  the one translation did not know the spelling    (printed)
 ;;   type-unresolved    the checker's type at the node kept a variable (STOP-4) (printed)
 ;;   checker-multi      one position, two checker types (STOP-3)           (printed)
@@ -39,10 +39,15 @@
 ;;
 ;; **Stone 5 -- the language's subtyping, stated ONCE.** A value of a VARIANT is a value of its
 ;; enum: a function that wants an `Opt` accepts a `Some`. So an argument's type need not EQUAL its
-;; parameter's; it must be ASSIGNABLE to it, and `:ck::a-fits` is the whole of that rule, in the
-;; language's own terms and nothing more: the same type, or a variant `E.V` of the enum `E` the
-;; parameter names, at the same instantiation. It reads the two exported types -- the compiler
-;; spells `(:E.V :- [A])` as `<tier>:E.V;A` beside `<tier>:E;A` -- and derives no type.
+;; parameter's; it must be ASSIGNABLE to it. `:ck::fits?` is that rule, in plain wat, over the
+;; two exported type strings and nothing else: the same type, or a variant `E.V` of the enum `E`
+;; the parameter names, at the same instantiation. Excursus 003 stone 1 adds the function-type
+;; clause the compiler's `:c::assignable?` states: equal arity, each argument of the parameter's
+;; type assignable to the argument's (contravariant), the return the other way (covariant),
+;; recursively. The loading path records each pair that fits as a `:ck::TyFits` fact. The rule
+;; joins that fact; it does not parse a type. The compiler spells `(:E.V :- [A])` as
+;; `<tier>:E.V;A` beside `<tier>:E;A`, and `[A :-> R]` as `fn:` plus a length-prefixed argument
+;; and return.
 ;;
 ;; Reported, per program and in total:
 ;;   boundary-type-conflict   an argument's type is not assignable to its parameter's (a FINDING)
@@ -99,6 +104,9 @@
 ;; this argument's type is assignable to the parameter it feeds (`:ck::a-fits`)
 (:wat::core::defrecord :ck::Fits
   [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64  idx <- :wat::core::i64])
+;; decided by `:ck::fits?` while the export is loaded, before any rule runs
+(:wat::core::defrecord :ck::TyFits
+  [from <- :wat::core::String  to <- :wat::core::String])
 
 ;; a CArg lands on a LIST node starting at its position, whose head is a name and which has an
 ;; argument at that index. The head's name is wat-grep's, so the defn it names is found by
@@ -137,29 +145,14 @@
          (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::quot ?pi 3 :undefined -1) ?i))]
   :then [(:ck::Param :name ?F :idx ?i :fn ?fn :ty ?t :tn ?tn :ti ?ti :file ?f :line ?l :col ?c)])
 
-;; ── ★ THE LANGUAGE'S RULE, once: may this argument go where that parameter is ───────────
-;; the same type -- or `E.V` where `E` is wanted, at the same instantiation: the argument's name
-;; is the parameter's followed by `.` and one variant name, and what follows the names is equal.
-;; Nothing else: not a sibling variant, not an enum where a variant is wanted, not another
-;; instantiation, nothing inside a Vector.
+;; ── ★ THE LANGUAGE'S RULE, joined ──────────────────────────────────────────────
+;; `:ck::TyFits` is the decision `:ck::fits?` already made, one fact per pair of exported
+;; types. This rule only joins: the argument, the parameter it feeds, and that decision.
 (:wat::rete::defrule :ck::a-fits
-  :when [(:ck::Arg (?F <- :name) (?i <- :idx) (?at <- :ty) (?an <- :tn) (?ai <- :ti)
+  :when [(:ck::Arg (?F <- :name) (?i <- :idx) (?at <- :ty)
                    (?f <- :file) (?l <- :line) (?c <- :col))
-         (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty) (?pn <- :tn) (?pi <- :ti))
-         (:wat::rete::where
-           (:wat::rete::core::or
-             (:wat::rete::string::= ?at ?pt)
-             (:wat::rete::core::and
-               (:wat::rete::string::= ?ai ?pi)
-               (:wat::rete::core::and
-                 (:wat::rete::string::starts-with? ?an (:wat::rete::string::concat ?pn "."))
-                 (:wat::rete::core::not
-                   (:wat::rete::string::contains?
-                     (:wat::rete::string::subs ?an
-                       (:wat::rete::i64::+ (:wat::rete::string::length ?pn) 1 :undefined -1)
-                       (:wat::rete::string::length ?an)
-                       :undefined ".")
-                     "."))))))]
+         (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty))
+         (:ck::TyFits (?at <- :from) (?pt <- :to))]
   :then [(:ck::Fits :file ?f :line ?l :col ?c :idx ?i)])
 
 ;; ── ★ THE CONSTRAINT: this argument feeds that parameter, so its type must fit ────────────
@@ -421,7 +414,9 @@
 (:wat::core::defrecord :ck::Prog
   [recs <- (:wat::core::PersistentVector :- [:wat::core::Record])
    files <- :wat::core::i64  cargs <- :wat::core::i64  cparams <- :wat::core::i64
-   ctypes <- :wat::core::i64  ktypes <- :wat::core::i64  kunres <- :wat::core::i64])
+   ctypes <- :wat::core::i64  ktypes <- :wat::core::i64  kunres <- :wat::core::i64
+   atys <- (:wat::core::PersistentVector :- [:wat::core::String])
+   ptys <- (:wat::core::PersistentVector :- [:wat::core::String])])
 
 (:wat::core::defn :ck::bump-prog [p <- :ck::Prog field <- :wat::core::keyword] -> :ck::Prog
   (:wat::core::cond
@@ -475,18 +470,21 @@
                                        (:wat::i64::* (:wat::i64::+ (:ck::Prog/files p) 1) 100000000)))
           :files (:wat::i64::+ (:ck::Prog/files p) 1)))
       ((:wat::core::= tag "CArg")
-        (:ck::add-rec p (:ck::CArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
-                                   :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
-                                   :callee (:ck::word ws 5) :in (:ck::word ws 6)
-                                   :ty (:ck::word ws 7) :tn (:ck::ty-name (:ck::word ws 7))
-                                   :ti (:ck::ty-inst (:ck::word ws 7)))
-          :cargs))
+        (:wat::core::let [ty (:ck::word ws 7)
+                          p1 (:ck::add-rec p (:ck::CArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
+                                                       :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
+                                                       :callee (:ck::word ws 5) :in (:ck::word ws 6)
+                                                       :ty ty :tn (:ck::ty-name ty) :ti (:ck::ty-inst ty))
+                            :cargs)]
+          (:wat::core::assoc p1 :atys (:ck::remember (:ck::Prog/atys p1) ty 0))))
       ((:wat::core::= tag "CParam")
-        (:ck::add-rec p (:ck::CParam :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
-                                     :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
-                                     :fn (:ck::word ws 5) :ty (:ck::word ws 6)
-                                     :tn (:ck::ty-name (:ck::word ws 6)) :ti (:ck::ty-inst (:ck::word ws 6)))
-          :cparams))
+        (:wat::core::let [ty (:ck::word ws 6)
+                          p1 (:ck::add-rec p (:ck::CParam :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
+                                                         :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
+                                                         :fn (:ck::word ws 5) :ty ty
+                                                         :tn (:ck::ty-name ty) :ti (:ck::ty-inst ty))
+                            :cparams)]
+          (:wat::core::assoc p1 :ptys (:ck::remember (:ck::Prog/ptys p1) ty 0))))
       ((:wat::core::= tag "CType")
         (:wat::core::let [w (:ck::rest ws 6)]
           (:ck::add-rec p (:ck::CType :seq (:ck::seq-of p) :file (:ck::word ws 1)
@@ -506,9 +504,111 @@
           :kunres))
       (:else p))))
 
+;; ── the language's rule, in plain wat. A rule joins the fact this writes. ─────────
+;; `[A B :-> R]` is `fn:` then, for each argument and the return, a decimal length, `:`,
+;; and that many bytes. Recursion is ordinary here; a `where` may not do it.
+(:wat::core::defn :ck::remember [v <- (:wat::core::PersistentVector :- [:wat::core::String])
+                                 s <- :wat::core::String i <- :wat::core::i64]
+    -> (:wat::core::PersistentVector :- [:wat::core::String])
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length v)) (:wat::vector::conj v s))
+    ((:wat::core::= (:wat::core::nth v i) s) v)
+    (:else (:ck::remember v s (:wat::i64::+ i 1)))))
+
+(:wat::core::defn :ck::colon-at [t <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::string::length t)) -1)
+    ((:wat::core::= (:wat::string::subs t i (:wat::i64::+ i 1)) ":") i)
+    (:else (:ck::colon-at t (:wat::i64::+ i 1)))))
+
+(:wat::core::defn :ck::fn-parts [t <- :wat::core::String i <- :wat::core::i64
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::string::length t)) acc
+    (:wat::core::let [c (:ck::colon-at t i)]
+      (:wat::core::if (:wat::core::< c 0) acc
+        (:wat::core::match (:wat::string::to-i64 (:wat::string::subs t i c))
+          [:wat::core::Option.Some {:value n}
+            (:wat::core::let [a (:wat::i64::+ c 1)
+                              b (:wat::i64::+ a n)]
+              (:wat::core::if (:wat::core::> b (:wat::string::length t)) acc
+                (:ck::fn-parts t b (:wat::core::conj acc (:wat::string::subs t a b)))))]
+          [:wat::core::Option.None {} acc])))))
+
+(:wat::core::defn :ck::but-last [ps <- (:wat::core::Vector :- [:wat::core::String])
+                                 i <- :wat::core::i64 n <- :wat::core::i64
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i n) acc
+    (:ck::but-last ps (:wat::i64::+ i 1) n (:wat::core::conj acc (:wat::core::nth ps i)))))
+
+;; `E.V` where `E` is wanted, same instantiation. The name runs to the first `;`.
+(:wat::core::defn :ck::variant-fits? [at <- :wat::core::String pt <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::let [an (:ck::ty-name at) pn (:ck::ty-name pt)
+                    ai (:ck::ty-inst at) pi (:ck::ty-inst pt)]
+    (:wat::core::and (:wat::core::= ai pi)
+      (:wat::core::and
+        (:wat::string::starts-with? an (:wat::string::concat pn "."))
+        (:wat::core::not
+          (:wat::string::contains?
+            (:wat::string::subs an (:wat::i64::+ (:wat::string::length pn) 1) (:wat::string::length an))
+            "."))))))
+
+;; the parameter's argument must fit the argument's argument
+(:wat::core::defn :ck::fn-args-fit? [to-args <- (:wat::core::Vector :- [:wat::core::String])
+                                     from-args <- (:wat::core::Vector :- [:wat::core::String])
+                                     i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length to-args)) true
+    (:wat::core::and (:ck::fits? (:wat::core::nth to-args i) (:wat::core::nth from-args i))
+                     (:ck::fn-args-fit? to-args from-args (:wat::i64::+ i 1)))))
+
+(:wat::core::defn :ck::fn-fits? [at <- :wat::core::String pt <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::let [ap (:ck::fn-parts at 3 (:wat::core::Vector :- [:wat::core::String]))
+                    bp (:ck::fn-parts pt 3 (:wat::core::Vector :- [:wat::core::String]))
+                    an (:wat::core::length ap)
+                    bn (:wat::core::length bp)]
+    (:wat::core::and (:wat::core::= an bn)
+      (:wat::core::and (:wat::core::> an 0)
+        (:wat::core::and
+          (:ck::fn-args-fit? (:ck::but-last bp 0 (:wat::i64::- bn 1) (:wat::core::Vector :- [:wat::core::String]))
+                             (:ck::but-last ap 0 (:wat::i64::- an 1) (:wat::core::Vector :- [:wat::core::String]))
+                             0)
+          (:ck::fits? (:wat::core::nth ap (:wat::i64::- an 1))
+                      (:wat::core::nth bp (:wat::i64::- bn 1))))))))
+
+(:wat::core::defn :ck::fits? [at <- :wat::core::String pt <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::= at pt) true)
+    ((:wat::core::and (:wat::string::starts-with? at "fn:") (:wat::string::starts-with? pt "fn:"))
+      (:ck::fn-fits? at pt))
+    (:else (:ck::variant-fits? at pt))))
+
+(:wat::core::defn :ck::pair-fits [as <- (:wat::core::PersistentVector :- [:wat::core::String])
+                                  ps <- (:wat::core::PersistentVector :- [:wat::core::String])
+                                  i <- :wat::core::i64 j <- :wat::core::i64
+                                  recs <- (:wat::core::PersistentVector :- [:wat::core::Record])]
+    -> (:wat::core::PersistentVector :- [:wat::core::Record])
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length as)) recs)
+    ((:wat::core::>= j (:wat::core::length ps))
+      (:ck::pair-fits as ps (:wat::i64::+ i 1) 0 recs))
+    (:else
+      (:wat::core::let [a (:wat::core::nth as i)
+                        b (:wat::core::nth ps j)]
+        (:ck::pair-fits as ps i (:wat::i64::+ j 1)
+          (:wat::core::if (:ck::fits? a b)
+            (:wat::vector::conj recs (:ck::TyFits :from a :to b))
+            recs))))))
+
+(:wat::core::defn :ck::with-fits [p <- :ck::Prog] -> :ck::Prog
+  (:wat::core::assoc p :recs
+    (:ck::pair-fits (:ck::Prog/atys p) (:ck::Prog/ptys p) 0 0 (:ck::Prog/recs p))))
+
 (:wat::core::defn :ck::empty-prog [] -> :ck::Prog
   (:ck::Prog :recs (:wat::core::PersistentVector :- [:wat::core::Record]) :files 0 :cargs 0 :cparams 0
-             :ctypes 0 :ktypes 0 :kunres 0))
+             :ctypes 0 :ktypes 0 :kunres 0
+             :atys (:wat::core::PersistentVector :- [:wat::core::String])
+             :ptys (:wat::core::PersistentVector :- [:wat::core::String])))
 
 ;; ── reporting ────────────────────────────────────────────────────────────────────────
 (:wat::core::defn :ck::cap [cs <- (:wat::core::PersistentVector :- [:wat::grep::Capture])] -> :wat::core::String
@@ -601,10 +701,10 @@
   (:wat::core::or (:wat::core::= rule "boundary-type-AGREES")
     (:wat::core::or (:wat::core::= rule "boundary-type-VARIANT")
     (:wat::core::or (:wat::core::= rule "type-AGREES")
-      ;; `type-refined` is a finding since stone 5 -- printed, not quiet
-        (:wat::core::or (:wat::core::= rule "type-partial")
-          (:wat::core::or (:wat::core::= rule "ctype-unjoined")
-                          (:wat::core::= rule "ktype-unjoined")))))))
+      ;; `type-refined` is a finding since stone 5, `type-partial` since excursus 003
+      ;; stone 1 -- printed, not quiet
+        (:wat::core::or (:wat::core::= rule "ctype-unjoined")
+                        (:wat::core::= rule "ktype-unjoined"))))))
 
 (:wat::rete::defquery :ck::q-match
   :params []
@@ -656,7 +756,8 @@
       ((:wat::string::starts-with? s "PROG ")
         (:ck::loop overlay (:wat::string::subs s 5 (:wat::string::length s)) (:ck::empty-prog) total))
       ((:wat::core::= s "END")
-        (:ck::loop overlay "" (:ck::empty-prog) (:ck::add total (:ck::run-prog overlay name p))))
+        (:ck::loop overlay "" (:ck::empty-prog)
+          (:ck::add total (:ck::run-prog overlay name (:ck::with-fits p)))))
       (:else (:ck::loop overlay name (:ck::add-line p s) total)))))
 
 (:wat::core::defn :user::main [] -> :wat::core::nil
