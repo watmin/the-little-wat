@@ -15504,3 +15504,41 @@ unchanged and a bracket with no `:->` is still refused. Three unit tests
 (`f203_*` in `collection::eval`); the two acceptance tests FAIL with the old arm restored.
 `src/macros/parse.rs:163` has the same match shape for `defmacro`'s return type -- a different
 rule (a macro returns syntax), not changed.
+
+### F-204: `eval-step!` steps no user code -- every user function refused, every symbol-spelled head refused, and a `let` binding a `fn` never ends
+
+**Open -- excursus 004.** Found asking what F-198's two red wat-rs tests actually meant.
+`probes/eval-step-*.wat`, run on wat-rs `75fcc7638` through `:wat::eval::walk`:
+
+| case | `eval` | stepping |
+|---|---|---|
+| `(:wat::core::+ 1 2)` | 3 | `3` |
+| a user `defn`, keyword spelling | 4 | refused: "closure-bearing — Phase 3" |
+| `(wat.core/+ 1 2)` | 3 | refused: `symbol-head:wat.core/+` |
+| `(user/add1 3)` | 4 | refused: `symbol-head:user/add1` |
+| `(let [x 42 f (fn [y] (+ x y))] (f 1))` | 43 | **never ends** |
+| a top-level `def` of a closure | 15 | refused: "closure-bearing" |
+| `(sum-to 3 0)` | 6 | refused: "closure-bearing" |
+
+Arc 068 (`wat-rs/docs/arc/2026/04/068-eval-step/`) built `eval-step!` for the hologram of a form
+(BOOK chapters 59 and 65): every intermediate is a form, hence a cache key, so walkers share
+`form → next` and `form → terminal`. Its step table makes a registered user define steppable ("one
+step = one β-reduction") and refuses only lambdas that captured outer bindings, tested by
+`closed_env.is_some()`. Three defects since:
+
+1. **The refusal became universal.** `eval_fn` now sets `closed_env: Some(env)` on every function
+   (`src/runtime.rs:6801`, `src/function/eval.rs:109`), so `step_user_call` (`:13713`) refuses every
+   user function -- the proxy "has an env" stands in for "needs one". Production refused before
+   stone 3 of 002 too; the two unit tests passed only through the duplicate body stone 3 removed.
+2. **Symbol heads are refused wholesale** (`step_list`, `:12950`, "Phase 3 territory") -- so every
+   program in the `wat.core/…` spelling, builtins included, cannot be stepped.
+3. **A step that makes no progress.** A `fn` form steps to `Terminal(itself)` (`:13066`) but
+   `is_step_canonical` (`:13096`) does not count it a value, so `step_let` re-descends into it and
+   answers `StepNext` of its own input forever. The comment inside `is_step_canonical` records the
+   same loop for rational literals, patched there case by case: the class recurred.
+
+Under substitution a closure INSIDE the stepped form needs no environment -- stepping `let` already
+substitutes `x := 42` into the `fn` body (measured). `closed_env` matters only for a function value
+from outside the form, whose captured values can be substituted the same way (wat values are
+immutable). The builder, 2026-09-25: *"not supporting user defined functions is like trying to read
+/dev/null meaningfully"*.

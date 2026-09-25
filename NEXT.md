@@ -47,7 +47,11 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
    The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so
    the ownership count and both gates must cover it.
-2b. **Then persistent collections, excursus 004** -- the builder's ruling (2026-09-24): *"in our
+2a. **Excursus 004 — `eval-step!` steps what `eval` runs (F-204), with Grok in wat-rs.** It stepped
+   no user code at all: every user function refused, every symbol head refused, a `let`-bound `fn`
+   never ending. The builder: *"let's get this fixed - we have a strong habit of fixing what's broken
+   when we encounter it"*. Grok builds wat-rs in its OWN target dir until 003 stone 1 is weighed.
+2b. **Then persistent collections, excursus 005** -- the builder's ruling (2026-09-24): *"in our
    compiler - all of the collections must be persistent - the only thing that differs between our
    compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The
    compiled Vector included; model wat-rs's `PVec`/`PMap` (array, then an rpds trie, promotion
