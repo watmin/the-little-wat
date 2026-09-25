@@ -7,19 +7,28 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-23, HEAD 947e995)
+## elf/ — the live queue (2026-09-24, HEAD 01c6112)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `947e995`**. `git log --oneline -1` must print that
-sha. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
+**Freshness probe:** written against **HEAD `01c6112`**, or the curare commit directly on top of
+it. `git log --oneline -2` must show that. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — bidirectional argument typing (D9), then closures
+### NEXT STRIKE — weigh stone 6 (with Grok), then closures
 
-**Read `docs/excursus/2026/09/002-no-guesses/` first** -- DESIGN, then SCOREs 1-4 in order.
+**Read `docs/excursus/2026/09/002-no-guesses/` first** -- DESIGN, then SCOREs 1-5b in order, then
+`BRIEF-stone-6.md` / `EXPECTATIONS-stone-6.md`.
+
+**On waking:** stone 6 was drawn at `01c6112` and handed to Grok via pulsare (`holon:grok.1`).
+Read `/home/watmin/Work/holon/.pulsare/to-claude`. If it says `kind=scored`, read the SCORE it
+lists and weigh it as the orchestrator: re-run the load-bearing rows yourself (penum-str-let must
+agree; the count-literal mutation must segfault; the F-188 probes; full `tools/elf-run.sh` with both
+gates at zero; the HEAD-from-`git archive` comparison; `bootstrap.sh` without `--fast`; instructions
+and cycles against the 1.8% floor, F-192), commit, then `pulsare_yield kind=struck` with ABSOLUTE
+paths. If it still says `kind=struck` for 5b, Grok has not finished -- wait.
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
@@ -30,14 +39,17 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    enforces Liskov itself, and a unit variant's `T` is fixed by its use. `refined 0`.
 1b. **DONE — stone 5b, `{:keys […]}` destructuring** of a variant or record; the parent refused. First
    strike by Grok via pulsare.
-1c. **Stone 6 — no tag check** for a value known to be one variant.
+1c. **Stone 6 — IN FLIGHT with Grok.** Stone 0b re-landed on the finished typer, to the variant: a
+   payload variant needs no unit guard, a unit variant needs no count. The crawl found `match` tests
+   tags only on parents, so the count guard is the only runtime check left to elide.
 2. **Closures** -- the builder's goal. A `fn` value, closure conversion (code + a record of captured
    values; wat's immutability makes capture a copy), typed on day one. Fixtures with known interpreter
-   answers are in the session scratch: capture of a value (126), of a closure (86), closures returned
-   from functions and composed (16, 27). A capture is a STORE into a container -- the F-188 class -- so
+   answers are `probes/closure-captures.wat` (126, 86: capture of a value, of a function, of a
+   closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
+   The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so
    the ownership count and both gates must cover it.
-3. Then stone 0b (per-type count guard) re-lands on this typer, then stone 1 (caller-side release,
-   branch `excursus-001-stone-1`).
+3. Then stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
+   rebase onto this typer, an `allocates?` gate, and a real §7 gate before it is struck.
 
 **Open, recorded:** F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
 yet traced) · F-197 (the wat-rs floor's pre-existing reds) · F-198 (`eval-step!`: namespaced quoted
@@ -62,6 +74,8 @@ exist on main. `run.sh` prints the rev it ran against; if it says something othe
 by rule, so every finding written before it stays valid. If `git log --oneline -1` says
 something else, trust the log and `FINDINGS.md` over every line here, and re-read the newest
 entries before moving.
+
+### — DATED HISTORY below this line (2026-09-20/21). Context, not the queue. —
 
 ### Where we stand — FOUR opponents, every run pinned (2026-09-21)
 
