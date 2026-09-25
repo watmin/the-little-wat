@@ -51,8 +51,14 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    compiler - all of the collections must be persistent - the only thing that differs between our
    compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The
    compiled Vector included; model wat-rs's `PVec`/`PMap` (array, then an rpds trie, promotion
-   unobservable). Structural sharing makes reclamation (item 3) part of that crawl.
-3. Then stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
+   unobservable). **One excursus with memory**: the builder's ask was never built -- *"grow and
+   shrink as we need ... we always know when and how much memory we need - just like in rust -
+   without any form of a GC"*. The heap is still a fixed 1.9 GB mmap that ABORTS when full
+   (`runtime.wat:984`), a runtime panic totality forbids. 001's DESIGN narrowed the ask ("page
+   release is cosmetic", no growth) without saying so. Scope: a count that comes DOWN and an inline
+   drop (rpds is `Arc`: the same mechanism), an allocator that reuses holes, grow/shrink with the
+   OS, exhaustion as a matchable error.
+3. Inside that excursus: stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
    rebase onto this typer, an `allocates?` gate, and a real §7 gate before it is struck.
 
 **Open, recorded:** F-201 (a variant as a type argument, `Opt.Some<Color.Red>`, refused where
