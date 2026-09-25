@@ -65,8 +65,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 `Opt<Color>` is wanted -- a valid program, not traced) · F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
 yet traced) · F-197 (the wat-rs floor's pre-existing reds) · F-198 (`eval-step!`: namespaced quoted
 heads; an empty capture called a closure — four-questions answer: "a captured environment that binds
-nothing is not a closure") · the two wat-rs step tests stone 3 left red, for the builder · pushing
-wat-rs, for the builder.
+nothing is not a closure") · the two wat-rs step tests stone 3 left red, for the builder. The wat-rs branch
+`the-little-wat` is PUSHED after every commit (the builder, 2026-09-25: GitHub is the DR site).
 
 ### LANDED since this section last read "next" (2026-09-23)
 
