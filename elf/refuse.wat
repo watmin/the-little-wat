@@ -933,8 +933,11 @@
 ;; **Tier 1 is where this passes C rather than catching up.** `gcc -O2` returns a tagged union
 ;; in RAX:RDX -- 16 bytes, two registers, verified by disassembly. Tier 1 is EIGHT bytes and
 ;; ONE register, because the payload variant simply IS its pointer and a unit variant is a small
-;; integer. They cannot collide: this heap is one mmap at a high address and literals live at
-;; 0x400000+, so no legitimate pointer is ever below a page.
+;; integer. They cannot collide only when that pointer is never itself a unit tag: this heap is
+;; one mmap at a high address and literals live at 0x400000+, so a String, a Vector or a record
+;; is never below a page. An enum payload is not: its unit variant IS a small integer, and
+;; `Some(None)` would be the same word as `None` (F-200). Tier 1 is therefore a pointer that
+;; `:c::maybe-unit?` rejects.
 ;;
 ;; **The tier depends on the INSTANTIATION, not the declaration.** `(Opt :- [str])` is tier 1
 ;; and `(Opt :- [i64])` is not, because an i64 has no spare bit pattern to spend on a tag. So
@@ -970,10 +973,13 @@
 
 (:wat::core::defn :c::enum-tier [es <- :c::Enums ei <- :wat::core::i64 arg <- :wat::core::String
                                  pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::cond
-    ((:wat::core::not (:c::Enum/heap (:wat::core::nth es ei))) 0)
-    ((:c::ptr-ty? (:c::sole-payload-ty es ei arg pg)) 1)
-    (:else 3)))
+  (:wat::core::let [p (:c::sole-payload-ty es ei arg pg)]
+    (:wat::core::cond
+      ((:wat::core::not (:c::Enum/heap (:wat::core::nth es ei))) 0)
+      ;; a pointer that can itself be a unit tag is not tier 1 (F-200): `Some(None)` and
+      ;; `None` would be one word. `str` / `vec:` / `rec:` qualify; `penum:` / `henum:` do not.
+      ((:wat::core::and (:c::ptr-ty? p) (:wat::core::not (:c::maybe-unit? p))) 1)
+      (:else 3))))
 
 (:wat::core::defn :c::enum-prefix [tier <- :wat::core::i64] -> :wat::core::String
   (:wat::core::cond ((:wat::core::= tier 0) "enum:")
@@ -988,8 +994,9 @@
 ;; **a VARIANT is a type** (excursus 002 stone 5): `(:E.V :- [A])` is spelled exactly as its enum
 ;; at the same instantiation, with the variant's qualified name where the enum's stands --
 ;; `penum::user::Opt.Some;str` beside `penum::user::Opt;str`. The tier is the ENUM's at that
-;; instantiation, because a value of the variant IS a value of the enum and is laid out as one:
-;; no consumer of the tier can tell the two apart, so knowing the variant moves no byte.
+;; instantiation (`:c::enum-tier`: tier 1 only for a payload that cannot be a unit tag), because
+;; a value of the variant IS a value of the enum and is laid out as one: no consumer of the tier
+;; can tell the two apart, so knowing the variant moves no byte.
 (:wat::core::defn :c::enum-ty-named [pg <- :c::Prog ei <- :wat::core::i64 name <- :wat::core::String
                                      arg <- :wat::core::String] -> :wat::core::String
   (:wat::string::concat
@@ -3738,21 +3745,92 @@
     (:wat::core::let [key (:c::share-key a env pg)]
     (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::Out/shared o) key 0) 0) o
     (:wat::core::assoc
-      (:c::emit o (:c::count-hex (:c::type-of a env pg)))
+      (:c::emit o (:c::count-hex (:c::type-of a env pg) pg))
       :shared (:wat::core::conj (:c::Out/shared o) key))))
     o))
 
-;; **the bytes of the increment, guarded twice**, for a value of type `t` already in rax -- or
-;; nothing at all when `t` is not a pointer. `:c::share` above explains both guards; they are
-;; spelled once, here, so the two callers cannot drift apart.
-(:wat::core::defn :c::count-hex [t <- :wat::core::String] -> :wat::core::String
+;; **the bytes of the increment, for a value of type `t` already in rax.** One emission, two
+;; callers (`:c::share`, `:c::read-out`). What is emitted follows what a value of `t` can BE:
+;;
+;;   `str`                         a data-tail literal (count 0) or a heap string -- the literal
+;;                                 guard, `cmp [rax-8],0 ; je ; incq`
+;;   `vec:` / `rec:`               only a heap block, count at least 1 -- a bare `incq [rax-8]`
+;;   parent `penum:` / `henum:`    a unit tag OR a payload -- `cmp rax,0x1000 ; jb` in front,
+;;                                 and the literal guard only when the payload can be a literal
+;;   payload variant               tier 1's payload is `str`, `vec:` or `rec:` and nothing else
+;;                                 (`:c::enum-tier`), so the value is that payload and never a
+;;                                 unit tag: the payload's guard, no tag test. Tier 3, including
+;;                                 a payload that is itself an enum, is the heap block: bare `incq`
+;;   unit variant                  the tag, never a pointer -- nothing
+;;
+;; An unresolved enum keeps the guard (a dropped one is F-194). The `jb` displacement is the
+;; length of whatever follows it, not a constant.
+(:wat::core::defn :c::lit-hex [] -> :wat::core::String "488378f800740448ff40f8")
+(:wat::core::defn :c::bare-hex [] -> :wat::core::String "48ff40f8")
+
+(:wat::core::defn :c::tag-then [body <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat "483d00100000"
+    (:wat::string::concat (:wat::string::concat "72" (:asm::u8 (:c::hexlen body))) body)))
+
+;; a specific variant, as its tag, or -1 when `t` is the parent enum or not an enum
+(:wat::core::defn :c::variant-of [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::let [ei (:c::ty-enum t pg)]
+    (:wat::core::if (:wat::core::or (:wat::core::< ei 0)
+                      (:wat::core::= (:c::ty-name t)
+                        (:c::Enum/name (:wat::core::nth (:c::Prog/enums pg) ei))))
+      -1
+      (:c::variant-tag (:c::Prog/enums pg) (:c::ty-name t) 0))))
+
+(:wat::core::defn :c::unit-variant? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::let [tg (:c::variant-of t pg)
+                    ei (:c::ty-enum t pg)]
+    (:wat::core::and (:wat::core::>= tg 0)
+      (:wat::core::= (:c::variant-arity (:c::Prog/enums pg) ei tg pg) 0))))
+
+;; the payload a tier-1 value IS. "" when it cannot be asked (a free `T` would make
+;; `:c::sole-payload-ty` refuse). The caller keeps the guard in that case.
+(:wat::core::defn :c::payload-ty [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::let [ei (:c::ty-enum t pg)]
+    (:wat::core::if (:wat::core::or (:wat::core::< ei 0) (:c::free-ty? t)) ""
+      (:c::sole-payload-ty (:c::Prog/enums pg) ei (:c::enum-arg t) pg))))
+
+;; can a value of `t` be a count-0 literal? Only a String can, and a tier-1 payload that is one.
+;; Unknown keeps the guard.
+(:wat::core::defn :c::maybe-literal? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
+    ((:wat::core::= t "str") true)
+    ((:wat::core::or (:wat::string::starts-with? t "vec:")
+                     (:wat::string::starts-with? t "rec:")) false)
+    ((:wat::string::starts-with? t "henum:") false)
+    ((:wat::string::starts-with? t "penum:")
+      (:wat::core::cond
+        ((:c::unit-variant? t pg) false)
+        ((:wat::core::or (:c::free-ty? t) (:wat::core::< (:c::ty-enum t pg) 0)) true)
+        ;; a tier-3 payload variant is the heap block, not the payload. A parent, and a tier-1
+        ;; variant, are (or can be) the payload itself.
+        ((:wat::core::and (:wat::core::>= (:c::variant-of t pg) 0)
+                          (:wat::core::not= (:c::ty-tier t) 1)) false)
+        ;; `p` is the sole payload of a tier-1 enum, which `:c::enum-tier` has already
+        ;; restricted to `str` / `vec:` / `rec:`. The recursive call does not re-enter
+        ;; this arm: a payload that is itself an enum is tier 3, spelled `henum:`.
+        (:else
+          (:wat::core::let [p (:c::payload-ty t pg)]
+            (:wat::core::if (:wat::core::= p "") true (:c::maybe-literal? p pg))))))
+    (:else true)))
+
+;; the parent can be a unit tag. A resolved variant cannot: a payload variant is never a tag,
+;; and a unit variant is handled before this is asked.
+(:wat::core::defn :c::tag-needed? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::and (:c::maybe-unit? t) (:wat::core::< (:c::variant-of t pg) 0)))
+
+(:wat::core::defn :c::count-hex [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::cond
+    ((:c::unit-variant? t pg) "")
     ((:wat::core::not (:c::ptr-ty? t)) "")
-    ((:c::maybe-unit? t)
-      (:wat::string::concat "483d00100000"                      ;; cmp rax, 0x1000
-        (:wat::string::concat "720b"                            ;; jb  +11 (skip both)
-                              "488378f800740448ff40f8")))
-    (:else "488378f800740448ff40f8")))                          ;; cmp [rax-8],0 ; je +4 ; incq
+    ((:c::tag-needed? t pg)
+      (:c::tag-then (:wat::core::if (:c::maybe-literal? t pg) (:c::lit-hex) (:c::bare-hex))))
+    ((:c::maybe-literal? t pg) (:c::lit-hex))
+    (:else (:c::bare-hex))))
 
 ;; ---------------------------------------------------------------- reading OUT of a container
 ;;
@@ -3837,7 +3915,7 @@
           [:c::Read.AtReg {:r r :d d} (:c::emit o (:c::mov-rm r d (:c::rax)))]
           [:c::Read.Reg {:r r} (:c::emit o (:c::mov-rr r (:c::rax)))])]
     (:wat::core::cond
-      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t)))
+      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t pg)))
       ((:c::word-ty? t) lo)
       (:else (:c::fail (:wat::string::concat "a read out of a container, of unknown type " t)
                a pg)))))

@@ -15400,7 +15400,9 @@ the parameter it feeds.
 
 ### F-200: an enum over an enum was laid out as its payload -- `Some(None)` read as `None`, and stone 6 turned it into a segfault
 
-**Open -- the root fix is proven on a scratch copy and handed back with stone 6.** Found by the
+**Fixed** by excursus 002 stone 6's re-strike (`:c::enum-tier`: tier 1 only for a pointer that
+`:c::maybe-unit?` rejects), weighed by the orchestrator. The same wrong answer behind a typealias,
+`elf/probe/nested-enum-alias.wat`, was native `0|0` against `9|9` at HEAD and agrees now. Found by the
 orchestrator's adversarial probes while weighing excursus 002 stone 6.
 `elf/probe/nested-enum-collide.wat`, `elf/probe/nested-enum-count.wat`.
 
@@ -15430,3 +15432,24 @@ are not yet measured -- that is the re-strike.
 payload of `String` or `Vector`. The derivation table's row "payload variant, tier 1: the payload
 itself, never a unit tag" was true of every fixture and false of the type system. A derivation row
 has to be checked against a payload of every KIND the tier admits -- including another enum.
+
+### F-201: a variant as a type argument is refused where its enum is wanted -- a valid program the native compiler will not compile
+
+**Open.** Found by the orchestrator's third adversarial round weighing excursus 002 stone 6.
+`elf/probe/variant-typearg-refused.wat`.
+
+`(:user::Opt.Some {:value (:user::Color.Red {})})` passed to a parameter `(:user::Opt :- [:user::Color])`.
+`wat` runs it and prints `2|2|0`. The native compiler refuses it, at HEAD `653fa08` and with stone 6
+alike:
+
+```
+compile: cannot pass argument 0 of user/c: it wants (:user::Opt :- [:user::Color]) and is given
+(:user::Opt.Some :- [:user::Color.Red])
+```
+
+The type argument was inferred as the unit VARIANT `Color.Red`, not `Color`, and `Opt.Some<Color.Red>`
+is not accepted where `Opt<Color>` is. A refusal, not a wrong answer -- the totality ruling holds --
+but a program the language accepts. The mechanism (where the argument is inferred, and whether
+`:c::assignable?` should see through a variant in a type argument, or the constructor should fix `T`
+from the parameter the value feeds, as F-199's D9 did) is not traced. What `wat --check` gives that
+constructor is the first read.
