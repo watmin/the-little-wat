@@ -41,3 +41,36 @@ agree with the value written by hand; `macro-unused-arm.wat` and the two F-206 p
   parked on `the-little-wat-004-eval-step`). Capture the arm; never re-run it.
 
 Write the result into `SCORE-stone-1-a-macro-says-what-it-returns.md` as a re-strike section.
+
+---
+
+# Round 2 — the re-strike weighed (2026-09-25)
+
+**Credited, on the orchestrator's measurement:** the library's seventy errors are gone (a one-line
+program checks clean); R1–R5 each fixed at its root (R5 was not a design stop: the three arms name
+three functions, the honest type is a keyword). And the sweep, against a BASELINE the orchestrator ran
+with the 007 binary over the same 2,616 programs:
+
+| | programs |
+|---|---|
+| refused both before and with 006 | 338 (standalone stdlib files, negative fixtures) |
+| **newly refused by 006** | **7 — all wat-rs test fixtures** with the same latent classes as the library |
+| refused before, passing with 006 | 6 — incl. `the-little-wat/books/little-prover/ch07-transcript.wat`, `wat/Record.wat`, `wat/service.wat`, `wat/kernel/assertion.wat` |
+
+**006 refuses no user program that passed before.** The floor's nineteen extra reds, read:
+
+| group | tests | the fix |
+|---|---|---|
+| **G1** goldens whose ONLY difference is standard-library line numbers (the re-strike edited `core.wat`/`service.wat`: 1961→1975, 1464→1479, 893→922, token-diffed by the orchestrator) | the four `peers_bijection_*`, `cond_refuses_missing_else`, `witness_thread_first_empty_step_panics_at_expansion`, `contract_02_non_exhaustive_cond_names_else`, the two `format_strict_*` | regenerate each golden; show that every changed token is a line/column |
+| **G2** `macro-error` now has a scheme | `checker_skip_debt_is_named_and_frozen`, `doc_arg_ret_types_match_checker_scheme`, `probe_can_doc_types_reconstruct_the_checker_scheme` | its entry leaves the skip-debt ledger (it is no longer debt); its doc names the `T` it returns |
+| **G3** test fixtures with the library's latent classes — the sweep's seven | `macro_output_reexpands_record_def_and_enum_wraps_it` (`name` on a form), `canonical_comprehension_replaces_for`, `mint_program_body_fold`, the three `diag_thread_*` (declared `HolonAST`, produce `WatAST`), `subs_tuple_char_walk_runs_at_macro_eval` (bare `Tuple`) | fix each at its root, as R2/R3 did — the declaration says what the body produces |
+
+**R6 — a macro cannot yet return a record or an enum value.** `aggregate-new` is expand-time legal
+and refuses because the macro evaluator's symbol table has no type registry; record and variant
+constructors are not expand-time heads. That is part of E's promise ("the expansion is that value's
+syntax"), so it is this stone's: give the macro evaluator the type registry it needs and make the
+PURE constructors expand-time legal. **STOP** if that is more than threading the registry through
+and allow-listing constructors — report what it takes.
+
+Then `macro-returns-record.wat` and `macro-returns-enum.wat` agree with the value written by hand, and
+the floor: green except F-197's two lints and the two step tests (the stepper, still parked).

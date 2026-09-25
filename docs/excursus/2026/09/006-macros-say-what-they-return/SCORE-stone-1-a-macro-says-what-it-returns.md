@@ -85,3 +85,41 @@ The span is the probe. The callee is named. `ReturnTypeMismatch` is the arm that
 | 6 | **MET, mutant reverted.** The render test passed. The reversed zip failed it and was reverted. The test passed again. |
 | 7 | **Not run.** Every freeze type-checks the nine. |
 | 8 | **MET.** The diff has no stepper. |
+
+## Re-strike
+
+The parked branch is still `48d5294f0`. Its one commit was rebased onto `the-little-wat` at `40ddeac4d` and carried back uncommitted. Nothing is committed. The binary is `CARGO_TARGET_DIR=/home/watmin/.cache/wat-kw-007`.
+
+The library's seventy errors are gone. A one-line program no longer reports them. `:t::deep-answer` (`tests/macros/probe_macros_unbounded_depth.wat`) is among the programs that check.
+
+| class | what changed |
+|---|---|
+| R1 | The absent `:locus` arm was a type keyword, `:wat::core::nil`, beside a form. The form is read only when `found` is non-empty, so that binding is gone. Bare `nil` next to a `WatAST` would not have one type. |
+| R2 | `:wat::core::ast-keyword` is `WatAST -> (Option :- [keyword])`, total on a form (`Some` for a keyword node, `None` otherwise). Each macro site that needs the name matches `Some` into `name` and `None` into `macro-error`. `name` and `to-string` accept a keyword value only. A keyword form is a type error. Callers outside macro bodies pass keyword values (`telemetry`, `bracket`, `span`). STOP-2 did not fire. |
+| R3 | `format`'s two folds declare the tuple they build: `(String, String)` nested for the tokenizer, and `(Vector of WatAST, HashMap of String to bool)` for the second pass. |
+| R4 | `assertion-failed!`'s two error arms are `macro-error`, so they share a type with the vector arms. |
+| R5 | Not a design stop. The three arms name three different functions. The honest type is a keyword. Each arm is `from-name` of that name, so a spliced literal is not read as the function. The same shape is on `resume`. One more `if` in `defservice` mixed a keyword value with a type form; both arms are now a form. |
+
+`probes/macro-returns-int.wat` prints `42` and `42`, exit 0. `macro-returns-vector.wat` prints `"[3 4]"` twice, exit 0. The vector uses literals: `+` is not expand-time legal. `macro-returns-record.wat` does not run. `aggregate-new` is expand-time legal and then refuses: the macro evaluator's symbol table has no type registry. The record constructor itself is not an expand-time head. `macro-returns-enum.wat` is refused the same way: `:wat::core::Option.Some` is not an expand-time head. The lying declaration and both F-206 probes are refused at check, and the messages name the macro and the bad call.
+
+`allwat.txt`: 2,616 programs, 2,271 checked, 345 refused. The list is `SWEEP-stone-1-restrike.txt` beside this file. `probe_macros_unbounded_depth.wat` is not on it. The refusals are programs that do not check as user programs (stdlib files hit the reserved prefix; negative fixtures name their own mismatch). None of them is the library's former seventy.
+
+## The floor — STOP-3
+
+`NEXTEST_TEST_THREADS=4 scripts/floor.sh` alone. Doctests exit 0. `.floor/2026-09-25T23-07-36Z`, not re-run:
+
+```
+Summary [1497.476s] 5404 tests run: 5381 passed (8 slow), 23 failed, 22 skipped
+```
+
+Four of the twenty-three are the accepted ones: F-197's two lints, `step_user_function_call` (`None` against `Some(9)`), `step_tail_recursion_terminates_under_bound` (`None` against `Some(6)`). The other nineteen are the stop. The arm is `.floor/2026-09-25T23-07-36Z/ARM.txt`.
+
+- `checker_skip_debt_is_named_and_frozen` — `:wat::core::macro-error` is on the frozen ledger and now has a scheme.
+- `doc_arg_ret_types_match_checker_scheme` — the doc ret is `:wat::core::nil`, the scheme is `:T`.
+- `probe_can_doc_types_reconstruct_the_checker_scheme` — same divergence; the doc never names `T`.
+- `macro_output_reexpands_record_def_and_enum_wraps_it` — `:t::mk` calls `name` on a `WatAST`.
+- `canonical_comprehension_replaces_for` — `foldl`'s function is typed with `HolonAST` where the scheme wants `WatAST`.
+- `mint_program_body_fold`, `diag_thread_first`, `diag_thread_last_pipeline`, `diag_thread_last_single_step` — an anonymous function produces `WatAST` and declares `HolonAST`.
+- `witness_thread_first_empty_step_panics_at_expansion`, `contract_02_non_exhaustive_cond_names_else`, `format_strict_missing_kwarg_is_macro_error`, `format_strict_unused_kwarg_is_macro_error` — the diagnostic EDN does not match the golden.
+- `subs_tuple_char_walk_runs_at_macro_eval` — `first`/`second` refuse a bare `:wat::core::Tuple`; the fold declares `Tuple` and produces `:(String, i64)`.
+- the four `peers_bijection_*` tests and `cond_refuses_missing_else` — the diagnostic EDN does not match the golden.
