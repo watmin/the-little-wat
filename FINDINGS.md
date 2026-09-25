@@ -15453,3 +15453,27 @@ but a program the language accepts. The mechanism (where the argument is inferre
 `:c::assignable?` should see through a variant in a type argument, or the constructor should fix `T`
 from the parameter the value feeds, as F-199's D9 did) is not traced. What `wat --check` gives that
 constructor is the first read.
+
+### F-202: a function type is only its arity to the compiler -- a type-wrong program compiled and segfaulted, a valid one was refused
+
+**Open -- excursus 003 stone 1.** Found by the orchestrator's disconfirming probe while drawing
+closures. `elf/probe/fnty-*.wat`.
+
+`[A B :-> R]` is spelled `"fn:2:R"` (`elf/compile.wat:1387-1460`): the arity and the return, no
+argument types. An indirect call checks the arity (`:2591`) and nothing else, and
+`:c::assignable?` (`:1047`) knows nothing of function types. The export writes the type as
+`partial:` (`:7212`) and the types gate counts it without comparing (16 nodes over the corpus).
+
+wat's rule, measured with `wat --check`: **arguments contravariant, the return covariant**, over
+the variant-to-enum subtyping stone 5 of 002 gave the compiler. A Vector stays invariant (refused,
+and the compiler already agrees).
+
+| probe | `wat --check` | native at `beb513d` |
+|---|---|---|
+| `fnty-arg-narrow-refused` -- `[Opt.Some :-> i64]` where `[Opt :-> i64]` is wanted | refused | **compiled; answered `1`** |
+| `fnty-arg-wrong-refused` -- `[String :-> i64]` where `[i64 :-> i64]` is wanted | refused | **compiled; SIGSEGV** |
+| `fnty-arg-widen` -- `[Opt :-> i64]` where `[Opt.Some :-> i64]` is wanted | accepted | agrees, `1` |
+| `fnty-ret-narrow` -- `[i64 :-> Opt.Some]` where `[i64 :-> Opt]` is wanted | accepted | **refused** |
+
+The second row is the totality ruling broken outright: the compiler did not know the argument
+type and emitted code anyway. Closures make function types common, so this is fixed first.
