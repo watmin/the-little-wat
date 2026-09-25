@@ -11,10 +11,12 @@
 # finding and the counts, and exits 1 when the compiler disagrees with itself (a boundary
 # CONFLICT) or with the language (a TYPE-CONFLICT), or when the join is not whole -- a fact it
 # could not place or join, a type it could not translate, a type the checker left unresolved --
-# because a join that has gone blind would report zero conflicts too. `refined` stays allowed:
-# the checker knowing the VARIANT where the compiler knows the enum is representation, not a
-# disagreement. It exits 1 as well when the export moved an emitted byte, and 2 when it could not
-# do the check at all: the exporter would not build or the checker died.
+# because a join that has gone blind would report zero conflicts too. Since stone 5 `refined` is
+# must-be-zero too: the compiler knows variant types, so a node where the checker knows the
+# VARIANT and the compiler only the enum is knowledge lost. A boundary where a variant is passed
+# to its enum is not a conflict -- `:ck::a-fits` states the language's one rule. It exits 1 as
+# well when the export moved an emitted byte, and 2 when it could not do the check at all: the
+# exporter would not build or the checker died.
 #
 # With no arguments: the whole corpus -- every program elf/compile.wat's driver compiles, the
 # compiler itself included -- and every elf/probe/*.wat.
@@ -169,7 +171,7 @@ bad=0
 for f in CONFLICT unplaced unjoined mismatch; do
   v=$(num "$rtl" "$f"); [ "${v:-x}" = 0 ] || { echo "rules: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
 done
-for f in TYPE-CONFLICT untranslatable unresolved; do
+for f in TYPE-CONFLICT refined untranslatable unresolved; do
   v=$(num "$ttl" "$f"); [ "${v:-x}" = 0 ] || { echo "types: FAIL -- $f ${v:-?} (must be 0)"; bad=1; }
 done
 [ $moved -eq 0 ] || bad=1

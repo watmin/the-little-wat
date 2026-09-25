@@ -26,10 +26,11 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 `elf-run`, read ZERO, and FAIL the build on any conflict. F-194, F-195, F-196 and F-199 are closed.
 
 **Next, in order:**
-1. **Bidirectional argument typing (D9).** A unit variant of a generic enum where nothing fixes `T`
-   (`elf/probe/generic-unit-unfixed.wat`) runs correctly but fails both gates. wat's checker infers `T`
-   from the parameter the argument feeds; the compiler's typer must do the same. Four questions: only
-   this passes (keep-the-default fails Honest, refuse fails Good UX).
+1. **DONE — stone 5, variant types (D9 closed).** The compiler knows `Opt.Some`/`Opt.None` as types,
+   enforces Liskov itself, and a unit variant's `T` is fixed by its use. `refined 0`.
+1b. **Stone 5b — `{:keys […]}` destructuring** of a variant or record (the builder's own shape), the
+   parent refused. Drawn; Grok is the shadowdancer from here, via pulsare.
+1c. **Stone 6 — no tag check** for a value known to be one variant.
 2. **Closures** -- the builder's goal. A `fn` value, closure conversion (code + a record of captured
    values; wat's immutability makes capture a copy), typed on day one. Fixtures with known interpreter
    answers are in the session scratch: capture of a value (126), of a closure (86), closures returned

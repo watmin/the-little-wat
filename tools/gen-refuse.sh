@@ -34,3 +34,6 @@ gen elf/refuse-arity.wat    elf/bad/arity.wat \
 gen elf/refuse-ptradd.wat   elf/bad/ptradd.wat \
     'A String is an address, and adding to one is not arithmetic. The type pass always knew
 ;; enough to say so and did not (F-128).'
+gen elf/refuse-variant.wat  elf/probe/variant-param-wrong.wat \
+    'A None where a Some is wanted. A variant is assignable to its enum and to nothing else, and
+;; the compiler now knows it (excursus 002 stone 5): wat --check refuses this, and so must it.'

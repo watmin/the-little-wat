@@ -37,23 +37,34 @@
 ;;   ctype-unjoined     the compiler typed a node the checker did not      (counted)
 ;;   ktype-unjoined     the checker typed a node the compiler did not      (counted)
 ;;
+;; **Stone 5 -- the language's subtyping, stated ONCE.** A value of a VARIANT is a value of its
+;; enum: a function that wants an `Opt` accepts a `Some`. So an argument's type need not EQUAL its
+;; parameter's; it must be ASSIGNABLE to it, and `:ck::a-fits` is the whole of that rule, in the
+;; language's own terms and nothing more: the same type, or a variant `E.V` of the enum `E` the
+;; parameter names, at the same instantiation. It reads the two exported types -- the compiler
+;; spells `(:E.V :- [A])` as `<tier>:E.V;A` beside `<tier>:E;A` -- and derives no type.
+;;
 ;; Reported, per program and in total:
-;;   boundary-type-conflict   an argument's type differs from its parameter's      (a FINDING)
+;;   boundary-type-conflict   an argument's type is not assignable to its parameter's (a FINDING)
 ;;   boundary-type-AGREES     the same join, types equal -- counted, the witness that a
 ;;                            silent run reached its sites and is not merely empty
+;;   boundary-type-VARIANT    the same join, a variant passed where its enum is wanted -- counted
 ;;   carg-unplaced            a CArg whose position is not a List node with that argument
 ;;   cparam-unplaced          a CParam whose position is not that parameter of a `defn`
 ;;   arg-unjoined             a placed argument whose head names no `defn` parameter at its index
 ;;   callee-mismatch          the join reached a `defn` the compiler did not say it called
 
 ;; ── the compiler's facts ─────────────────────────────────────────────────────────────
+;; `tn` and `ti` are `ty` read in two: the name it spells and the instantiation after it --
+;; `penum::user::Opt.Some;str` is `penum::user::Opt.Some` and `;str` (`:ck::ty-name`)
 (:wat::core::defrecord :ck::CArg
   [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
    idx <- :wat::core::i64  callee <- :wat::core::String  in <- :wat::core::String
-   ty <- :wat::core::String])
+   ty <- :wat::core::String  tn <- :wat::core::String  ti <- :wat::core::String])
 (:wat::core::defrecord :ck::CParam
   [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
-   idx <- :wat::core::i64  fn <- :wat::core::String  ty <- :wat::core::String])
+   idx <- :wat::core::i64  fn <- :wat::core::String  ty <- :wat::core::String
+   tn <- :wat::core::String  ti <- :wat::core::String])
 
 ;; ── stone 2: the type each side gave each node, at its position ──────────────────────
 ;; `seq` is the line's order within its program -- only so a pair of facts at one position can
@@ -79,19 +90,22 @@
 ;; ── what the rules derive: joins, never types ────────────────────────────────────────
 (:wat::core::defrecord :ck::Arg
   [name <- :wat::core::String  idx <- :wat::core::i64  callee <- :wat::core::String
-   in <- :wat::core::String  ty <- :wat::core::String
+   in <- :wat::core::String  ty <- :wat::core::String  tn <- :wat::core::String  ti <- :wat::core::String
    file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64])
 (:wat::core::defrecord :ck::Param
   [name <- :wat::core::String  idx <- :wat::core::i64  fn <- :wat::core::String
-   ty <- :wat::core::String
+   ty <- :wat::core::String  tn <- :wat::core::String  ti <- :wat::core::String
    file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64])
+;; this argument's type is assignable to the parameter it feeds (`:ck::a-fits`)
+(:wat::core::defrecord :ck::Fits
+  [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64  idx <- :wat::core::i64])
 
 ;; a CArg lands on a LIST node starting at its position, whose head is a name and which has an
 ;; argument at that index. The head's name is wat-grep's, so the defn it names is found by
 ;; wat-grep's spelling on both sides.
 (:wat::rete::defrule :ck::a-arg
   :when [(:ck::CArg (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx)
-                    (?callee <- :callee) (?in <- :in) (?t <- :ty))
+                    (?callee <- :callee) (?in <- :in) (?t <- :ty) (?tn <- :tn) (?ti <- :ti))
          (:ck::At (?K <- :id) (?f <- :file) (?l <- :line) (?c <- :col))
          (:wat::grep::Node (?K <- :id) (?kk <- :kind))
          (:wat::grep::Node (?h <- :id) (?K <- :parent) (?hi <- :index))
@@ -100,12 +114,13 @@
          (:wat::rete::where (:wat::rete::core::enum::= ?kk (:wat::grep::NodeKind.List {})))
          (:wat::rete::where (:wat::rete::i64::= ?hi 0))
          (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::- ?xi 1 :undefined -1) ?i))]
-  :then [(:ck::Arg :name ?F :idx ?i :callee ?callee :in ?in :ty ?t :file ?f :line ?l :col ?c)])
+  :then [(:ck::Arg :name ?F :idx ?i :callee ?callee :in ?in :ty ?t :tn ?tn :ti ?ti :file ?f :line ?l :col ?c)])
 
 ;; a CParam lands on the name of parameter i of a `defn`: index 3i of the vector at index 2,
 ;; the defn's name at index 1
 (:wat::rete::defrule :ck::b-param
-  :when [(:ck::CParam (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx) (?fn <- :fn) (?t <- :ty))
+  :when [(:ck::CParam (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx) (?fn <- :fn) (?t <- :ty)
+                      (?tn <- :tn) (?ti <- :ti))
          (:ck::At (?P <- :id) (?f <- :file) (?l <- :line) (?c <- :col))
          (:wat::grep::Node (?P <- :id) (?V <- :parent) (?pi <- :index))
          (:wat::grep::Node (?V <- :id) (?D <- :parent) (?vi <- :index) (?vk <- :kind))
@@ -120,14 +135,39 @@
          (:wat::rete::where (:wat::rete::i64::= ?ni 1))
          (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::mod ?pi 3 :undefined -1) 0))
          (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::quot ?pi 3 :undefined -1) ?i))]
-  :then [(:ck::Param :name ?F :idx ?i :fn ?fn :ty ?t :file ?f :line ?l :col ?c)])
+  :then [(:ck::Param :name ?F :idx ?i :fn ?fn :ty ?t :tn ?tn :ti ?ti :file ?f :line ?l :col ?c)])
 
-;; ── ★ THE CONSTRAINT: this argument feeds that parameter, so their types are one type ─
+;; ── ★ THE LANGUAGE'S RULE, once: may this argument go where that parameter is ───────────
+;; the same type -- or `E.V` where `E` is wanted, at the same instantiation: the argument's name
+;; is the parameter's followed by `.` and one variant name, and what follows the names is equal.
+;; Nothing else: not a sibling variant, not an enum where a variant is wanted, not another
+;; instantiation, nothing inside a Vector.
+(:wat::rete::defrule :ck::a-fits
+  :when [(:ck::Arg (?F <- :name) (?i <- :idx) (?at <- :ty) (?an <- :tn) (?ai <- :ti)
+                   (?f <- :file) (?l <- :line) (?c <- :col))
+         (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty) (?pn <- :tn) (?pi <- :ti))
+         (:wat::rete::where
+           (:wat::rete::core::or
+             (:wat::rete::string::= ?at ?pt)
+             (:wat::rete::core::and
+               (:wat::rete::string::= ?ai ?pi)
+               (:wat::rete::core::and
+                 (:wat::rete::string::starts-with? ?an (:wat::rete::string::concat ?pn "."))
+                 (:wat::rete::core::not
+                   (:wat::rete::string::contains?
+                     (:wat::rete::string::subs ?an
+                       (:wat::rete::i64::+ (:wat::rete::string::length ?pn) 1 :undefined -1)
+                       (:wat::rete::string::length ?an)
+                       :undefined ".")
+                     "."))))))]
+  :then [(:ck::Fits :file ?f :line ?l :col ?c :idx ?i)])
+
+;; ── ★ THE CONSTRAINT: this argument feeds that parameter, so its type must fit ────────────
 (:wat::rete::defrule :ck::z-conflict
   :when [(:ck::Arg (?F <- :name) (?i <- :idx) (?callee <- :callee) (?in <- :in) (?at <- :ty)
                    (?f <- :file) (?l <- :line) (?c <- :col))
          (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty) (?pf <- :file) (?pl <- :line))
-         (:wat::rete::where (:wat::rete::string::not= ?at ?pt))]
+         (:wat::rete::not (:ck::Fits (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx)))]
   :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
            :rule "boundary-type-conflict"
            :captures (:wat::rete::core::PersistentVector
@@ -151,6 +191,22 @@
              (:wat::grep::Capture :name "in" :value ?in)
              (:wat::grep::Capture :name "arg" :value (:wat::rete::i64::to-string ?i))
              (:wat::grep::Capture :name "type" :value ?at)))])
+
+;; the witness for the rule's second half: a variant where its enum is wanted
+(:wat::rete::defrule :ck::z-variant
+  :when [(:ck::Arg (?F <- :name) (?i <- :idx) (?callee <- :callee) (?in <- :in) (?at <- :ty)
+                   (?f <- :file) (?l <- :line) (?c <- :col))
+         (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty))
+         (:ck::Fits (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx))
+         (:wat::rete::where (:wat::rete::string::not= ?at ?pt))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "boundary-type-VARIANT"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "call" :value ?callee)
+             (:wat::grep::Capture :name "in" :value ?in)
+             (:wat::grep::Capture :name "arg" :value (:wat::rete::i64::to-string ?i))
+             (:wat::grep::Capture :name "arg-type" :value ?at)
+             (:wat::grep::Capture :name "param-type" :value ?pt)))])
 
 ;; ── the join is exact, or it says where it is not ────────────────────────────────────
 (:wat::rete::defrule :ck::y-carg-unplaced
@@ -308,7 +364,7 @@
 
 (:wat::core::defrecord :ck::Tally
   [progs <- :wat::core::i64  cargs <- :wat::core::i64  cparams <- :wat::core::i64
-   agree <- :wat::core::i64  conflict <- :wat::core::i64  unplaced <- :wat::core::i64
+   agree <- :wat::core::i64  variant <- :wat::core::i64  conflict <- :wat::core::i64  unplaced <- :wat::core::i64
    unjoined <- :wat::core::i64  mismatch <- :wat::core::i64  lists <- :wat::core::i64
    ;; stone 2
    ctypes <- :wat::core::i64  ktypes <- :wat::core::i64  kunres <- :wat::core::i64
@@ -318,7 +374,7 @@
    conly <- :wat::core::i64  konly <- :wat::core::i64])
 
 (:wat::core::defn :ck::zero [] -> :ck::Tally
-  (:ck::Tally :progs 0 :cargs 0 :cparams 0 :agree 0 :conflict 0 :unplaced 0 :unjoined 0
+  (:ck::Tally :progs 0 :cargs 0 :cparams 0 :agree 0 :variant 0 :conflict 0 :unplaced 0 :unjoined 0
               :mismatch 0 :lists 0
               :ctypes 0 :ktypes 0 :kunres 0 :tagree 0 :trefined 0 :tconflict 0 :tpartial 0
               :tuntrans 0 :tunres 0 :kmulti 0 :cmulti 0 :conly 0 :konly 0))
@@ -387,6 +443,15 @@
     ((:wat::core::= i (:wat::i64::- (:wat::core::length ws) 1)) (:wat::core::nth ws i))
     (:else (:wat::string::concat (:wat::core::nth ws i) " " (:ck::rest ws (:wat::i64::+ i 1))))))
 
+;; a compiler type read in two, lexically -- the name it spells runs to its first `;`, and the
+;; instantiation is the rest: `henum::user::Box;penum::user::Opt;str` is `henum::user::Box` and
+;; `;penum::user::Opt;str`. Reading, not typing: nothing here knows what a name means.
+(:wat::core::defn :ck::ty-name [t <- :wat::core::String] -> :wat::core::String
+  (:wat::core::nth (:wat::string::split t ";") 0))
+
+(:wat::core::defn :ck::ty-inst [t <- :wat::core::String] -> :wat::core::String
+  (:wat::string::subs t (:wat::string::length (:ck::ty-name t)) (:wat::string::length t)))
+
 ;; the translation's own marker, read back, anywhere in the type -- a Vector of functions is
 ;; as partial as a function: "partial:" and "untranslatable:" are not wat types
 (:wat::core::defn :ck::kind-of [w <- :wat::core::String] -> :wat::core::String
@@ -413,12 +478,14 @@
         (:ck::add-rec p (:ck::CArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
                                    :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
                                    :callee (:ck::word ws 5) :in (:ck::word ws 6)
-                                   :ty (:ck::word ws 7))
+                                   :ty (:ck::word ws 7) :tn (:ck::ty-name (:ck::word ws 7))
+                                   :ti (:ck::ty-inst (:ck::word ws 7)))
           :cargs))
       ((:wat::core::= tag "CParam")
         (:ck::add-rec p (:ck::CParam :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
                                      :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
-                                     :fn (:ck::word ws 5) :ty (:ck::word ws 6))
+                                     :fn (:ck::word ws 5) :ty (:ck::word ws 6)
+                                     :tn (:ck::ty-name (:ck::word ws 6)) :ti (:ck::ty-inst (:ck::word ws 6)))
           :cparams))
       ((:wat::core::= tag "CType")
         (:wat::core::let [w (:ck::rest ws 6)]
@@ -453,6 +520,7 @@
 (:wat::core::defn :ck::bump [t <- :ck::Tally rule <- :wat::core::String] -> :ck::Tally
   (:wat::core::cond
     ((:wat::core::= rule "boundary-type-AGREES") (:wat::core::assoc t :agree (:wat::i64::+ (:ck::Tally/agree t) 1)))
+    ((:wat::core::= rule "boundary-type-VARIANT") (:wat::core::assoc t :variant (:wat::i64::+ (:ck::Tally/variant t) 1)))
     ((:wat::core::= rule "boundary-type-conflict") (:wat::core::assoc t :conflict (:wat::i64::+ (:ck::Tally/conflict t) 1)))
     ((:wat::core::= rule "arg-unjoined") (:wat::core::assoc t :unjoined (:wat::i64::+ (:ck::Tally/unjoined t) 1)))
     ((:wat::core::= rule "callee-mismatch") (:wat::core::assoc t :mismatch (:wat::i64::+ (:ck::Tally/mismatch t) 1)))
@@ -473,6 +541,7 @@
     :cargs (:wat::i64::+ (:ck::Tally/cargs a) (:ck::Tally/cargs b))
     :cparams (:wat::i64::+ (:ck::Tally/cparams a) (:ck::Tally/cparams b))
     :agree (:wat::i64::+ (:ck::Tally/agree a) (:ck::Tally/agree b))
+    :variant (:wat::i64::+ (:ck::Tally/variant a) (:ck::Tally/variant b))
     :conflict (:wat::i64::+ (:ck::Tally/conflict a) (:ck::Tally/conflict b))
     :unplaced (:wat::i64::+ (:ck::Tally/unplaced a) (:ck::Tally/unplaced b))
     :unjoined (:wat::i64::+ (:ck::Tally/unjoined a) (:ck::Tally/unjoined b))
@@ -497,8 +566,10 @@
     (:wat::string::concat label
       "  CArg " (:wat::i64::to-string (:ck::Tally/cargs t))
       "  CParam " (:wat::i64::to-string (:ck::Tally/cparams t))
-      "  pairs " (:wat::i64::to-string (:wat::i64::+ (:ck::Tally/agree t) (:ck::Tally/conflict t)))
+      "  pairs " (:wat::i64::to-string (:wat::i64::+ (:ck::Tally/agree t)
+                                          (:wat::i64::+ (:ck::Tally/variant t) (:ck::Tally/conflict t))))
       "  agree " (:wat::i64::to-string (:ck::Tally/agree t))
+      "  variant " (:wat::i64::to-string (:ck::Tally/variant t))
       "  CONFLICT " (:wat::i64::to-string (:ck::Tally/conflict t))
       "  unplaced " (:wat::i64::to-string (:ck::Tally/unplaced t))
       "  unjoined " (:wat::i64::to-string (:ck::Tally/unjoined t))
@@ -528,8 +599,9 @@
 ;; counted, and printed only to the detail stream: the lines that are witnesses, not findings
 (:wat::core::defn :ck::quiet? [rule <- :wat::core::String] -> :wat::core::bool
   (:wat::core::or (:wat::core::= rule "boundary-type-AGREES")
+    (:wat::core::or (:wat::core::= rule "boundary-type-VARIANT")
     (:wat::core::or (:wat::core::= rule "type-AGREES")
-      (:wat::core::or (:wat::core::= rule "type-refined")
+      ;; `type-refined` is a finding since stone 5 -- printed, not quiet
         (:wat::core::or (:wat::core::= rule "type-partial")
           (:wat::core::or (:wat::core::= rule "ctype-unjoined")
                           (:wat::core::= rule "ktype-unjoined")))))))

@@ -158,7 +158,7 @@ echo "== and the compiler refuses what it cannot translate =="
 # and the stale copy underneath it went unnoticed. A negative test that has drifted from the
 # thing it tests proves nothing, which gen-refuse.sh's own header says. So check.
 stale=0
-for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat; do
+for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat elf/refuse-variant.wat; do
   [ -f "$f" ] || continue
   # the generated body is elf/compile.wat up to its driver; compare that, not the driver
   if ! diff -q <(sed '/^(:wat::core::defn :user::main/,$d' elf/compile.wat) \
@@ -243,6 +243,10 @@ refuses elf/refuse-arity.wat    'wrong number of arguments' \
         "refused elf/bad/arity.wat, naming the call:         (user/two 1 2 3)  (F-128)"
 refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
         "refused elf/bad/ptradd.wat, naming the type:        arithmetic on a str  (F-128)"
+# **a variant is assignable to its enum and to nothing else** (excursus 002 stone 5): a `None`
+# where a `Some` is wanted is refused, naming the call -- as `wat --check` refuses it
+refuses elf/refuse-variant.wat  'cannot pass argument 0 of user/needs-some: it wants (:user::Opt.Some :- [:wat::core::String]) and is given (:user::Opt.None :- [:?]) at elf/probe/variant-param-wrong.wat 12 25: (user/needs-some (:user::Opt.None {}))' \
+        "refused elf/probe/variant-param-wrong.wat, naming the call: a None where a Some is wanted (stone 5)"
 
 # **the compiler must agree with itself at every boundary** (excursus 002 stone 1). The compiler,
 # asked, says the type it gave every argument of every call to a user function and every
@@ -262,7 +266,7 @@ case $rrc in
   1) echo "  FAIL: the compiler disagrees -- with itself, with the language, or the export moved a byte"; fail=1 ;;
   *) echo "  FAIL: tools/rules.sh could not make the check (exit $rrc)"; fail=1 ;;
 esac
-rtot=$(printf '%s\n' "$rout" | sed -n 's/.*TOTAL over \([0-9]*\) programs.*pairs \([0-9]*\).*CONFLICT \([0-9]*\).*/\3 conflicts in \2 argument-parameter pairs over \1 programs/p')
+rtot=$(printf '%s\n' "$rout" | sed -n 's/.*TOTAL over \([0-9]*\) programs.*pairs \([0-9]*\)  agree \([0-9]*\)  variant \([0-9]*\)  CONFLICT \([0-9]*\).*/\5 conflicts in \2 argument-parameter pairs (\3 equal, \4 a variant to its enum) over \1 programs/p')
 ttot=$(printf '%s\n' "$rout" | sed -n 's/^types: TOTAL over \([0-9]*\) programs.*joined \([0-9]*\)  agree \([0-9]*\)  refined \([0-9]*\)  TYPE-CONFLICT \([0-9]*\) .*/\5 type conflicts in \2 nodes both typed (\3 agree, \4 refined) over \1 programs/p')
 
 echo
