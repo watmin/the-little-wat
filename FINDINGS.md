@@ -15588,7 +15588,8 @@ test and `src/kernel/source.rs:97` lean on as the contract. The crawl
 
 ### F-207: `keyword::to-string` disagrees with `str` -- the verb named "to string" drops the colon
 
-**Open -- excursus 007.** Found when excursus 006's first check refused 17 stdlib macro sites that
+**Fixed** by excursus 007 stone 1 (wat-rs `40ddeac4d`): `to-string`/`from-string` are the written
+form, `name`/`from-name` the name. Found when excursus 006's first check refused 17 stdlib macro sites that
 call `:wat::keyword::to-string` on a keyword FORM. Measured at wat-rs `75fcc7638`:
 
 | | wat | Clojure 1.12.6 |

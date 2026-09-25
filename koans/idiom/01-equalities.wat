@@ -17,6 +17,6 @@
     (:wat::test::assert-eq (:wat::core::= 3.0 (:wat::i64::to-f64 3)) true) ; row 6
     ;; row 7 refused: an i64 is never nil; a value that may be absent is an Option, and that is its type, not a test
     ;; row 8 refused: a String, a keyword and a symbol are different types, so = between them is refused at check time
-    (:wat::test::assert-eq (:wat::keyword::from-string "pear") :pear) ; row 9
+    (:wat::test::assert-eq (:wat::keyword::from-name "pear") :pear) ; row 9
     (:wat::test::assert-eq (:wat::core::symbol-node "pear") (:wat::core::quote pear)) ; row 10
     (:wat::kernel::println "koans idiom 01-equalities: ok")))

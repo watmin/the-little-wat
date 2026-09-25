@@ -55,7 +55,7 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 2a''. **Excursus 006 — a macro says what it returns (F-206), BEFORE 004's renderer lands.** The
    builder's four-questions ruling: candidate E. `CRAWL.md` sized it: one declaration changes; the
    real work is type-checking macro bodies at all. 004's stepping is credited and waits on it.
-2a'''. **Excursus 007 — `to-string` is the written form; `name` is the name (F-207), FIRST.** The builder
+2a'''. **DONE — excursus 007: `to-string` is the written form; `name` is the name (F-207)** (wat-rs `40ddeac4d`). The builder
    accepted the four-YES derivation. 006's re-strike (70 stdlib errors, five classes; 17 of them want
    `name`) and then 004's stepping follow, each parked on its own pushed wat-rs branch meanwhile.
 2b. **Then persistent collections, excursus 008** -- the builder's ruling (2026-09-24): *"in our
