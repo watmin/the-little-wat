@@ -13,8 +13,8 @@ Ordered by how directly each tests what wat claims to be.
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`a0830a6`**. `git diff --stat a0830a6 HEAD -- elf tools`
-must print NOTHING (commits since then touched only notes and this file). If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
+**Freshness probe:** written against **`21c737d`**. `git diff --stat 21c737d HEAD -- elf/compile.wat
+elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
 ### NEXT STRIKE — closures: excursus 003 stone 1 (whole function types) with Grok
