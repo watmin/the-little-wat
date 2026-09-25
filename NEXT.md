@@ -13,8 +13,8 @@ Ordered by how directly each tests what wat claims to be.
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `a0830a6`**, or the one commit directly on top of it
-that carries this line. `git log --oneline -2` must show that. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
+**Freshness probe:** written against **`a0830a6`**. `git diff --stat a0830a6 HEAD -- elf tools`
+must print NOTHING (commits since then touched only notes and this file). If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
 ### NEXT STRIKE — closures
