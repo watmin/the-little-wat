@@ -47,6 +47,11 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
    The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so
    the ownership count and both gates must cover it.
+2b. **Then persistent collections, excursus 004** -- the builder's ruling (2026-09-24): *"in our
+   compiler - all of the collections must be persistent - the only thing that differs between our
+   compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The
+   compiled Vector included; model wat-rs's `PVec`/`PMap` (array, then an rpds trie, promotion
+   unobservable). Structural sharing makes reclamation (item 3) part of that crawl.
 3. Then stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
    rebase onto this typer, an `allocates?` gate, and a real §7 gate before it is struck.
 
