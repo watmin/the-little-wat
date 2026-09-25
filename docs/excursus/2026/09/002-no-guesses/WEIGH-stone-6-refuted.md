@@ -81,4 +81,5 @@ HEAD native `0|0`, interpreter `9|9`; agrees now). The rounds found one thing th
 
 **One imprecision in the SCORE**, corrected here: "the guard-only compiler and this one emitted 87
 identical binaries, compiler included" cannot hold for the compiler -- its source changed, and its
-size went 276,620 -> 276,703. The claim holds for the 86 corpus programs, which is what STOP-5 asks.
+size went 276,620 -> 276,703. It can hold only for the corpus programs, which is what STOP-5
+asks; I did not rebuild the guard-only compiler, so that part is Grok's measurement, not mine.

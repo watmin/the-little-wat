@@ -7,28 +7,23 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-24, HEAD 01c6112)
+## elf/ — the live queue (2026-09-24, HEAD a0830a6)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **HEAD `01c6112`**, or the curare commit directly on top of
-it. `git log --oneline -2` must show that. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
+**Freshness probe:** written against **HEAD `a0830a6`**, or the one commit directly on top of it
+that carries this line. `git log --oneline -2` must show that. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — weigh stone 6 (with Grok), then closures
+### NEXT STRIKE — closures
 
-**Read `docs/excursus/2026/09/002-no-guesses/` first** -- DESIGN, then SCOREs 1-5b in order, then
-`BRIEF-stone-6.md` / `EXPECTATIONS-stone-6.md`.
+**Read `docs/excursus/2026/09/002-no-guesses/` first** -- DESIGN, then SCOREs 1-6 in order, and
+`WEIGH-stone-6-refuted.md` (how stone 6 was refuted once, and why every fixture missed it).
 
-**On waking:** stone 6 was drawn at `01c6112` and handed to Grok via pulsare (`holon:grok.1`).
-Read `/home/watmin/Work/holon/.pulsare/to-claude`. If it says `kind=scored`, read the SCORE it
-lists and weigh it as the orchestrator: re-run the load-bearing rows yourself (penum-str-let must
-agree; the count-literal mutation must segfault; the F-188 probes; full `tools/elf-run.sh` with both
-gates at zero; the HEAD-from-`git archive` comparison; `bootstrap.sh` without `--fast`; instructions
-and cycles against the 1.8% floor, F-192), commit, then `pulsare_yield kind=struck` with ABSOLUTE
-paths. If it still says `kind=struck` for 5b, Grok has not finished -- wait.
+**On waking:** no stone is in flight. Grok (via pulsare, `holon:grok.1`) was last told
+`kind=struck` for stone 6. The next act is the orchestrator's: crawl for closures and draw the stone.
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
@@ -39,9 +34,10 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    enforces Liskov itself, and a unit variant's `T` is fixed by its use. `refined 0`.
 1b. **DONE — stone 5b, `{:keys […]}` destructuring** of a variant or record; the parent refused. First
    strike by Grok via pulsare.
-1c. **Stone 6 — IN FLIGHT with Grok.** Stone 0b re-landed on the finished typer, to the variant: a
-   payload variant needs no unit guard, a unit variant needs no count. The crawl found `match` tests
-   tags only on parents, so the count guard is the only runtime check left to elide.
+1c. **DONE — stone 6, the count guard per variant**, -5.558% instructions (cycles inside the floor).
+   Refuted once: it exposed **F-200** (an enum over an enum laid out as its payload, `Some(None)`
+   read as `None`), fixed at the root in `:c::enum-tier`. Lesson: check a derivation row against a
+   payload of EVERY kind the tier admits, including another enum.
 2. **Closures** -- the builder's goal. A `fn` value, closure conversion (code + a record of captured
    values; wat's immutability makes capture a copy), typed on day one. Fixtures with known interpreter
    answers are `probes/closure-captures.wat` (126, 86: capture of a value, of a function, of a
@@ -51,7 +47,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 3. Then stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
    rebase onto this typer, an `allocates?` gate, and a real §7 gate before it is struck.
 
-**Open, recorded:** F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
+**Open, recorded:** F-201 (a variant as a type argument, `Opt.Some<Color.Red>`, refused where
+`Opt<Color>` is wanted -- a valid program, not traced) · F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
 yet traced) · F-197 (the wat-rs floor's pre-existing reds) · F-198 (`eval-step!`: namespaced quoted
 heads; an empty capture called a closure — four-questions answer: "a captured environment that binds
 nothing is not a closure") · the two wat-rs step tests stone 3 left red, for the builder · pushing
