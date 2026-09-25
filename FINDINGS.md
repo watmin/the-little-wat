@@ -15546,7 +15546,8 @@ immutable). The builder, 2026-09-25: *"not supporting user defined functions is 
 
 ### F-205: a stray `)` exhausted the compiler's heap; a missing `)` was accepted
 
-**Open.** Found through Grok's excursus 003 stone 1: an intermediate source with one extra `)`
+**Fixed** by excursus 005 stone 1: every read consumes a byte or refuses, naming its place; an
+unterminated string is its own refusal; five standing negatives in `tools/elf-run.sh`. Found through Grok's excursus 003 stone 1: an intermediate source with one extra `)`
 made the stone-6 compiler exhaust its 1.9 GB heap (exit 70, RSS 1,855,560 KB) instead of reporting
 a parse error. Reproduced on HEAD `75bbf13` in two lines each: `elf/probe/reader-*.wat`.
 

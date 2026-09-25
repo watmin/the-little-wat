@@ -37,3 +37,20 @@ gen elf/refuse-ptradd.wat   elf/bad/ptradd.wat \
 gen elf/refuse-variant.wat  elf/probe/variant-param-wrong.wat \
     'A None where a Some is wanted. A variant is assignable to its enum and to nothing else, and
 ;; the compiler now knows it (excursus 002 stone 5): wat --check refuses this, and so must it.'
+# **the reader is total** (F-205, excursus 005 stone 1): a malformed delimiter is refused at
+# compile time, naming the place -- it used to exhaust the heap, or be accepted
+gen elf/refuse-rparen.wat   elf/probe/reader-extra-rparen.wat \
+    'One `)` too many. The reader read it as an atom ZERO bytes long and asked again at the same
+;; place until the heap ran out (F-205); it must be refused, naming where it is.'
+gen elf/refuse-unclosed.wat elf/probe/reader-missing-rparen.wat \
+    'One `)` too few. The end of the file used to close the list silently and the program ran
+;; (F-205); it must be refused, naming where the unclosed `(` opened.'
+gen elf/refuse-mismatch.wat elf/probe/reader-mismatched-closer.wat \
+    'A `)` where `]` belongs. A list closes with its own closer or not at all (F-205); it must be
+;; refused, naming both delimiters.'
+gen elf/refuse-unterm.wat    elf/probe/reader-unterminated-string.wat \
+    'A string the file ends inside, inside a list. The end of input was read as the string'"'"'s end,
+;; and the refusal blamed the unclosed `(`; it must name where the STRING opened.'
+gen elf/refuse-unterm-top.wat elf/probe/reader-unterminated-string-top.wat \
+    'A string the file ends inside, at the top level. It used to read as a complete string; it
+;; must be refused, naming where it opened.'

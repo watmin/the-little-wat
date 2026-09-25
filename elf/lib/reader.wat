@@ -69,10 +69,30 @@
 (:wat::core::typealias :rd::Arena (:wat::core::Vector :- [:rd::Node]))
 (:wat::core::typealias :rd::Kids (:wat::core::Vector :- [:wat::core::i64]))
 
+;; **why the reader stopped short, when it did** (F-205). A stray `)` used to read as an atom
+;; ZERO bytes long, and every caller asked again at the same position until the heap ran out;
+;; an unclosed `(` used to be closed silently by the end of the file. Both are refusals now,
+;; and a refusal is a VALUE the reader hands back -- it knows bytes, not lines or files, so the
+;; place is said by whoever asked (`:c::read-ok` in elf/compile.wat), the way every node's is.
+;;
+;;   Clean       nothing went wrong
+;;   Stray       a closer where a form belongs, with nothing open for it to close
+;;   Unclosed    the source ended inside a list; `open` is where that list began
+;;   Mismatched  a closer that is not this list's own; `open` is where this list began
+;;   Unterminated  the source ended inside a string literal; `open` is its opening quote
+(:wat::core::defenum :rd::Fault :wat::enum::Pure
+  :Clean []
+  :Stray []
+  :Unclosed []
+  :Mismatched []
+  :Unterminated [])
+
 ;; the reader's whole state: what has been built, where it is, what it just made, and the
-;; children it is collecting
+;; children it is collecting -- and, if it had to stop, why (`fault`) and at which opener
+;; (`open`, -1 for none). A faulted state's `pos` is the byte it stopped at.
 (:wat::core::defrecord :rd::St
-  [arena <- :rd::Arena  pos <- :wat::core::i64  node <- :wat::core::i64  kids <- :rd::Kids])
+  [arena <- :rd::Arena  pos <- :wat::core::i64  node <- :wat::core::i64  kids <- :rd::Kids
+   fault <- :rd::Fault  open <- :wat::core::i64])
 
 ;; ---------------------------------------------------------------- characters
 
@@ -106,6 +126,9 @@
 (wat.core/defn rd/delim? [c :- wat.type/i64] :- wat.type/bool
   (rd/in? "()[]{}\";" c 0))
 
+(wat.core/defn rd/closer? [c :- wat.type/i64] :- wat.type/bool
+  (rd/in? ")]}" c 0))
+
 (wat.core/defn rd/digit? [c :- wat.type/i64] :- wat.type/bool
   (rd/in? "0123456789" c 0))
 
@@ -133,10 +156,12 @@
     (:else (rd/atom-end src n (wat.core/+ i 1)))))
 
 ;; from just after the opening quote to just after the closing one; a backslash takes the next
-;; character with it, whatever it is
+;; character with it, whatever it is. **-1 when the source ends first** (F-205's family): the end
+;; of input used to be answered as the string's end, so `"abc` read as a whole string -- and a
+;; trailing backslash answered one PAST the end.
 (wat.core/defn rd/str-end [src :- wat.type/String n :- wat.type/i64 i :- wat.type/i64] :- wat.type/i64
   (wat.core/cond
-    ((wat.core/>= i n) i)
+    ((wat.core/>= i n) -1)
     ((wat.core/= (rd/byte src i) (rd/b1 "\\")) (rd/str-end src n (wat.core/+ i 2)))
     ((wat.core/= (rd/byte src i) (rd/b1 "\"")) (wat.core/+ i 1))
     (:else (rd/str-end src n (wat.core/+ i 1)))))
@@ -177,57 +202,83 @@
                        kids :- :rd::Kids pos :- wat.type/i64] :- :rd::St
   (:rd::St :arena (wat.core/conj arena
                     (:rd::Node :k kind :text text :kids kids))
-           :pos pos :node n :kids (rd/empty-kids)))
+           :pos pos :node n :kids (rd/empty-kids) :fault (:rd::Fault.Clean {}) :open -1))
+
+;; the reader stopping short: nothing more is read, and the caller is told why and where
+(wat.core/defn rd/stop [arena :- :rd::Arena pos :- wat.type/i64 open :- wat.type/i64
+                        why :- :rd::Fault] :- :rd::St
+  (:rd::St :arena arena :pos pos :node -1 :kids (rd/empty-kids) :fault why :open open))
+
+(wat.core/defn rd/ok? [st :- :rd::St] :- wat.type/bool
+  (wat.core/= (:rd::St/fault st) (:rd::Fault.Clean {})))
 
 ;; ---------------------------------------------------------------- the parser
 
-(wat.core/defn rd/form [src :- wat.type/String n :- wat.type/i64 st :- :rd::St] :- :rd::St
-  (wat.core/let [i (rd/skip src n (:rd::St/pos st))
-                 a (:rd::St/arena st)]
+;; **one form, at `i` -- and every arm consumes at least the byte there, or refuses** (F-205).
+;; The caller has already skipped to `i` and knows it is inside the source, so there is always a
+;; byte here; there is no end-of-input arm to answer "nothing, and no progress". A delimiter no
+;; arm above opens -- `)`, `]`, `}` -- is refused rather than read, so the atom arm is reached
+;; only by a byte that can START an atom, and it takes that byte before it looks at the next:
+;; an atom zero bytes long, which is what a stray `)` used to read as, cannot be made.
+(wat.core/defn rd/form [src :- wat.type/String n :- wat.type/i64 a :- :rd::Arena
+                        i :- wat.type/i64] :- :rd::St
+  (wat.core/let [c (rd/byte src i)]
     (wat.core/cond
-      ((wat.core/>= i n)
-        (:rd::St :arena a :pos i :node -1 :kids (rd/empty-kids)))
-      ((wat.core/= (rd/byte src i) (rd/b1 "(")) (rd/seq src n a i ")" (:rd::Kind.List {})))
-      ((wat.core/= (rd/byte src i) (rd/b1 "[")) (rd/seq src n a i "]" (:rd::Kind.Vector {})))
-      ((wat.core/= (rd/byte src i) (rd/b1 "{")) (rd/seq src n a i "}" (:rd::Kind.Map {})))
-      ((wat.core/= (rd/byte src i) (rd/b1 "\""))
+      ((wat.core/= c (rd/b1 "(")) (rd/seq src n a i ")" (:rd::Kind.List {})))
+      ((wat.core/= c (rd/b1 "[")) (rd/seq src n a i "]" (:rd::Kind.Vector {})))
+      ((wat.core/= c (rd/b1 "{")) (rd/seq src n a i "}" (:rd::Kind.Map {})))
+      ((wat.core/= c (rd/b1 "\""))
         (wat.core/let [e (rd/str-end src n (wat.core/+ i 1))]
-          (rd/add a (wat.core/length a) (:rd::Kind.Str {}) (wat.string/byte-subs src i e) (rd/empty-kids) e)))
+          (wat.core/if (wat.core/< e 0)
+            (rd/stop a n i (:rd::Fault.Unterminated {}))
+            (rd/add a (wat.core/length a) (:rd::Kind.Str {}) (wat.string/byte-subs src i e) (rd/empty-kids) e))))
+      ;; inside a list, `rd/kids-of` meets its closers first; so a closer here has nothing open
+      ((rd/delim? c) (rd/stop a i -1 (:rd::Fault.Stray {})))
       (:else
-        (wat.core/let [e (rd/atom-end src n i)
+        (wat.core/let [e (rd/atom-end src n (wat.core/+ i 1))
                        t (wat.string/byte-subs src i e)]
           (rd/add a (wat.core/length a) (rd/classify t) t (rd/empty-kids) e))))))
 
-;; children up to the closing delimiter; `kids` carries the indices back out
+;; children up to the closing delimiter; `kids` carries the indices back out. **A list closes
+;; with ITS closer or refuses** (F-205): the end of the source inside it is `Unclosed`, and any
+;; other closer is `Mismatched` -- both carrying `open`, where this list began.
 (wat.core/defn rd/kids-of [src :- wat.type/String n :- wat.type/i64 st :- :rd::St
-                           close :- wat.type/String acc :- :rd::Kids] :- :rd::St
+                           open :- wat.type/i64 close :- wat.type/String acc :- :rd::Kids] :- :rd::St
   (wat.core/let [i (rd/skip src n (:rd::St/pos st))
                  a (:rd::St/arena st)]
     (wat.core/cond
-      ((wat.core/>= i n)
-        (:rd::St :arena a :pos i :node -1 :kids acc))
+      ((wat.core/>= i n) (rd/stop a i open (:rd::Fault.Unclosed {})))
       ((wat.core/= (rd/byte src i) (rd/b1 close))
-        (:rd::St :arena a :pos (wat.core/+ i 1) :node -1 :kids acc))
+        (:rd::St :arena a :pos (wat.core/+ i 1) :node -1 :kids acc
+                 :fault (:rd::Fault.Clean {}) :open -1))
+      ((rd/closer? (rd/byte src i)) (rd/stop a i open (:rd::Fault.Mismatched {})))
       (:else
-        (wat.core/let [r (rd/form src n (:rd::St :arena a :pos i :node -1 :kids acc))]
-          (rd/kids-of src n r close (wat.core/conj acc (:rd::St/node r))))))))
+        (wat.core/let [r (rd/form src n a i)]
+          (wat.core/if (rd/ok? r)
+            (rd/kids-of src n r open close (wat.core/conj acc (:rd::St/node r)))
+            r))))))
 
 (wat.core/defn rd/seq [src :- wat.type/String n :- wat.type/i64 a :- :rd::Arena i :- wat.type/i64
                        close :- wat.type/String kind :- :rd::Kind] :- :rd::St
   (wat.core/let [r (rd/kids-of src n (:rd::St :arena a :pos (wat.core/+ i 1) :node -1
-                                            :kids (rd/empty-kids))
-                               close (rd/empty-kids))
-                 ra (:rd::St/arena r)]
-    (rd/add ra (wat.core/length ra) kind (wat.string/byte-subs src i (:rd::St/pos r))
-            (:rd::St/kids r) (:rd::St/pos r))))
+                                            :kids (rd/empty-kids)
+                                            :fault (:rd::Fault.Clean {}) :open -1)
+                               i close (rd/empty-kids))]
+    (wat.core/if (rd/ok? r)
+      (wat.core/let [ra (:rd::St/arena r)]
+        (rd/add ra (wat.core/length ra) kind (wat.string/byte-subs src i (:rd::St/pos r))
+                (:rd::St/kids r) (:rd::St/pos r)))
+      r)))
 
 (wat.core/defn rd/tops [src :- wat.type/String n :- wat.type/i64 st :- :rd::St acc :- :rd::Kids] :- :rd::St
   (wat.core/let [i (rd/skip src n (:rd::St/pos st))
                  a (:rd::St/arena st)]
     (wat.core/if (wat.core/>= i n)
-      (:rd::St :arena a :pos i :node -1 :kids acc)
-      (wat.core/let [r (rd/form src n (:rd::St :arena a :pos i :node -1 :kids acc))]
-        (rd/tops src n r (wat.core/conj acc (:rd::St/node r)))))))
+      (:rd::St :arena a :pos i :node -1 :kids acc :fault (:rd::Fault.Clean {}) :open -1)
+      (wat.core/let [r (rd/form src n a i)]
+        (wat.core/if (rd/ok? r)
+          (rd/tops src n r (wat.core/conj acc (:rd::St/node r)))
+          r)))))
 
 (wat.core/defn rd/empty-arena [] :- :rd::Arena (wat.core/Vector :- [:rd::Node]))
 
@@ -241,7 +292,8 @@
 ;; The length does not change while the source is being read, so it is a parameter (F-138).
 (wat.core/defn rd/read-into [a :- :rd::Arena src :- wat.type/String] :- :rd::St
   (rd/tops src (wat.string/byte-length src)
-    (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids)) (rd/empty-kids)))
+    (:rd::St :arena a :pos 0 :node -1 :kids (rd/empty-kids) :fault (:rd::Fault.Clean {}) :open -1)
+    (rd/empty-kids)))
 
 (wat.core/defn rd/read [src :- wat.type/String] :- :rd::St
   (rd/read-into (rd/empty-arena) src))

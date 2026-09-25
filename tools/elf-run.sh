@@ -158,7 +158,9 @@ echo "== and the compiler refuses what it cannot translate =="
 # and the stale copy underneath it went unnoticed. A negative test that has drifted from the
 # thing it tests proves nothing, which gen-refuse.sh's own header says. So check.
 stale=0
-for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat elf/refuse-variant.wat; do
+for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat elf/refuse-variant.wat \
+         elf/refuse-rparen.wat elf/refuse-unclosed.wat elf/refuse-mismatch.wat \
+         elf/refuse-unterm.wat elf/refuse-unterm-top.wat; do
   [ -f "$f" ] || continue
   # the generated body is elf/compile.wat up to its driver; compare that, not the driver
   if ! diff -q <(sed '/^(:wat::core::defn :user::main/,$d' elf/compile.wat) \
@@ -171,7 +173,9 @@ done
 refuses () {   # driver, needle, what it proves
   local drv="$1" needle="$2" why="$3" msg
   refused=$((refused+1))
-  msg=$("$WAT" "$drv" 2>&1)
+  # **killed, not waited on**: a refusal that regresses into a loop does not fail, it SPINS --
+  # F-205's stray `)` grew the heap until it ran out rather than stopping
+  msg=$(timeout -s KILL 300 "$WAT" "$drv" 2>&1)
   if printf '%s' "$msg" | grep -qF "$needle"; then
     echo "$why"
   else
@@ -247,6 +251,19 @@ refuses elf/refuse-ptradd.wat   'arithmetic on a str' \
 # where a `Some` is wanted is refused, naming the call -- as `wat --check` refuses it
 refuses elf/refuse-variant.wat  'cannot pass argument 0 of user/needs-some: it wants (:user::Opt.Some :- [:wat::core::String]) and is given (:user::Opt.None :- [:?]) at elf/probe/variant-param-wrong.wat 12 25: (user/needs-some (:user::Opt.None {}))' \
         "refused elf/probe/variant-param-wrong.wat, naming the call: a None where a Some is wanted (stone 5)"
+# **the reader is total** (excursus 005 stone 1, F-205): every read consumes a byte or refuses,
+# and a list closes with its own closer or refuses -- each naming the place, the way the rest do
+refuses elf/refuse-rparen.wat   'cannot read at elf/probe/reader-extra-rparen.wat 4 41: `)` where a form belongs, and nothing is open for it to close' \
+        "refused elf/probe/reader-extra-rparen.wat, naming the place: a stray \`)\` at 4:41 (F-205)"
+refuses elf/refuse-unclosed.wat 'cannot read at elf/probe/reader-missing-rparen.wat 3 1: the `(` opened here is never closed' \
+        "refused elf/probe/reader-missing-rparen.wat, naming the opener: the \`(\` at 3:1 (F-205)"
+refuses elf/refuse-mismatch.wat 'cannot read at elf/probe/reader-mismatched-closer.wat 2 27: `)` cannot close the `[` opened at elf/probe/reader-mismatched-closer.wat 2 26' \
+        "refused elf/probe/reader-mismatched-closer.wat, naming both: \`)\` at 2:27, \`[\` at 2:26 (F-205)"
+# ...and a string closes or refuses: the end of input is not a closing quote
+refuses elf/refuse-unterm.wat     'cannot read at elf/probe/reader-unterminated-string.wat 6 23: unterminated string literal -- the string opened here is never closed' \
+        "refused elf/probe/reader-unterminated-string.wat, naming the string, not the list: 6:23"
+refuses elf/refuse-unterm-top.wat 'cannot read at elf/probe/reader-unterminated-string-top.wat 6 1: unterminated string literal -- the string opened here is never closed' \
+        "refused elf/probe/reader-unterminated-string-top.wat, at the top level: 6:1"
 
 # **the compiler must agree with itself at every boundary** (excursus 002 stone 1). The compiler,
 # asked, says the type it gave every argument of every call to a user function and every

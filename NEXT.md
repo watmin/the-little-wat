@@ -51,8 +51,7 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    no user code at all: every user function refused, every symbol head refused, a `let`-bound `fn`
    never ending. The builder: *"let's get this fixed - we have a strong habit of fixing what's broken
    when we encounter it"*. Grok builds wat-rs in its OWN target dir until 003 stone 1 is weighed.
-2a'. **Excursus 005 — the compiler's reader is total (F-205)**, a subagent executor: a stray `)`
-   exhausted the heap, a missing `)` was accepted.
+2a'. **DONE — excursus 005, the compiler's reader is total (F-205).** Five standing refusals.
 2b. **Then persistent collections, excursus 006** -- the builder's ruling (2026-09-24): *"in our
    compiler - all of the collections must be persistent - the only thing that differs between our
    compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The

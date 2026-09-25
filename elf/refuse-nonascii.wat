@@ -6520,10 +6520,14 @@
              base (:wat::core::length (:rd::St/arena (:c::Prog/src pg)))
              ;; read it into the SAME arena, so node indices from every file a program is made
              ;; of live in one space -- two arenas would give two node 7s
-             st2 (rd/read-into (:rd::St/arena (:c::Prog/src pg)) (:wat::io::read-file path))
-             pg2 (:wat::core::assoc (:wat::core::assoc pg :src st2) :srcs
-                   (:wat::core::conj (:c::Prog/srcs pg)
-                     (:c::Src :path path :base base :tops (:rd::St/kids st2))))]
+             text (:wat::io::read-file path)
+             st2 (rd/read-into (:rd::St/arena (:c::Prog/src pg)) text)
+             ;; ...and refused here, naming the place, if the reader stopped short (F-205)
+             pg2 (:c::read-ok
+                   (:wat::core::assoc (:wat::core::assoc pg :src st2) :srcs
+                     (:wat::core::conj (:c::Prog/srcs pg)
+                       (:c::Src :path path :base base :tops (:rd::St/kids st2))))
+                   text)]
             (:c::collect-in tops (:wat::core::+ i 1)
               (:c::collect-in (:rd::St/kids st2) 0 pg2 (:c::dir-of path))
               dir)))
@@ -7277,11 +7281,68 @@
   (:wat::core::let [l (:wat::core::if (:wat::core::and (:wat::core::>= a 0)
                                                        (:wat::core::< a (:wat::core::length locs)))
                         (:wat::core::nth locs a) -1)]
-    (:wat::core::if (:wat::core::< l 0) "? 0 0"
-      (:wat::string::concat
-        (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) (:wat::core::quot l 10000000000)))
-        " " (:wat::i64::to-string (:wat::core::rem (:wat::core::quot l 10000) 1000000))
-        " " (:wat::i64::to-string (:wat::core::rem l 10000))))))
+    (:c::loc-say pg l)))
+
+;; a packed position (`:c::loc-pack`), said as "<file> <line> <col>" -- or "? 0 0" for none
+(:wat::core::defn :c::loc-say [pg <- :c::Prog l <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::< l 0) "? 0 0"
+    (:wat::string::concat
+      (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) (:wat::core::quot l 10000000000)))
+      " " (:wat::i64::to-string (:wat::core::rem (:wat::core::quot l 10000) 1000000))
+      " " (:wat::i64::to-string (:wat::core::rem l 10000)))))
+
+;; ---------------------------------------------------------------- the reader's refusals
+;;
+;; **The reader refuses; this says where** (F-205). `elf/lib/reader.wat` knows bytes, not lines
+;; or files -- it is a library a compiled program shares, and it hands a refusal back as a value
+;; (`:rd::Fault`) rather than stopping anything. A byte offset becomes a position HERE, the same
+;; way every node's does: `:c::loc-adv` walks to it, `:c::loc-pack` packs it and `:c::loc-say`
+;; says it. There is no second way of counting lines.
+
+;; where byte `j` of file `fi` is, packed like every node's position
+(:wat::core::defn :c::byte-loc [src <- :wat::core::String j <- :wat::core::i64
+                                fi <- :wat::core::i64] -> :wat::core::i64
+  (:c::loc-pack fi (:c::loc-adv src j
+                     (:c::LocW :locs (:wat::core::Vector :- [:wat::core::i64]) :i 0 :line 1 :col 1))))
+
+;; the delimiter at byte `j`, quoted
+(:wat::core::defn :c::delim-at [src <- :wat::core::String j <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat "`" (:wat::string::concat (wat.string/byte-subs src j (:wat::core::+ j 1)) "`")))
+
+;; `pg` has just been handed the reader's state for `src`, the LAST file in its `srcs`: answer it
+;; unchanged if the reader read it all, and refuse at compile time, naming the place, if not.
+;; Nothing continues past the first malformed delimiter.
+(:wat::core::defn :c::read-ok [pg <- :c::Prog src <- :wat::core::String] -> :c::Prog
+  (:wat::core::let
+    [st (:c::Prog/src pg)
+     fi (:wat::core::- (:wat::core::length (:c::Prog/srcs pg)) 1)
+     at (:rd::St/pos st)
+     op (:rd::St/open st)]
+    (:wat::core::match (:rd::St/fault st)
+      [:rd::Fault.Clean {} pg]
+      [:rd::Fault.Stray {}
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "compile: cannot read at "
+                     (:c::loc-say pg (:c::byte-loc src at fi)) ": " (:c::delim-at src at)
+                     " where a form belongs, and nothing is open for it to close"))]
+      [:rd::Fault.Unclosed {}
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "compile: cannot read at "
+                     (:c::loc-say pg (:c::byte-loc src op fi)) ": the " (:c::delim-at src op)
+                     " opened here is never closed -- the file ends first, at "
+                     (:c::loc-say pg (:c::byte-loc src at fi))))]
+      [:rd::Fault.Mismatched {}
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "compile: cannot read at "
+                     (:c::loc-say pg (:c::byte-loc src at fi)) ": " (:c::delim-at src at)
+                     " cannot close the " (:c::delim-at src op) " opened at "
+                     (:c::loc-say pg (:c::byte-loc src op fi))))]
+      [:rd::Fault.Unterminated {}
+        (:wat::kernel::assertion-failed!
+          :message (:wat::string::concat "compile: cannot read at "
+                     (:c::loc-say pg (:c::byte-loc src op fi))
+                     ": unterminated string literal -- the string opened here is never closed, and the file ends first, at "
+                     (:c::loc-say pg (:c::byte-loc src at fi))))])))
 
 ;; **the ONE translation from this compiler's type spelling to wat's** (excursus 002 stone 2).
 ;; The compiler's strings are a wat type PLUS its representation; wat's checker states only the
@@ -7389,12 +7450,16 @@
 (:wat::core::defn :c::compile-as [src-path <- :wat::core::String out-path <- :wat::core::String
                                   exp? <- :wat::core::bool] -> :wat::core::nil
   (:wat::core::let
-    [st (rd/read (:wat::io::read-file src-path))
+    [text (:wat::io::read-file src-path)
+     st (rd/read text)
      pg-c (:c::collect-in (:rd::St/kids st) 0
-            (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:c::empty-prog) :src st)
-                                 :track exp?)
-              :srcs (:wat::core::conj (:wat::core::Vector :- [:c::Src])
-                      (:c::Src :path src-path :base 0 :tops (:rd::St/kids st))))
+            ;; refused here, naming the place, if the reader stopped short (F-205)
+            (:c::read-ok
+              (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:c::empty-prog) :src st)
+                                   :track exp?)
+                :srcs (:wat::core::conj (:wat::core::Vector :- [:c::Src])
+                        (:c::Src :path src-path :base 0 :tops (:rd::St/kids st))))
+              text)
             (:c::dir-of src-path))
      ;; where every node the reader made starts -- before the inliner makes more, so that each
      ;; node it makes can inherit the position of the one it replaces (`:c::mknode`)
