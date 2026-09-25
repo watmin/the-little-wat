@@ -15543,3 +15543,25 @@ substitutes `x := 42` into the `fn` body (measured). `closed_env` matters only f
 from outside the form, whose captured values can be substituted the same way (wat values are
 immutable). The builder, 2026-09-25: *"not supporting user defined functions is like trying to read
 /dev/null meaningfully"*.
+
+### F-205: a stray `)` exhausted the compiler's heap; a missing `)` was accepted
+
+**Open.** Found through Grok's excursus 003 stone 1: an intermediate source with one extra `)`
+made the stone-6 compiler exhaust its 1.9 GB heap (exit 70, RSS 1,855,560 KB) instead of reporting
+a parse error. Reproduced on HEAD `75bbf13` in two lines each: `elf/probe/reader-*.wat`.
+
+| source | `wat` | this compiler |
+|---|---|---|
+| one `)` too many | `UnexpectedRParen` | **never finishes** (killed at 120 s through `tools/probe.sh`; natively, heap exhausted) |
+| one `)` too few | `UnclosedParen` | **accepted**; the binary prints `3` |
+
+`elf/lib/reader.wat`: `rd/form` (`:184`) sends anything that is not `(`, `[`, `{` or `"` to the
+atom arm, and `rd/atom-end` (`:128`) stops at once on a delimiter -- so a `)` where a form belongs
+reads as a ZERO-LENGTH atom ending where it started, and `rd/tops`/`rd/kids-of` ask again at the
+same position forever, growing the arena. Any mismatched closer does it. `rd/kids-of` (`:202`)
+returns its children at end of input, so an unclosed list is silently closed.
+
+The class is the one F-204 found in `eval-step!` the same day: a step that makes no progress. The
+fix is structural -- every read consumes at least one byte or refuses; a closer that does not
+match, or end of input inside a list, is a compile-time refusal naming the position -- not a
+guard on this one character.
