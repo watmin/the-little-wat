@@ -17,17 +17,17 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 008: persistent collections and memory; the orchestrator crawls and draws it
+### NEXT STRIKE — excursus 008 stone 1 (the heap grows to demand), with Grok
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** CLOSURES ARE DONE -- excursus 003 stones 1-3 landed (`edba38e`, `caebf4b`, `6d266bf`):
-`fn` compiles natively; the builder's `closure-captures` (126 86) and `closure-nested` (16 27) agree.
-Nothing is in flight. Next is the orchestrator's: crawl excursus 008 from its itemized
-`008-persistent-collections-and-memory/SCOPE.md` (M1-M6, C1-C4) and draw its first stone. Known cost
-to carry: the closure rewrite walks every node (+2.47% compiler instructions on identical input).
+**On waking:** CLOSURES ARE DONE (excursus 003). Excursus 008 is under way, MEMORY FIRST (the builder's
+choice, by the items' dependencies): stone 1 (M3 -- reserve what the machine has, lazily; the stub's
+`mmap` checked) is with Grok. M5 is RULED: the program owns an out-of-memory; we consume the least
+amount necessary. Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh stone 1 on
+your own runs. Then M1 (the count that comes down, inline drop). The items: `008-.../SCOPE.md`.
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in

@@ -43,3 +43,13 @@ This box: 32 GB RAM, 64 GB swap, `overcommit_memory = 0`, `CommitLimit` 81 GB.
 the interpreter and the compiled code, as stack overflow is; or (ii) a language redesign in which
 allocating expressions answer a failure value. The totality ruling covered the program's own errors;
 which of these exhaustion is, is the builder's to say.
+
+## The builder's ruling on M5 (2026-09-26)
+
+> *"my ask is that we can grow and shrink our memory allocation based on user program demands - they own
+> responsibility if they oom - we just consume the least amount necessary"*
+
+Exhaustion is the machine's limit and the PROGRAM's responsibility: a named, deterministic stop, no
+failure value in the language (option i). Our obligation is the other half: consume the least amount
+necessary, growing and shrinking with demand. Growth is B above (lazy, so only touched pages are
+committed). Shrinking needs memory that actually dies (M1, M2) and gives pages back (M4).

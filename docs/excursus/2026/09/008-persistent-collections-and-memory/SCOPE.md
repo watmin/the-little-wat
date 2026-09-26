@@ -37,7 +37,7 @@ just make sure we've got these itemized on disk so we durably don't forget"*.
 | **M2** | an allocator that REUSES the holes drops leave (size classes, not only a bump pointer) | M1 | pause-free by construction |
 | **M3** | **grow**: a large lazy reservation instead of 1.9 GB (64 GB measured free on this box) | independent today | the builder chose to keep it here, not split it out (2026-09-26) |
 | **M4** | **shrink**: hand whole free pages back to the OS (`madvise`) | M2 | |
-| **M5** | exhaustion is a matchable ERROR, never an abort | independent | totality |
+| **M5** | ~~exhaustion is a matchable error~~ — RULED 2026-09-26: the program owns an out-of-memory; exhaustion is the machine's limit, a NAMED stop (no failure value in the language) | -- | *"they own responsibility if they oom - we just consume the least amount necessary"* |
 | **M6** | excursus 001 stone 1 (caller-side release) folded in or retired against M1 | M1 | branch `excursus-001-stone-1` needs a rebase and a real gate |
 | **C1** | the compiled **Vector** becomes persistent (array, then trie) | -- | the corpus's Vector probes and F-188's doors are the regression floor |
 | **C2** | a compiled **map** on the same machinery (array, then HAMT) | C1 | a map `get` is a counted read: `tools/reads.sh` already demands it be classified |
