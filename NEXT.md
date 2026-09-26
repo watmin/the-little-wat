@@ -17,16 +17,17 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — closures' stone 3 (the `fn` form), with Grok
+### NEXT STRIKE — excursus 008: persistent collections and memory; the orchestrator crawls and draws it
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** 003 stones 1 and 2 LANDED (`edba38e`, `caebf4b`); stone 3 (the `fn` form) is with Grok in
-THIS repo, drawn on the disconfirming probe at the end of `003-closures/DESIGN.md`. Read
-`/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it against its EXPECTATIONS on
-your own runs. After it: excursus 008 (`008-persistent-collections-and-memory/SCOPE.md`).
+**On waking:** CLOSURES ARE DONE -- excursus 003 stones 1-3 landed (`edba38e`, `caebf4b`, `6d266bf`):
+`fn` compiles natively; the builder's `closure-captures` (126 86) and `closure-nested` (16 27) agree.
+Nothing is in flight. Next is the orchestrator's: crawl excursus 008 from its itemized
+`008-persistent-collections-and-memory/SCOPE.md` (M1-M6, C1-C4) and draw its first stone. Known cost
+to carry: the closure rewrite walks every node (+2.47% compiler instructions on identical input).
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
@@ -41,8 +42,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    Refuted once: it exposed **F-200** (an enum over an enum laid out as its payload, `Some(None)`
    read as `None`), fixed at the root in `:c::enum-tier`. Lesson: check a derivation row against a
    payload of EVERY kind the tier admits, including another enum.
-2. **Closures** -- the builder's goal, excursus 003. Stone 1 DONE (whole function types, F-202);
-   stones 2 and 3 are drawn in its DESIGN; stone 3 needs its disconfirming probe (capture types). Fixtures with known interpreter
+2. **DONE — closures, excursus 003**: whole function types (F-202), one closure representation for
+   every function value (the gate sees indirect-call arguments), and the `fn` form. Fixtures with known interpreter
    answers are `probes/closure-captures.wat` (126, 86: capture of a value, of a function, of a
    closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
    The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so
