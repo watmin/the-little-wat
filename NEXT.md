@@ -52,7 +52,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    never ending. The builder: *"let's get this fixed - we have a strong habit of fixing what's broken
    when we encounter it"*. Grok builds wat-rs in its OWN target dir until 003 stone 1 is weighed.
 2a'. **DONE — excursus 005, the compiler's reader is total (F-205).** Five standing refusals.
-2a''. **Excursus 006 — a macro says what it returns (F-206), BEFORE 004's renderer lands.** The
+2a''. **DONE — excursus 006, a macro says what it returns (F-206)** (wat-rs `365ebc014`). NEXT: rebase the
+   parked `the-little-wat-004-eval-step` onto it (its renderer already landed here) and finish 004. The
    builder's four-questions ruling: candidate E. `CRAWL.md` sized it: one declaration changes; the
    real work is type-checking macro bodies at all. 004's stepping is credited and waits on it.
 2a'''. **DONE — excursus 007: `to-string` is the written form; `name` is the name (F-207)** (wat-rs `40ddeac4d`). The builder

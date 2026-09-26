@@ -123,3 +123,56 @@ Four of the twenty-three are the accepted ones: F-197's two lints, `step_user_fu
 - `witness_thread_first_empty_step_panics_at_expansion`, `contract_02_non_exhaustive_cond_names_else`, `format_strict_missing_kwarg_is_macro_error`, `format_strict_unused_kwarg_is_macro_error` — the diagnostic EDN does not match the golden.
 - `subs_tuple_char_walk_runs_at_macro_eval` — `first`/`second` refuse a bare `:wat::core::Tuple`; the fold declares `Tuple` and produces `:(String, i64)`.
 - the four `peers_bijection_*` tests and `cond_refuses_missing_else` — the diagnostic EDN does not match the golden.
+
+## Re-strike, round 2
+
+G1. Nine diagnostic goldens were regenerated with `UPDATE_EDN=1`. Against the copies taken before that write, each file has the same number of tokens, and every token that changed is an integer. Those integers are the standard-library line and column the re-strike moved:
+
+| golden | integer pairs |
+|---|---|
+| `witness_thread_first_empty_step_panics_at_expansion` | 1412→1427 |
+| `contract_02_non_exhaustive_cond_names_else`, `cond_refuses_missing_else` | 1464→1479 |
+| `peers_bijection` case1 and case4 | 893→922, 900→929 |
+| `peers_bijection` case2 and case5 | 910→939, 918→947 |
+| `format_strict_missing_kwarg_is_macro_error` | 1961→1975, 1965→1979 |
+| `format_strict_unused_kwarg_is_macro_error` | 1989→2003, 1993→2007 |
+
+G2. `:wat::core::macro-error` left `FROZEN_CHECKER_DEBT_LEDGER`. Its `@ret` is `:T`, the name the scheme quantifies (`∀T. String -> :T` in `check.rs`).
+
+G3. Six of the seven fixtures now declare what the body produces. `probe_diagnostic_c3_macro_emits_record_def.wat` matches `ast-keyword` into `name` and `macro-error`. The comprehension fold, the program-body fold, and the three thread folds declare `WatAST` where the body is a quasiquote. Those tests passed on the floor below. The seventh, `probe_arc279b_subs_tuple_macro_eval.wat`, declares `(Tuple :- [String i64])` and does not parse: the `)` on line 23 closes the `fn` immediately after that return type, so the `let` body sits outside the function. The reader reports the extra close at line 33, column 19.
+
+R6 is a stop. It is more than threading the registry through and allow-listing constructors. User expansion is `expand_all` in `build_env` step 4 (`src/freeze/env.rs`), on a `SymbolTable` that holds acronyms only. `register_types` is step 5, after that expansion, so a user `defrecord` or `defenum` does not exist when the macro call runs. `symbols.set_types` is `FrozenWorld::freeze` (`src/freeze.rs:541`), which is later still. Record and variant constructors are not intrinsic-registry entries, so `is_expand_time_legal` (`src/macros/eval.rs:424`) does not admit them, and an allow-list would still need the type to exist. What it takes is a new phase: register types between forms during expansion, or defer a value-returning macro call inside a function body until after types are registered. `macro-returns-record.wat` still refuses with "aggregate construction requires the type registry (startup via freeze)". `macro-returns-enum.wat` still refuses because `:wat::core::Option.Some` is not an expand-time head. The int and vector probes still agree with the value written by hand (`42` / `42`, and `"[3 4]"` / `"[3 4]"`).
+
+Nothing is committed. The park is still `48d5294f0`. `.floor/2026-09-25T23-07-36Z` was not re-run.
+
+## The floor — round 2
+
+`NEXTEST_TEST_THREADS=4 scripts/floor.sh` alone, `CARGO_TARGET_DIR=/home/watmin/.cache/wat-kw-007`. Doctests exit 0. `.floor/2026-09-26T00-18-29Z`, not re-run:
+
+```
+Summary [ 785.538s] 5404 tests run: 5398 passed, 6 failed, 22 skipped
+```
+
+Four of the six are the accepted ones: F-197's two lints (`tests_carry_no_inlined_wat`, `tests_carry_no_loose_string_assert`), `step_user_function_call` (`None` against `Some(9)` at `src/runtime.rs:20182`), `step_tail_recursion_terminates_under_bound` (`None` against `Some(6)` at `src/runtime.rs:20293`). The other two are one file: `subs_tuple_char_walk_runs_at_macro_eval` dies at freeze with `#wat.parse/UnexpectedRParen` at `probe_arc279b_subs_tuple_macro_eval.wat` line 33 column 19, and `every_tracked_wat_parses` names that same file. The arm is `.floor/2026-09-26T00-18-29Z/ARM.txt`.
+
+## Re-strike, round 3
+
+R6′. A `defmacro` whose declared return names a user-defined type is a `MalformedDefmacro` where the declaration is read (`parse_defmacro_form`). A path is user-defined when it is namespaced and not language-owned (`:wat::`, `:rust::`, `:$bound::`). A single segment (`:T`) is a type variable. The reason names the rule and the type: a macro returns a core-language value; `:user::P` is a user-defined type, which does not exist when a macro expands.
+
+`probes/macro-returns-record.wat` exits 3. The message names the rule and `:user::P`, at line 3 of that file. `aggregate-new` is not reached. The same refusal names `:user::E` for a user enum, `:user::Alias` for a typealias of a user record, and `:user::P` inside `(:wat::core::Vector :- [:user::P])`.
+
+`probes/macro-returns-enum.wat` declares `(:wat::core::Option :- [:wat::core::i64])`. That declaration is legal. The run exits 3 at definition because the body calls `:wat::core::Option.Some`, which the existing purity gate refuses as not an expand-time head. Constructors were left as they are. The int probe still prints `42` and `42`. The vector probe still prints `"[3 4]"` twice.
+
+R7. The `)` after the tuple return type in `probe_arc279b_subs_tuple_macro_eval.wat` is gone. The fold still declares `(Tuple :- [String i64])`. `subs_tuple_char_walk_runs_at_macro_eval` passes.
+
+Nothing is committed. The park is still `48d5294f0`. The earlier floors were not re-run.
+
+## The floor — round 3
+
+`NEXTEST_TEST_THREADS=4 scripts/floor.sh` alone, `CARGO_TARGET_DIR=/home/watmin/.cache/wat-kw-007`. Doctests exit 0. `.floor/2026-09-26T00-50-04Z`:
+
+```
+Summary [1088.561s] 5405 tests run: 5401 passed (3 slow), 4 failed, 22 skipped
+```
+
+The four are the accepted ones: F-197's two lints (`tests_carry_no_inlined_wat`, `tests_carry_no_loose_string_assert`), `step_tail_recursion_terminates_under_bound` (`None` against `Some(6)` at `src/runtime.rs:20293`), and `step_user_function_call` (`None` against `Some(9)` at `src/runtime.rs:20182`). The arm is `.floor/2026-09-26T00-50-04Z/ARM.txt`.

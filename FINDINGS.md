@@ -15569,7 +15569,8 @@ guard on this one character.
 
 ### F-206: `wat --check` does not type-check a macro body, and a macro's declared return can lie
 
-**Open -- excursus 006.** Found sizing the builder's "a macro says what it returns" (candidate E).
+**Fixed** by excursus 006 stone 1 (wat-rs `365ebc014`): macro bodies are type-checked, the declared
+return is the body's type, and only core-language types may be declared. Found sizing the builder's "a macro says what it returns" (candidate E).
 `probes/macro-body-untyped.wat`, `probes/macro-declared-form-returns-int.wat`, at wat-rs `75fcc7638`:
 
 | program | `wat --check` | `wat` |
