@@ -90,3 +90,30 @@ Tail calls through a closure (an indirect call is never a tail call today, `:518
 does not change it) · specialising a closure per instantiation · `mal/stepA_mal.wat` (the acceptance
 target after stone 3, its own stone) · reclamation of closure objects (excursus 001 stone 1's work)
 · anything in `../wat-rs`.
+
+## The disconfirming probe for stone 3 — capture types (run 2026-09-26, after stone 2 landed)
+
+The contract decision above assumed "the site is typed before the lifted body, in both passes". The
+probe, against `caebf4b`, says **not as the pipeline stands** — and names the one thing to change.
+
+1. **A pass threads no `Prog` between functions.** `:c::pass` hands every `:c::compile-fn`
+   (`elf/compile.wat:6336`) the same `pg`; only the tail, `fnames` and `faddrs` flow forward, in
+   `:c::PassR`. So a capture type recorded at a site can reach a later function only through
+   `PassR` — a table beside `faddrs`.
+2. **A typer-only walk to an arbitrary site does not exist.** `:c::ty-bind` (`:1864`) is the typer's
+   walk of a `let` only; a walk that stands at any `fn` site with its whole environment would be a
+   second scope walk beside the typer — the candidate this design already scored Simple NO.
+3. **Exactly one pre-pass reaches the typer**: static call graph from `fill-fns`, `poke-fix`,
+   `inl-fns`, `argreg-fns` — only `argreg-fns`, by `argreg-mark → argreg-fn? → callfree? →
+   noret-seq? → scratch-safe? → word-cmp? → type-of`. And `:c::argreg-mark` asks `argreg-fn?` of
+   EVERY function; address-taken filtering comes after (`argreg-cands`, `taken-kids`). So as the
+   pipeline stands, **a lifted body would be typed before any site records its captures**, and the
+   typer would refuse it (totality doing its job).
+
+**What stone 3 therefore carries:** the rewrite marks each lifted function LIFTED in its `:c::Fn`
+row; a lifted function is always reached through `call [rax]`, so `argreg-mark` gives it `nargs 0`
+WITHOUT asking `argreg-fn?` — its body is never typed before the passes. Capture types travel in
+`PassR` (recorded when the site is typed, read when the lifted body is compiled). Lifted functions
+are appended in depth-first order (the parent, then each `fn` in it, then theirs), so every site is
+typed before its body in pass 1 and in pass 2. A new pre-pass that types bodies would reopen this —
+the brief makes that a STOP.
