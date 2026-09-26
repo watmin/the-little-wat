@@ -70,6 +70,14 @@
   [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
    idx <- :wat::core::i64  fn <- :wat::core::String  ty <- :wat::core::String
    tn <- :wat::core::String  ti <- :wat::core::String])
+;; an indirect call's argument, at the call, and one argument slot of a function type
+;; parsed from the head's exported type while loading
+(:wat::core::defrecord :ck::IArg
+  [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
+   idx <- :wat::core::i64  in <- :wat::core::String  ty <- :wat::core::String])
+(:wat::core::defrecord :ck::FnArg
+  [file <- :wat::core::String  line <- :wat::core::i64  col <- :wat::core::i64
+   idx <- :wat::core::i64  ty <- :wat::core::String])
 
 ;; ── stone 2: the type each side gave each node, at its position ──────────────────────
 ;; `seq` is the line's order within its program -- only so a pair of facts at one position can
@@ -154,6 +162,25 @@
          (:ck::Param (?F <- :name) (?i <- :idx) (?pt <- :ty))
          (:ck::TyFits (?at <- :from) (?pt <- :to))]
   :then [(:ck::Fits :file ?f :line ?l :col ?c :idx ?i)])
+
+;; an indirect call: argument i's type must fit argument i of the head's function type.
+;; The head's slots were parsed while loading. This rule only joins.
+(:wat::rete::defrule :ck::z-indirect
+  :when [(:ck::IArg (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx)
+                    (?in <- :in) (?at <- :ty))
+         (:ck::At (?K <- :id) (?f <- :file) (?l <- :line) (?c <- :col))
+         (:wat::grep::Node (?h <- :id) (?K <- :parent) (?hi <- :index))
+         (:ck::At (?h <- :id) (?hf <- :file) (?hl <- :line) (?hc <- :col))
+         (:ck::FnArg (?hf <- :file) (?hl <- :line) (?hc <- :col) (?i <- :idx) (?wt <- :ty))
+         (:wat::rete::where (:wat::rete::i64::= ?hi 0))
+         (:wat::rete::not (:ck::TyFits (?at <- :from) (?wt <- :to)))]
+  :then [(:wat::grep::Match :file ?f :line ?l :col ?c :end-line ?l :end-col ?c
+           :rule "indirect-arg-conflict"
+           :captures (:wat::rete::core::PersistentVector
+             (:wat::grep::Capture :name "in" :value ?in)
+             (:wat::grep::Capture :name "arg" :value (:wat::rete::i64::to-string ?i))
+             (:wat::grep::Capture :name "arg-type" :value ?at)
+             (:wat::grep::Capture :name "param-type" :value ?wt)))])
 
 ;; ── ★ THE CONSTRAINT: this argument feeds that parameter, so its type must fit ────────────
 (:wat::rete::defrule :ck::z-conflict
@@ -430,6 +457,31 @@
     -> :ck::Prog
   (:ck::bump-prog (:wat::core::assoc p :recs (:wat::vector::conj (:ck::Prog/recs p) r)) field))
 
+(:wat::core::defn :ck::add-bare [p <- :ck::Prog r <- :wat::core::Record] -> :ck::Prog
+  (:wat::core::assoc p :recs (:wat::vector::conj (:ck::Prog/recs p) r)))
+
+;; argument i of a `fn:` spelling, recorded at the node that has that type
+(:wat::core::defn :ck::fn-slots [p <- :ck::Prog file <- :wat::core::String
+                                 line <- :wat::core::i64 col <- :wat::core::i64
+                                 raw <- :wat::core::String] -> :ck::Prog
+  (:wat::core::if (:wat::core::not (:wat::string::starts-with? raw "fn:")) p
+    (:wat::core::let [ps (:ck::fn-parts raw 3 (:wat::core::Vector :- [:wat::core::String]))
+                      n (:wat::core::length ps)]
+      (:wat::core::if (:wat::core::< n 1) p
+        (:ck::fn-slot p file line col ps 0 (:wat::i64::- n 1))))))
+
+(:wat::core::defn :ck::fn-slot [p <- :ck::Prog file <- :wat::core::String
+                                line <- :wat::core::i64 col <- :wat::core::i64
+                                ps <- (:wat::core::Vector :- [:wat::core::String])
+                                i <- :wat::core::i64 n <- :wat::core::i64] -> :ck::Prog
+  (:wat::core::if (:wat::core::>= i n) p
+    (:wat::core::let [ty (:wat::core::nth ps i)]
+      (:ck::fn-slot
+        (:wat::core::assoc
+          (:ck::add-bare p (:ck::FnArg :file file :line line :col col :idx i :ty ty))
+          :ptys (:ck::remember (:ck::Prog/ptys p) ty 0))
+        file line col ps (:wat::i64::+ i 1) n))))
+
 ;; words i.. of a line, joined again by the spaces they were split on -- a wat type holds spaces
 (:wat::core::defn :ck::rest [ws <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64]
     -> :wat::core::String
@@ -486,12 +538,25 @@
                             :cparams)]
           (:wat::core::assoc p1 :ptys (:ck::remember (:ck::Prog/ptys p1) ty 0))))
       ((:wat::core::= tag "CType")
-        (:wat::core::let [w (:ck::rest ws 6)]
-          (:ck::add-rec p (:ck::CType :seq (:ck::seq-of p) :file (:ck::word ws 1)
-                                      :line (:ck::int (:ck::word ws 2)) :col (:ck::int (:ck::word ws 3))
-                                      :in (:ck::word ws 4) :raw (:ck::word ws 5)
-                                      :wat w :kind (:ck::kind-of w))
-            :ctypes)))
+        (:wat::core::let [w (:ck::rest ws 6)
+                          raw (:ck::word ws 5)
+                          file (:ck::word ws 1)
+                          line (:ck::int (:ck::word ws 2))
+                          col (:ck::int (:ck::word ws 3))]
+          (:ck::fn-slots
+            (:ck::add-rec p (:ck::CType :seq (:ck::seq-of p) :file file
+                                        :line line :col col
+                                        :in (:ck::word ws 4) :raw raw
+                                        :wat w :kind (:ck::kind-of w))
+              :ctypes)
+            file line col raw)))
+      ((:wat::core::= tag "IArg")
+        (:wat::core::let [ty (:ck::word ws 6)]
+          (:wat::core::assoc
+            (:ck::add-bare p (:ck::IArg :file (:ck::word ws 1) :line (:ck::int (:ck::word ws 2))
+                                        :col (:ck::int (:ck::word ws 3)) :idx (:ck::int (:ck::word ws 4))
+                                        :in (:ck::word ws 5) :ty ty))
+            :atys (:ck::remember (:ck::Prog/atys p) ty 0))))
       ((:wat::core::= ttag "KType")
         (:ck::add-rec p (:ck::KType :seq (:ck::seq-of p) :file (:ck::word ts 1)
                                     :line (:ck::int (:ck::word ts 2)) :col (:ck::int (:ck::word ts 3))
@@ -622,6 +687,7 @@
     ((:wat::core::= rule "boundary-type-AGREES") (:wat::core::assoc t :agree (:wat::i64::+ (:ck::Tally/agree t) 1)))
     ((:wat::core::= rule "boundary-type-VARIANT") (:wat::core::assoc t :variant (:wat::i64::+ (:ck::Tally/variant t) 1)))
     ((:wat::core::= rule "boundary-type-conflict") (:wat::core::assoc t :conflict (:wat::i64::+ (:ck::Tally/conflict t) 1)))
+    ((:wat::core::= rule "indirect-arg-conflict") (:wat::core::assoc t :conflict (:wat::i64::+ (:ck::Tally/conflict t) 1)))
     ((:wat::core::= rule "arg-unjoined") (:wat::core::assoc t :unjoined (:wat::i64::+ (:ck::Tally/unjoined t) 1)))
     ((:wat::core::= rule "callee-mismatch") (:wat::core::assoc t :mismatch (:wat::i64::+ (:ck::Tally/mismatch t) 1)))
     ((:wat::core::= rule "type-AGREES") (:wat::core::assoc t :tagree (:wat::i64::+ (:ck::Tally/tagree t) 1)))

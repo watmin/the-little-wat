@@ -11,3 +11,11 @@ programs, and the coverage guard refuses a compiled source missing from `COMPARE
 (`UNCOVERED: elf/src/fn-box.wat` ... `fn-vecpass.wat`). A red is a red: list each in `COMPARED` (they
 agree under `tools/probe.sh`), then run `tools/elf-run.sh` IN FULL again and report its exit and its
 `rules:`/`types:` lines. Nothing else changes.
+
+---
+
+**Credited, 2026-09-26, on the orchestrator's own runs:** `tools/elf-run.sh` exit 0 (92 native
+binaries, `rules: 0` in 11,702 pairs, `types: 0` in 19,709 nodes, over 132 programs); `tools/bootstrap.sh`
+byte-identical fixpoint at **283,863 bytes** (the R6 driver change moved it from the 283,268 the SCORE
+records); `reads: ok`; emission: `fnref` and `fnvec` changed, the five `fn-*` fixtures new, adopted
+into the manifest.

@@ -289,7 +289,11 @@
    ;; **DELIBERATELY UNSOUND FIRST CUT.** Names already shared on this path, with NO
    ;; invalidation anywhere. The point is to learn which hazards are real by watching what
    ;; breaks, rather than guessing at them. Do not ship this shape.
-   shared <- (:wat::core::Vector :- [:wat::core::String])])
+   shared <- (:wat::core::Vector :- [:wat::core::String])
+   ;; one static closure object per function whose address is taken, for this pass.
+   ;; `faddrs` is the address of the code slot; the count sits at `[p-8]`.
+   fnames <- (:wat::core::Vector :- [:wat::core::String])
+   faddrs <- (:wat::core::Vector :- [:wat::core::i64])])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
   (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
@@ -1936,11 +1940,9 @@
           nil)
         (:c::check-args a ks (:wat::core::+ i 1) head fi env pg)))))
 
-;; an indirect call has no declaration: each argument is checked against the function type's
-;; argument, the same `:c::fit` a direct call uses. There is no `CArg`. A `CArg` is joined to a
-;; `defn` parameter by the call's source position, and an indirect call has none -- the line
-;; would be `arg-unjoined`, which must be zero. The gate's function-type rule is on the direct
-;; call that passes the function value, whose `CArg` and `CParam` are already exported.
+;; an indirect call has no `defn`: each argument is checked against the function type's
+;; argument, the same `:c::fit` a direct call uses. The export is separate (`:c::export-iargs`),
+;; so a build that skips this check still says what each argument was.
 (:wat::core::defn :c::check-fn-args [a <- :wat::core::i64 ks <- :c::Kids i <- :wat::core::i64
                                      ht <- :wat::core::String env <- :c::Env pg <- :c::Prog]
     -> :wat::core::nil
@@ -1950,6 +1952,20 @@
                           (:wat::string::concat "argument " (:wat::i64::to-string (:wat::core::- i 1)))
                           a env pg)]
       (:c::check-fn-args a ks (:wat::core::+ i 1) ht env pg))))
+
+;; `IArg <file> <line> <col> <index> <cur> <type>` -- the type the argument has, not the type
+;; the function type demands. The gate joins index i to argument i of the head's function type.
+(:wat::core::defn :c::export-iargs [a <- :wat::core::i64 ks <- :c::Kids i <- :wat::core::i64
+                                    env <- :c::Env pg <- :c::Prog] -> :wat::core::nil
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) nil
+    (:wat::core::do
+      (:wat::core::if (:c::Prog/exp pg)
+        (:wat::kernel::println
+          (:wat::string::concat "IArg " (:c::loc-str pg a)
+            " " (:wat::i64::to-string (:wat::core::- i 1)) " "
+            (:c::Prog/cur pg) " " (:c::type-of (:wat::core::nth ks i) env pg)))
+        nil)
+      (:c::export-iargs a ks (:wat::core::+ i 1) env pg))))
 
 ;; **the type a `let` binding takes** -- asked by the typer (`:c::ty-bind1`) and the generator
 ;; (`:c::bind-each`) alike, so the two cannot differ.
@@ -2147,6 +2163,33 @@
               (:asm::ascii text 0 "") (:c::zeros pad ""))))]
     (:c::emit o1 (:c::movabs dst (:wat::core::+ addr 8)))))
 
+;; the address of `name`'s one static closure object, `[count 0][code]`, pointer at the code.
+;; The code word is final only in pass 2; both passes write eight bytes, so the tail grows
+;; the same. A second use of the same name is the same address.
+(:wat::core::defn :c::fobj-find [names <- (:wat::core::Vector :- [:wat::core::String])
+                                 addrs <- (:wat::core::Vector :- [:wat::core::i64])
+                                 nm <- :wat::core::String i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length names)) -1)
+    ((:wat::core::= (:wat::core::nth names i) nm) (:wat::core::nth addrs i))
+    (:else (:c::fobj-find names addrs nm (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::fn-val [name <- :wat::core::String o <- :c::Out tb <- :wat::core::i64
+                              pg <- :c::Prog] -> :c::Out
+  (:wat::core::let [have (:c::fobj-find (:c::Out/fnames o) (:c::Out/faddrs o) name 0)]
+    (:wat::core::if (:wat::core::>= have 0)
+      (:wat::core::assoc (:c::emit o (:c::mov-rax have)) :rax name)
+      (:wat::core::let [fa (:c::fn-addr pg name 0)
+                        addr (:wat::core::+ tb (:wat::core::/ (:c::buf-len (:c::Out/tail o)) 2))
+                        slot (:wat::core::+ addr 8)
+                        o1 (:wat::core::assoc o :tail
+                             (:c::buf-add (:c::Out/tail o)
+                               (:wat::string::concat (:asm::le 0 8) (:asm::le fa 8))))
+                        o2 (:wat::core::assoc
+                             (:wat::core::assoc o1 :fnames (:wat::core::conj (:c::Out/fnames o1) name))
+                             :faddrs (:wat::core::conj (:c::Out/faddrs o1) slot))]
+        (:wat::core::assoc (:c::emit o2 (:c::mov-rax slot)) :rax name)))))
+
 (:wat::core::defn :c::str-lit [a <- :wat::core::i64 o <- :c::Out tb <- :wat::core::i64
                                pg <- :c::Prog dst <- :wat::core::i64] -> :c::Out
   (:wat::core::let [src (:c::text pg a)]
@@ -2341,11 +2384,11 @@
             ;; keeps this honest across a branch.
             ((:wat::core::>= r 0)
               (:wat::core::assoc (:c::emit o (:c::reg-mov-to r)) :rax (:c::text pg a)))
-            ;; **a bare function name is a VALUE**: its address. `defn` is a macro over
-            ;; `(def :name (fn ...))`, so `user/inc1` in operand position is the fn it was
-            ;; bound to, and passing it is what makes `(map user/f xs)` mean anything. It is a
-            ;; CODE address, never heap, so `:c::ptr-ty?` is false for `fn:` and no ownership
-            ;; or refcount machinery touches it.
+            ;; **a bare function name is a VALUE**: one static closure object,
+            ;; `[count 0][code]`, the pointer at the code word. `defn` is a macro over
+            ;; `(def :name (fn ...))`, so `user/inc1` in operand position is that object.
+            ;; `fn:` is a pointer type. The count is 0, so the literal guard does not
+            ;; increment it, and nothing writes the read-only tail.
             ;;
             ;; `:c::mov-rax` is `movabs` -- ten bytes whatever the address. That is deliberate:
             ;; `:c::mov-rax-lit` shrinks to seven for an imm32, and if the address landed
@@ -2354,7 +2397,7 @@
             ((:wat::core::= d 999999)
               (:wat::core::let [fa (:c::fn-addr pg (:c::text pg a) 0)]
                 (:wat::core::if (:wat::core::>= fa 0)
-                  (:wat::core::assoc (:c::emit o (:c::mov-rax fa)) :rax (:c::text pg a))
+                  (:c::fn-val (:c::text pg a) o tb pg)
                   (:c::fail "name" a pg))))
             (:else (:wat::core::assoc (:c::emit o (:c::load (:c::fp o d) (:c::Out/fpr o)))
                      :rax (:c::text pg a))))))
@@ -2698,7 +2741,10 @@
                       (:c::fail "wrong number of arguments" a pg)
                       (:wat::core::do
                         (:wat::core::if (:c::Prog/final pg)
-                          (:c::check-fn-args a ks 1 ht env pg) nil)
+                          (:wat::core::do
+                            (:c::check-fn-args a ks 1 ht env pg)
+                            (:c::export-iargs a ks 1 env pg))
+                          nil)
                         (:c::call-indirect ks o env pg rt tb slot)))))
                 (:wat::core::if (:wat::core::not= (:c::arity-at pg fi)
                                   (:wat::core::- (:wat::core::length ks) 1))
@@ -3822,7 +3868,8 @@
     (:wat::core::or (:wat::string::starts-with? t "vec:")
       (:wat::core::or (:wat::string::starts-with? t "rec:")
         (:wat::core::or (:wat::string::starts-with? t "henum:")
-                        (:wat::string::starts-with? t "penum:"))))))
+          (:wat::core::or (:wat::string::starts-with? t "penum:")
+                          (:wat::string::starts-with? t "fn:")))))))
 
 ;; **the increment, and one of its two callers.** A pointer read out of a variable and then stored
 ;; somewhere durable is now reachable twice, so the count goes up. It never comes down: this is
@@ -3855,6 +3902,8 @@
 ;;
 ;;   `str`                         a data-tail literal (count 0) or a heap string -- the literal
 ;;                                 guard, `cmp [rax-8],0 ; je ; incq`
+;;   `fn:`                         a static closure object (count 0) or, after stone 3, a heap
+;;                                 closure (count ≥ 1) -- the same literal guard
 ;;   `vec:` / `rec:`               only a heap block, count at least 1 -- a bare `incq [rax-8]`
 ;;   parent `penum:` / `henum:`    a unit tag OR a payload -- `cmp rax,0x1000 ; jb` in front,
 ;;                                 and the literal guard only when the payload can be a literal
@@ -3895,11 +3944,12 @@
     (:wat::core::if (:wat::core::or (:wat::core::< ei 0) (:c::free-ty? t)) ""
       (:c::sole-payload-ty (:c::Prog/enums pg) ei (:c::enum-arg t) pg))))
 
-;; can a value of `t` be a count-0 literal? Only a String can, and a tier-1 payload that is one.
-;; Unknown keeps the guard.
+;; can a value of `t` be a count-0 literal? A String can, a `fn:` value can (its static
+;; object), and a tier-1 payload that is one. Unknown keeps the guard.
 (:wat::core::defn :c::maybe-literal? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
     ((:wat::core::= t "str") true)
+    ((:wat::string::starts-with? t "fn:") true)
     ((:wat::core::or (:wat::string::starts-with? t "vec:")
                      (:wat::string::starts-with? t "rec:")) false)
     ((:wat::string::starts-with? t "henum:") false)
@@ -3996,8 +4046,7 @@
   (:wat::core::or (:wat::core::= t "i64")
     (:wat::core::or (:wat::core::= t "bool")
       (:wat::core::or (:wat::core::= t "nil")
-        (:wat::core::or (:wat::string::starts-with? t "enum:")
-                        (:wat::string::starts-with? t "fn:"))))))
+                      (:wat::string::starts-with? t "enum:")))))
 
 (:wat::core::defn :c::read-out [t <- :wat::core::String rd <- :c::Read o <- :c::Out
                                 a <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
@@ -5291,10 +5340,10 @@
                            (:c::Out/fpr o1))))]
         (:c::tail-direct ks (:wat::core::+ j 1) n o2 env pg rt tb slot nr pv na)))))))
 
-;; **the same call, through a register.** Arguments go on the stack exactly as `:c::call-user`
-;; puts them there, so a function reached this way is ordinary compiled code with no special
-;; entry -- which is the whole point: `defn` is `(def :name (fn ...))`, so a direct call and an
-;; indirect one differ only in how the target is named.
+;; **the same call, through the closure object in rax.** Arguments go on the stack exactly as
+;; `:c::call-user` puts them there. At the call, rax holds the closure (the pointer at its code
+;; word) and `call [rax]` loads that word. A top-level function's prologue does not read rax
+;; before it overwrites it, so the object is ignored; a closure's code (stone 3) reads it.
 ;;
 ;; The ORDER matters. The arguments are pushed first and the target loaded second, because
 ;; evaluating an argument goes through rax and would destroy a target loaded ahead of it.
@@ -5307,7 +5356,7 @@
   (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
                     o1 (:c::push-args ks 1 o env pg rt tb slot)
                     o2 (:c::expr (:wat::core::nth ks 0) o1 env pg rt tb slot (:c::no-tail))
-                    o3 (:c::emit o2 "ffd0")]                          ;; call *rax
+                    o3 (:c::emit o2 "ff10")]                          ;; call [rax]
     (:wat::core::if (:wat::core::= n 0) o3
       (:c::popn o3 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))
 
@@ -6293,7 +6342,9 @@
 
 (:wat::core::defn :c::compile-fn [node <- :wat::core::i64 base <- :wat::core::i64 pg <- :c::Prog
                                   rt <- :c::Layout tb <- :wat::core::i64
-                                  tail-in <- :c::Buf] -> :c::Out
+                                  tail-in <- :c::Buf
+                                  fnames <- (:wat::core::Vector :- [:wat::core::String])
+                                  faddrs <- (:wat::core::Vector :- [:wat::core::i64])] -> :c::Out
   (:wat::core::let
     [ks (:c::kidsof pg node)
      pv (:c::kidsof pg (:wat::core::nth ks 2))
@@ -6366,7 +6417,8 @@
      fkv (:wat::core::if fpr? 0
            (:wat::core::+ frame (:wat::core::* 8 nsave)))
      o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv
-                 :shared (:wat::core::Vector :- [:wat::core::String]))
+                 :shared (:wat::core::Vector :- [:wat::core::String])
+                 :fnames fnames :faddrs faddrs)
      ;; **before the frame exists, the parameters are still where the caller put them**, so this
      ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
      ;; because a cloning function keeps its frame pointer and its parameters with it.
@@ -6588,7 +6640,9 @@
 ;; come back so the next table can be built
 (:wat::core::defrecord :c::PassR
   [code <- :c::Buf  tail <- :c::Buf
-   lens <- (:wat::core::Vector :- [:wat::core::i64])])
+   lens <- (:wat::core::Vector :- [:wat::core::i64])
+   fnames <- (:wat::core::Vector :- [:wat::core::String])
+   faddrs <- (:wat::core::Vector :- [:wat::core::i64])])
 
 (:wat::core::defn :c::pass [pg <- :c::Prog i <- :wat::core::i64 rt <- :c::Layout tb <- :wat::core::i64
                             acc <- :c::PassR] -> :c::PassR
@@ -6597,16 +6651,19 @@
       [f (:wat::core::nth (:c::Prog/fns pg) i)
        o (:c::compile-fn (:c::Fn/node f) (:c::Fn/addr f)
            (:wat::core::if (:c::Prog/exp pg) (:wat::core::assoc pg :cur (:c::Fn/name f)) pg)
-           rt tb (:c::PassR/tail acc))]
+           rt tb (:c::PassR/tail acc) (:c::PassR/fnames acc) (:c::PassR/faddrs acc))]
       (:c::pass pg (:wat::core::+ i 1) rt tb
         ;; one function's code, flattened once and appended as a single chunk: the flatten is
         ;; linear and happens once per function, so the whole program's code is still O(n)
         (:c::PassR :code (:c::buf-add (:c::PassR/code acc) (:c::buf-str (:c::Out/code o)))
                    :tail (:c::Out/tail o)
-                   :lens (:wat::core::conj (:c::PassR/lens acc) (:c::codelen o)))))))
+                   :lens (:wat::core::conj (:c::PassR/lens acc) (:c::codelen o))
+                   :fnames (:c::Out/fnames o) :faddrs (:c::Out/faddrs o))))))
 
 (:wat::core::defn :c::empty-pass [] -> :c::PassR
-  (:c::PassR :code (:c::buf0) :tail (:c::buf0) :lens (:wat::core::Vector :- [:wat::core::i64])))
+  (:c::PassR :code (:c::buf0) :tail (:c::buf0) :lens (:wat::core::Vector :- [:wat::core::i64])
+              :fnames (:wat::core::Vector :- [:wat::core::String])
+              :faddrs (:wat::core::Vector :- [:wat::core::i64])))
 
 ;; the entry stub, and the only code not compiled from a defn: one mmap for both the output
 ;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
@@ -6649,7 +6706,9 @@
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
-                :fpr false :shared (:wat::core::Vector :- [:wat::core::String]))
+                :fpr false :shared (:wat::core::Vector :- [:wat::core::String])
+                :fnames (:wat::core::Vector :- [:wat::core::String])
+                :faddrs (:wat::core::Vector :- [:wat::core::i64]))
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))

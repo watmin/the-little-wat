@@ -69,7 +69,7 @@ oracle () {   # source path -> its output on stdout, its exit status as the retu
 COMPARED="four arith greet branch fib bench strings shadow churn deep logic vectors pvec assocn
           memory linear moved freed strverbs strown extremes nnegsub select counted bits codeat
           reader diag fileio asmbits fnref fnvec enums shapes matchval option escape
-          borrowed"
+          borrowed fn-box fn-ret fn-share fn-twice fn-vecpass"
 # collapsed to single spaces: the guard below matches with a glob on " $n ", and a name that
 # happened to sit at the end of a line was followed by a NEWLINE, so it read as uncovered.
 COMPARED=$(echo $COMPARED)
