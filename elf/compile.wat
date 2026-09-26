@@ -269,6 +269,10 @@
 (:wat::core::defn :c::buf-one [s <- :wat::core::String] -> :c::Buf
   (:c::buf-add (:c::buf0) s))
 
+;; one capture, recorded when its closure is built and read when the lifted body is compiled
+(:wat::core::defrecord :c::Cap
+  [fn <- :wat::core::String  name <- :wat::core::String  ty <- :wat::core::String])
+
 (:wat::core::defrecord :c::Out
 ;; **`sp` is how many bytes the stack has been pushed since the body began; `fk` is the distance
 ;; from rsp to where rbp points.** Neither matters while there is a frame pointer -- a local is
@@ -286,7 +290,8 @@
    ;; one static closure object per function whose address is taken, for this pass.
    ;; `faddrs` is the address of the code slot; the count sits at `[p-8]`.
    fnames <- (:wat::core::Vector :- [:wat::core::String])
-   faddrs <- (:wat::core::Vector :- [:wat::core::i64])])
+   faddrs <- (:wat::core::Vector :- [:wat::core::i64])
+   caps <- (:wat::core::Vector :- [:c::Cap])])
 
 (:wat::core::defn :c::emit [o <- :c::Out hex <- :wat::core::String] -> :c::Out
   (:wat::core::assoc (:wat::core::assoc o :code (:c::buf-add (:c::Out/code o) hex))
@@ -518,6 +523,11 @@
   (:c::is? s "wat.core/let" ":wat::core::let"))
 (:wat::core::defn :c::defn? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.core/defn" ":wat::core::defn"))
+(:wat::core::defn :c::fn? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.core/fn" ":wat::core::fn"))
+;; the closure-building node the rewrite inserts. No source file spells this head.
+(:wat::core::defn :c::close? [s <- :wat::core::String] -> :wat::core::bool
+  (:wat::core::= s ":c::close"))
 
 (:wat::core::defn :c::fail [what <- :wat::core::String a <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
   (:wat::kernel::assertion-failed!
@@ -767,7 +777,9 @@
    ;; CALLER has to know it: the two sides of a call compile independently, so the convention
    ;; is a property of the declaration and has to be readable from the table. See
    ;; `:c::argreg-fns`.
-   nargs <- :wat::core::i64])
+   nargs <- :wat::core::i64
+   ;; a `fn`, lifted. Only ever reached through `call [rax]`.
+   lifted <- :wat::core::bool])
 (:wat::core::typealias :c::FnV (:wat::core::Vector :- [:c::Fn]))
 
 ;; ---------------------------------------------------------------- records and type aliases
@@ -1651,6 +1663,11 @@
         ;; the arithmetic and the bitwise six: i64 in, i64 out
         ((:wat::core::not= op "") "i64")
         ((:wat::core::>= (:c::fn-addr pg head 0) 0) (:c::fn-ret pg head 0 a))
+        ;; a closure. Its type is the lifted function's declared type.
+        ((:c::close? head)
+          (:wat::core::if (:wat::core::< (:wat::core::length ks) 2)
+            (:c::ty-fail "a closure with no function" a pg)
+            (:c::fn-value-ty pg (:c::text pg (:wat::core::nth ks 1)) a)))
         ;; a Vector carries its element type, so `nth` and `conj` can say what they answer
         ((:c::vector? head)
           (:wat::core::if (:wat::core::< (:wat::core::length ks) 3) (:c::ty-fail "a Vector with no `:- [T]`" a pg)
@@ -2416,6 +2433,7 @@
           ;; them beyond a `sete`, and 46 of the 297 occurrences the census counts (elf/census.wat)
           ((:c::cond? head) (:c::cond-form ks 1 a o env pg rt tb slot tc))
           ((:c::match? head) (:c::match-form ks a o env pg rt tb slot tc))
+          ((:c::close? head) (:c::close-form ks a o env pg rt tb slot))
           ((:c::and? head)
             (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "and arity" a pg)
               (:c::and-form ks 1 o env pg rt tb slot tc)))
@@ -4030,7 +4048,9 @@
   :Elem  [tget <- :wat::core::i64]
   :At    [d <- :wat::core::i64]
   :AtReg [r <- :wat::core::i64 d <- :wat::core::i64]
-  :Reg   [r <- :wat::core::i64])
+  :Reg   [r <- :wat::core::i64]
+  ;; a capture: the closure object holds it, one word past the code. Same load as `:At`.
+  :Cap   [d <- :wat::core::i64])
 
 ;; a value that is a machine word and owns nothing, so reading one out needs no count. The
 ;; complement of `:c::ptr-ty?` over the types this compiler names -- and NOT its negation: a
@@ -4055,6 +4075,7 @@
                 "eb05"))                      ;; jmp +5                  -- over the call
               tget)]
           [:c::Read.At {:d d} (:c::emit o (:c::load-at d))]
+          [:c::Read.Cap {:d d} (:c::emit o (:c::load-at d))]
           [:c::Read.AtReg {:r r :d d} (:c::emit o (:c::mov-rm r d (:c::rax)))]
           [:c::Read.Reg {:r r} (:c::emit o (:c::mov-rr r (:c::rax)))])]
     (:wat::core::cond
@@ -5747,7 +5768,9 @@
     (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)]
       (:c::argreg-mark pg (:wat::core::+ i 1)
         (:wat::core::conj acc
-          (:wat::core::assoc f :nargs (:c::argreg-fn? (:c::Fn/node f) pg)))))))
+          (:wat::core::assoc f :nargs
+            (:wat::core::if (:c::Fn/lifted f) 0
+              (:c::argreg-fn? (:c::Fn/node f) pg))))))))
 
 (:wat::core::defn :c::argreg-cands [pg <- :c::Prog i <- :wat::core::i64
                                     acc <- (:wat::core::Vector :- [:wat::core::String])]
@@ -6337,7 +6360,8 @@
                                   rt <- :c::Layout tb <- :wat::core::i64
                                   tail-in <- :c::Buf
                                   fnames <- (:wat::core::Vector :- [:wat::core::String])
-                                  faddrs <- (:wat::core::Vector :- [:wat::core::i64])] -> :c::Out
+                                  faddrs <- (:wat::core::Vector :- [:wat::core::i64])
+                                  caps <- (:wat::core::Vector :- [:c::Cap])] -> :c::Out
   (:wat::core::let
     [ks (:c::kidsof pg node)
      pv (:c::kidsof pg (:wat::core::nth ks 2))
@@ -6346,7 +6370,16 @@
      ;; the child inherits the frame, and moving a parameter into a register moves it out of
      ;; the place the child reads it from
      start (:c::body-start ks 3 pg)
-     slots (:c::slots-body ks start 0 pg)
+     fname0 (:c::text pg (:wat::core::nth ks 1))
+     lifted? (:wat::core::let [fi (:c::fn-of pg fname0 0)]
+               (:wat::core::and (:wat::core::>= fi 0)
+                 (:c::Fn/lifted (:wat::core::nth (:c::Prog/fns pg) fi))))
+     mine (:wat::core::if lifted? (:c::caps-of caps fname0 0 (:wat::core::Vector :- [:c::Cap]))
+            (:wat::core::Vector :- [:c::Cap]))
+     ncap (:wat::core::length mine)
+     ;; the closure pointer, then one slot per capture, under the body's own slots
+     extra (:wat::core::if lifted? (:wat::core::+ 1 ncap) 0)
+     slots (:wat::core::+ (:c::slots-body ks start 0 pg) extra)
      ;; **C-136 gave parameters registers only to a function with a self tail call**, because the
      ;; prologue cost is per call and the benefit per iteration -- measured, and right at the
      ;; time. C-146 changed the premise: a function with `let` bindings is already saving those
@@ -6411,7 +6444,8 @@
            (:wat::core::+ frame (:wat::core::* 8 nsave)))
      o0 (:c::Out :base base :code (:c::buf0) :tail tail-in :rax "" :sp 0 :fpr fpr? :fk fkv
                  :shared (:wat::core::Vector :- [:wat::core::String])
-                 :fnames fnames :faddrs faddrs)
+                 :fnames fnames :faddrs faddrs
+                 :caps caps)
      ;; **before the frame exists, the parameters are still where the caller put them**, so this
      ;; environment addresses them from the incoming rsp and `fk` is zero. `fpr?` is excluded
      ;; because a cloning function keeps its frame pointer and its parameters with it.
@@ -6430,11 +6464,12 @@
      ;; the prologue -- and the test now lives BEFORE the prologue, so the jump would skip it and
      ;; the loop would never end (`elf/src/vectors.wat` hangs). It would buy nothing there in any
      ;; case: a loop pays its prologue once per call, not once per iteration.
-     wrap? (:wat::core::and (:wat::core::not fpr?)
+     wrap? (:wat::core::and (:wat::core::not lifted?)
+             (:wat::core::and (:wat::core::not fpr?)
              (:wat::core::and
                (:wat::core::not (:c::tail-self? (:wat::core::nth ks (:wat::core::- (:wat::core::length ks) 1))
                                   (:c::text pg (:wat::core::nth ks 1)) n pg))
-               (:c::wrappable? ks start pv env0 pgw)))
+               (:c::wrappable? ks start pv env0 pgw))))
      ;; **fk is zero here and `fkv` afterwards.** Before the prologue rsp still points at the
      ;; return address, so an argument is eight bytes up; after it, the frame and the saved
      ;; registers are in between. Getting this wrong reads the argument at the offset it will
@@ -6450,6 +6485,9 @@
      o1 (:c::emit ow (:wat::string::concat
                        (:wat::core::if fpr? (:wat::string::concat "55" "4889e5") "")
                        (:c::sub-rsp frame)
+                       ;; rax is the closure. Save it before the prologue spends rax.
+                       (:wat::core::if lifted?
+                         (:c::store (:c::fp-at -8 frame fpr?) fpr?) "")
                        (:c::reg-saves 0 nsave "")
                        ;; nothing to load: `nr` is zero under the register convention and the
                        ;; arguments were never on the stack to be loaded from
@@ -6476,8 +6514,8 @@
              (:c::fn-of pg (:c::text pg (:wat::core::nth ks 1)) 0)
              (:wat::core::Vector :- [:c::Bnd]) pg)
      pg (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-          (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
-            (:wat::core::assoc pg :bnds bnds0) :nscr nscr) :nlr nlr) :regbase nr)
+          (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc (:wat::core::assoc
+            (:wat::core::assoc pg :bnds bnds0) :cur fname0) :nscr nscr) :nlr nlr) :regbase nr)
             :scalar (:c::Sc/names sc)) :sfield (:c::Sc/fields sc))
                            :linear (:c::linear-of pv 0 ks start
                                         (:wat::core::Vector :- [:wat::core::String]) pg))
@@ -6496,10 +6534,13 @@
           (:c::TC :name (:c::text pg (:wat::core::nth ks 1)) :arity n :nregs nr :nargs na
                   :target (:wat::core::+ base (:c::codelen o1)) :test "" :body 0))
      ;; when the head was peeled off, the body is the `if`'s ELSE arm and nothing else
+     bound (:wat::core::if lifted?
+              (:c::bind-caps mine 0 o1 env pg)
+              (:c::BindR :o o1 :env env :slot 0))
      o2 (:wat::core::if wrap?
           (:c::expr (:wat::core::nth (:c::kidsof pg (:wat::core::nth ks start)) 3)
-            o1 env pg rt tb 0 tc)
-          (:c::seq ks start o1 env pg rt tb 0 tc))]
+            (:c::BindR/o bound) (:c::BindR/env bound) pg rt tb extra tc)
+          (:c::seq ks start (:c::BindR/o bound) (:c::BindR/env bound) pg rt tb extra tc))]
     (:wat::core::do
       ;; the environment the body was compiled in is the one the parameters' types are read from
       (:c::fact-params pv 0 fname env pg)
@@ -6590,7 +6631,8 @@
                 ;; the return TYPE waits until every record and alias has been seen -- a type
                 ;; is allowed to be declared after the function that uses it, as it is in wat
                 (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0 :ret ""
-                        :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0)))
+                        :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0
+                        :lifted false)))
             dir))
         ((:c::defrecord? head)
           (:wat::core::let [fv (:c::kidsof pg (:wat::core::nth ks 2))]
@@ -6635,7 +6677,8 @@
   [code <- :c::Buf  tail <- :c::Buf
    lens <- (:wat::core::Vector :- [:wat::core::i64])
    fnames <- (:wat::core::Vector :- [:wat::core::String])
-   faddrs <- (:wat::core::Vector :- [:wat::core::i64])])
+   faddrs <- (:wat::core::Vector :- [:wat::core::i64])
+   caps <- (:wat::core::Vector :- [:c::Cap])])
 
 (:wat::core::defn :c::pass [pg <- :c::Prog i <- :wat::core::i64 rt <- :c::Layout tb <- :wat::core::i64
                             acc <- :c::PassR] -> :c::PassR
@@ -6644,19 +6687,22 @@
       [f (:wat::core::nth (:c::Prog/fns pg) i)
        o (:c::compile-fn (:c::Fn/node f) (:c::Fn/addr f)
            (:wat::core::if (:c::Prog/exp pg) (:wat::core::assoc pg :cur (:c::Fn/name f)) pg)
-           rt tb (:c::PassR/tail acc) (:c::PassR/fnames acc) (:c::PassR/faddrs acc))]
+           rt tb (:c::PassR/tail acc) (:c::PassR/fnames acc) (:c::PassR/faddrs acc)
+           (:c::PassR/caps acc))]
       (:c::pass pg (:wat::core::+ i 1) rt tb
         ;; one function's code, flattened once and appended as a single chunk: the flatten is
         ;; linear and happens once per function, so the whole program's code is still O(n)
         (:c::PassR :code (:c::buf-add (:c::PassR/code acc) (:c::buf-str (:c::Out/code o)))
                    :tail (:c::Out/tail o)
                    :lens (:wat::core::conj (:c::PassR/lens acc) (:c::codelen o))
-                   :fnames (:c::Out/fnames o) :faddrs (:c::Out/faddrs o))))))
+                   :fnames (:c::Out/fnames o) :faddrs (:c::Out/faddrs o)
+                   :caps (:c::Out/caps o))))))
 
 (:wat::core::defn :c::empty-pass [] -> :c::PassR
   (:c::PassR :code (:c::buf0) :tail (:c::buf0) :lens (:wat::core::Vector :- [:wat::core::i64])
               :fnames (:wat::core::Vector :- [:wat::core::String])
-              :faddrs (:wat::core::Vector :- [:wat::core::i64])))
+              :faddrs (:wat::core::Vector :- [:wat::core::i64])
+              :caps (:wat::core::Vector :- [:c::Cap])))
 
 ;; the entry stub, and the only code not compiled from a defn: one mmap for both the output
 ;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
@@ -6701,7 +6747,8 @@
     [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
                 :fpr false :shared (:wat::core::Vector :- [:wat::core::String])
                 :fnames (:wat::core::Vector :- [:wat::core::String])
-                :faddrs (:wat::core::Vector :- [:wat::core::i64]))
+                :faddrs (:wat::core::Vector :- [:wat::core::i64])
+                :caps (:wat::core::Vector :- [:c::Cap]))
      o1 (:c::emit o (:wat::string::concat
           (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
             (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
@@ -7168,6 +7215,8 @@
     ((:c::is? s "wat.core/Vector" ":wat::core::Vector") 19)
     ((:c::is? s "wat.core/conj" ":wat::core::conj") 27)
     ((:c::is? s "wat.core/assoc" ":wat::core::assoc") 28)
+    ;; building a closure allocates, the same routine a record uses
+    ((:c::close? s) 18)
     ((:c::is? s "prim/write-hex" ":prim::write-hex") 33)
     ((:c::is? s "prim/read-hex" ":prim::read-hex") 33)
     ((:c::is? s "wat.io/read-file" ":wat::io::read-file") 33)
@@ -7462,15 +7511,16 @@
 ;; `:c::bind-ty`, and a node nothing completes is not said at all.
 (:wat::core::defn :c::fact-type [a <- :wat::core::i64 t <- :wat::core::String pg <- :c::Prog]
     -> :wat::core::String
-  (:wat::core::if (:c::free-ty? t) t
+  (:wat::core::let [at (:c::loc-str pg a)]
+  (:wat::core::if (:wat::core::or (:c::free-ty? t) (:wat::core::= at "? 0 0")) t
   (:wat::core::do
     (:wat::kernel::println
-      (:wat::string::concat "CType " (:wat::string::concat (:c::loc-str pg a)
+      (:wat::string::concat "CType " (:wat::string::concat at
         (:wat::string::concat " " (:wat::string::concat
           (:wat::core::if (:wat::core::= (:c::Prog/cur pg) "") "-" (:c::Prog/cur pg))
           (:wat::string::concat " " (:wat::string::concat t
             (:wat::string::concat " " (:c::wat-ty t)))))))))
-    t)))
+    t))))
 
 ;; for a `defn`: the type each parameter has in the environment its body is compiled in
 (:wat::core::defn :c::fact-params [pv <- :c::Kids i <- :wat::core::i64 fname <- :wat::core::String
@@ -7489,6 +7539,244 @@
       (:wat::kernel::println
         (:wat::string::concat "FILE " (:c::Src/path (:wat::core::nth (:c::Prog/srcs pg) i))))
       (:c::fact-files pg (:wat::core::+ i 1)))))
+
+;; ---------------------------------------------------------------- closures
+;;
+;; A `fn` is rewritten, before `fill-fns`, into a lifted `defn` and one closure node at the
+;; site. The node's arguments are the candidate names: every symbol in the body, except the
+;; `fn`'s own parameters and a top-level function name. The site, compiled in the parent, keeps
+;; the ones the environment binds and records their types. The lifted body is compiled later
+;; and reads those types back. `argreg-mark` gives a lifted row `nargs` 0 and does not ask
+;; `argreg-fn?`, so no pre-pass types the body.
+
+(:wat::core::defrecord :c::KidL
+  [pg <- :c::Prog
+   kids <- :c::Kids
+   fns <- :c::FnV
+   same <- :wat::core::bool])
+(:wat::core::defrecord :c::Lft
+  [pg <- :c::Prog  node <- :wat::core::i64  fns <- :c::FnV])
+
+(:wat::core::defn :c::cat-fns [a <- :c::FnV b <- :c::FnV i <- :wat::core::i64] -> :c::FnV
+  (:wat::core::if (:wat::core::>= i (:wat::core::length b)) a
+    (:c::cat-fns (:wat::core::conj a (:wat::core::nth b i)) b (:wat::core::+ i 1))))
+(:wat::core::defn :c::fn-cons [f <- :c::Fn rest <- :c::FnV] -> :c::FnV
+  (:c::cat-fns (:wat::core::conj (:wat::core::Vector :- [:c::Fn]) f) rest 0))
+(:wat::core::defn :c::cat-kids [a <- :c::Kids b <- :c::Kids i <- :wat::core::i64] -> :c::Kids
+  (:wat::core::if (:wat::core::>= i (:wat::core::length b)) a
+    (:c::cat-kids (:wat::core::conj a (:wat::core::nth b i)) b (:wat::core::+ i 1))))
+
+(:wat::core::defn :c::has-str? [v <- (:wat::core::Vector :- [:wat::core::String])
+                                name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length v)) false)
+    ((:wat::core::= (:wat::core::nth v i) name) true)
+    (:else (:c::has-str? v name (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::ban-params [pg <- :c::Prog pv <- :c::Kids i <- :wat::core::i64
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length pv)) acc
+    (:c::ban-params pg pv (:wat::core::+ i 3)
+      (:wat::core::conj acc (:c::text pg (:wat::core::nth pv i))))))
+
+(:wat::core::defn :c::syms-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                 ban <- (:wat::core::Vector :- [:wat::core::String])
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
+    (:c::syms-kids pg ks (:wat::core::+ i 1) ban
+      (:c::syms-node pg (:wat::core::nth ks i) ban acc))))
+
+(:wat::core::defn :c::syms-node [pg <- :c::Prog a <- :wat::core::i64
+                                 ban <- (:wat::core::Vector :- [:wat::core::String])
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::let [k (:c::kindv a pg)]
+    (:wat::core::cond
+      ((:wat::core::= k (:rd::Kind.Symbol {}))
+        (:wat::core::let [nm (:c::text pg a)]
+          (:wat::core::if
+            (:wat::core::or
+              (:wat::core::or (:c::has-str? ban nm 0) (:wat::core::>= (:c::fn-of pg nm 0) 0))
+              (:wat::core::and (:wat::core::> (:wat::string::length nm) 0)
+                               (:wat::core::= (:wat::string::subs nm 0 1) " ")))
+            acc
+            (:wat::core::if (:c::has-str? acc nm 0) acc (:wat::core::conj acc nm)))))
+      ((:wat::core::or (:wat::core::= k (:rd::Kind.List {}))
+         (:wat::core::or (:wat::core::= k (:rd::Kind.Vector {}))
+                         (:wat::core::= k (:rd::Kind.Map {}))))
+        (:wat::core::let [ks (:c::kidsof pg a)
+                          from (:wat::core::if
+                                 (:wat::core::and (:wat::core::= k (:rd::Kind.List {}))
+                                   (:wat::core::and (:wat::core::> (:wat::core::length ks) 0)
+                                     (:c::close? (:c::text pg (:wat::core::nth ks 0)))))
+                                 2 0)]
+          (:c::syms-kids pg ks from ban acc)))
+      (:else acc))))
+
+(:wat::core::defn :c::sym-nodes [pg <- :c::Prog names <- (:wat::core::Vector :- [:wat::core::String])
+                                 i <- :wat::core::i64 acc <- :c::Kids] -> :c::KidL
+  (:wat::core::if (:wat::core::>= i (:wat::core::length names))
+    (:c::KidL :pg pg :kids acc :fns (:wat::core::Vector :- [:c::Fn]) :same true)
+    (:wat::core::let [n (:c::mknode pg (:rd::Kind.Symbol {}) (:wat::core::nth names i)
+                          (:wat::core::Vector :- [:wat::core::i64]) -1)]
+      (:c::sym-nodes (:c::NodeR/pg n) names (:wat::core::+ i 1)
+        (:wat::core::conj acc (:c::NodeR/node n))))))
+
+(:wat::core::defn :c::lift-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                 acc <- :c::Kids fns <- :c::FnV same <- :wat::core::bool
+                                 next <- :wat::core::i64] -> :c::KidL
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
+    (:c::KidL :pg pg :kids acc :fns fns :same same)
+    (:wat::core::let [r (:c::lift-node pg (:wat::core::nth ks i) next)]
+      (:c::lift-kids (:c::Lft/pg r) ks (:wat::core::+ i 1)
+        (:wat::core::conj acc (:c::Lft/node r))
+        (:c::cat-fns fns (:c::Lft/fns r) 0)
+        (:wat::core::and same (:wat::core::= (:c::Lft/node r) (:wat::core::nth ks i)))
+        (:wat::core::+ next (:wat::core::length (:c::Lft/fns r)))))))
+
+(:wat::core::defn :c::lift-fn [pg <- :c::Prog a <- :wat::core::i64 ks <- :c::Kids
+                               next <- :wat::core::i64] -> :c::Lft
+  (:wat::core::if (:wat::core::< (:wat::core::length ks) 5)
+    (:wat::kernel::assertion-failed! :message "compile: a fn needs parameters, a return type, and a body")
+    (:wat::core::let
+      [br (:c::lift-kids pg ks 4 (:wat::core::Vector :- [:wat::core::i64])
+            (:wat::core::Vector :- [:c::Fn]) true (:wat::core::+ next 1))
+       ban (:c::ban-params (:c::KidL/pg br) (:c::kidsof (:c::KidL/pg br) (:wat::core::nth ks 1)) 0
+             (:wat::core::Vector :- [:wat::core::String]))
+       syms (:c::syms-kids (:c::KidL/pg br) (:c::KidL/kids br) 0 ban
+              (:wat::core::Vector :- [:wat::core::String]))
+       nm (:wat::string::concat ":c::fn" (:wat::i64::to-string next))
+       w (:c::mknode (:c::KidL/pg br) (:rd::Kind.Symbol {}) "wat.core/defn"
+            (:wat::core::Vector :- [:wat::core::i64]) -1)
+       n (:c::mknode (:c::NodeR/pg w) (:rd::Kind.Symbol {}) nm
+            (:wat::core::Vector :- [:wat::core::i64]) -1)
+       base (:wat::core::conj
+              (:wat::core::conj
+                (:wat::core::conj
+                  (:wat::core::conj
+                    (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64]) (:c::NodeR/node w))
+                    (:c::NodeR/node n))
+                  (:wat::core::nth ks 1))
+                (:wat::core::nth ks 2))
+              (:wat::core::nth ks 3))
+       df (:c::mknode (:c::NodeR/pg n) (:rd::Kind.List {}) (:c::text pg a)
+             (:c::cat-kids base (:c::KidL/kids br) 0) -1)
+       this (:c::Fn :name nm :node (:c::NodeR/node df) :addr 0 :ret ""
+                    :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0 :lifted true)
+       hd (:c::mknode (:c::NodeR/pg df) (:rd::Kind.Symbol {}) ":c::close"
+             (:wat::core::Vector :- [:wat::core::i64]) -1)
+       sn (:c::mknode (:c::NodeR/pg hd) (:rd::Kind.Symbol {}) nm
+             (:wat::core::Vector :- [:wat::core::i64]) -1)
+       cs (:c::sym-nodes (:c::NodeR/pg sn) syms 0
+             (:wat::core::conj (:wat::core::conj (:wat::core::Vector :- [:wat::core::i64])
+                                 (:c::NodeR/node hd))
+                               (:c::NodeR/node sn)))
+       cl (:c::mknode-ty (:c::KidL/pg cs) (:rd::Kind.List {}) (:c::text pg a)
+             (:c::KidL/kids cs) a "")]
+      (:c::Lft :pg (:c::NodeR/pg cl) :node (:c::NodeR/node cl)
+               :fns (:c::fn-cons this (:c::KidL/fns br))))))
+
+(:wat::core::defn :c::lift-node [pg <- :c::Prog a <- :wat::core::i64 next <- :wat::core::i64] -> :c::Lft
+  (:wat::core::let [k (:c::kindv a pg) ks (:c::kidsof pg a)]
+    (:wat::core::if
+      (:wat::core::not
+        (:wat::core::or (:wat::core::= k (:rd::Kind.List {}))
+          (:wat::core::or (:wat::core::= k (:rd::Kind.Vector {}))
+                          (:wat::core::= k (:rd::Kind.Map {})))))
+      (:c::Lft :pg pg :node a :fns (:wat::core::Vector :- [:c::Fn]))
+      (:wat::core::if
+        (:wat::core::and (:wat::core::= k (:rd::Kind.List {}))
+          (:wat::core::and (:wat::core::> (:wat::core::length ks) 0)
+                           (:c::fn? (:c::text pg (:wat::core::nth ks 0)))))
+        (:c::lift-fn pg a ks next)
+        (:wat::core::let [kr (:c::lift-kids pg ks 0 (:wat::core::Vector :- [:wat::core::i64])
+                               (:wat::core::Vector :- [:c::Fn]) true next)]
+          (:wat::core::if (:c::KidL/same kr)
+            (:c::Lft :pg (:c::KidL/pg kr) :node a :fns (:c::KidL/fns kr))
+            (:wat::core::let [m (:c::mknode (:c::KidL/pg kr) k (:c::text pg a)
+                                   (:c::KidL/kids kr) a)]
+              (:c::Lft :pg (:c::NodeR/pg m) :node (:c::NodeR/node m)
+                       :fns (:c::KidL/fns kr)))))))))
+
+(:wat::core::defn :c::lift-acc [pg <- :c::Prog i <- :wat::core::i64 n0 <- :wat::core::i64
+                                acc <- :c::FnV] -> :c::Prog
+  (:wat::core::if (:wat::core::>= i n0) (:wat::core::assoc pg :fns acc)
+    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)
+                      l (:c::lift-node pg (:c::Fn/node f) (:wat::core::length acc))
+                      f2 (:wat::core::if (:wat::core::= (:c::Lft/node l) (:c::Fn/node f)) f
+                           (:wat::core::assoc f :node (:c::Lft/node l)))]
+      (:c::lift-acc (:c::Lft/pg l) (:wat::core::+ i 1) n0
+        (:c::cat-fns (:wat::core::conj acc f2) (:c::Lft/fns l) 0)))))
+
+(:wat::core::defn :c::lift-fns [pg <- :c::Prog] -> :c::Prog
+  (:c::lift-acc pg 0 (:wat::core::length (:c::Prog/fns pg)) (:wat::core::Vector :- [:c::Fn])))
+
+(:wat::core::defn :c::caps-of [cs <- (:wat::core::Vector :- [:c::Cap])
+                               fn <- :wat::core::String i <- :wat::core::i64
+                               acc <- (:wat::core::Vector :- [:c::Cap])]
+    -> (:wat::core::Vector :- [:c::Cap])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length cs)) acc
+    (:wat::core::let [c (:wat::core::nth cs i)]
+      (:c::caps-of cs fn (:wat::core::+ i 1)
+        (:wat::core::if (:wat::core::= (:c::Cap/fn c) fn) (:wat::core::conj acc c) acc)))))
+
+(:wat::core::defn :c::bind-caps [cs <- (:wat::core::Vector :- [:c::Cap]) i <- :wat::core::i64
+                                 o <- :c::Out env <- :c::Env pg <- :c::Prog] -> :c::BindR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length cs))
+    (:c::BindR :o o :env env :slot 0)
+    (:wat::core::let [c (:wat::core::nth cs i)
+                      disp (:wat::core::* -8 (:wat::core::+ i 2))
+                      ld (:c::emit o (:c::load (:c::fp o -8) (:c::Out/fpr o)))
+                      rd (:c::read-out (:c::Cap/ty c)
+                           (:c::Read.Cap {:d (:wat::core::* 8 (:wat::core::+ i 1))}) ld 0 pg)
+                      st (:wat::core::assoc
+                           (:c::emit rd (:c::store (:c::fp rd disp) (:c::Out/fpr rd))) :rax "")]
+      (:c::bind-caps cs (:wat::core::+ i 1) st
+        (:wat::core::conj env
+          (:c::Bind :name (:c::Cap/name c) :disp disp :reg -1 :ty (:c::Cap/ty c)))
+        pg))))
+
+(:wat::core::defn :c::close-push [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
+                                  slot <- :wat::core::i64 fn <- :wat::core::String] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
+    (:wat::core::let [sym (:wat::core::nth ks i)
+                      nm (:c::text pg sym)
+                      d (:c::lookup env nm (:wat::core::- (:wat::core::length env) 1))]
+      (:wat::core::if (:wat::core::= d 999999)
+        (:c::close-push ks (:wat::core::+ i 1) o env pg rt tb slot fn)
+        ;; The name is a bare symbol of the closure node, so the linearity count already
+        ;; refuses an owned in-place `conj` of it. The share is the other wall: a capture
+        ;; is a store into a container, and the count has to be complete whether or not
+        ;; `own?` would have copied (F-188). No fixture can drop only this share and still
+        ;; take the owned path.
+        (:wat::core::let [ty (:c::type-of sym env pg)
+                          o1 (:c::push
+                               (:c::share sym env pg
+                                 (:c::expr sym o env pg rt tb slot (:c::no-tail)))
+                               (:c::push-rax) 8)]
+          (:c::close-push ks (:wat::core::+ i 1)
+            (:wat::core::assoc o1 :caps
+              (:wat::core::conj (:c::Out/caps o1)
+                (:c::Cap :fn fn :name nm :ty ty)))
+            env pg rt tb slot fn))))))
+
+(:wat::core::defn :c::close-form [ks <- :c::Kids a <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
+                                  slot <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::< (:wat::core::length ks) 2) (:c::fail "closure" a pg)
+    (:wat::core::let [fn (:c::text pg (:wat::core::nth ks 1))
+                      was (:wat::core::length (:c::Out/caps o))
+                      o1 (:c::close-push ks 2 o env pg rt tb slot fn)
+                      n (:wat::core::- (:wat::core::length (:c::Out/caps o1)) was)
+                      o2 (:c::call (:c::emit o1 (:c::mov-rax n)) (:c::at-vnew rt))
+                      o3 (:c::pop-slots (:wat::core::- n 1) o2)
+                      fa (:c::fn-addr pg fn 0)
+                      o4 (:c::push o3 (:c::push-rax) 8)
+                      o5 (:c::emit o4 (:c::mov-rax fa))]
+      (:c::popn o5 (:wat::string::concat "59" "488901" "4889c8") 8))))
 
 (:wat::core::defn :c::compile [src-path <- :wat::core::String out-path <- :wat::core::String] -> :wat::core::nil
   (:c::compile-as src-path out-path false))
@@ -7519,7 +7807,9 @@
      ;; which functions reach a `poke`, transitively, before any code is emitted
      ;; every record and alias is known now, so the types can be resolved in any order
      pg-r (:c::fill-recs pg-x 0 (:wat::core::Vector :- [:c::Rec]))
-     pg-f (:c::fill-fns pg-r 0 (:wat::core::Vector :- [:c::Fn]))
+     ;; each `fn` becomes a lifted function plus a closure node, before any pre-pass
+     pg-l (:c::lift-fns pg-r)
+     pg-f (:c::fill-fns pg-l 0 (:wat::core::Vector :- [:c::Fn]))
      pg-p (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
      ;; the calls that become `let`s, before either pass sees a node
      pg-i (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
@@ -7585,6 +7875,13 @@
     (:c::compile "elf/src/fn-share.wat" "elf/out/fn-share.elf")
     (:c::compile "elf/src/fn-twice.wat" "elf/out/fn-twice.elf")
     (:c::compile "elf/src/fn-vecpass.wat" "elf/out/fn-vecpass.elf")
+    (:c::compile "elf/src/closure-captures.wat" "elf/out/closure-captures.elf")
+    (:c::compile "elf/src/closure-nested.wat" "elf/out/closure-nested.elf")
+    (:c::compile "elf/src/fn-vec.wat" "elf/out/fn-vec.elf")
+    (:c::compile "elf/src/fn-rec.wat" "elf/out/fn-rec.elf")
+    (:c::compile "elf/src/fn-capfn.wat" "elf/out/fn-capfn.elf")
+    (:c::compile "elf/src/fn-loop.wat" "elf/out/fn-loop.elf")
+    (:c::compile "elf/src/fn-nocap.wat" "elf/out/fn-nocap.elf")
     (:c::compile "elf/src/enums.wat"  "elf/out/enums.elf")
     (:c::compile "elf/src/shapes.wat"   "elf/out/shapes.elf")
     (:c::compile "elf/src/matchval.wat" "elf/out/matchval.elf")

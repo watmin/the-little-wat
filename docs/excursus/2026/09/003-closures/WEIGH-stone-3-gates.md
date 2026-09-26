@@ -37,3 +37,17 @@ them too) — say which, and give instructions and cycles as before.
 
 Then `tools/elf-run.sh` IN FULL (exit 0, `rules: 0`, `types: 0`, `partial 0`, `unplaced 0`) and a fresh
 bootstrap. Append a re-strike section to the SCORE.
+
+---
+
+**Credited, 2026-09-26, on the orchestrator's own runs:** `tools/elf-run.sh` exit 0 (99 native binaries;
+`rules: 0` in 12,047 pairs; `types: 0` in 20,372 nodes; `unplaced 0`, `partial 0`; over 139 programs),
+the seven closure programs agreeing natively — `closure-captures` `126 86`, `closure-nested` `16 27`,
+`fn-vec` `2 3 2`, `fn-rec` `42`, `fn-capfn` `23`, `fn-loop` `6`, `fn-nocap` `42`; `tools/bootstrap.sh`
+byte-identical at **294,005 bytes**; `reads: ok`; the 89 existing programs byte-identical, the seven
+new ones adopted.
+
+**The cost, recorded as a cost:** on the SAME input, **+2.467% instructions** in both rounds —
+**68.3 million** (2,838,307,906 − 2,769,959,866; the SCORE's "6,834,804" drops a digit, its percentage
+is right). It is the front rewrite walking every node, in programs with no `fn` as well; cycles are
+not claimed against the 1.8% floor. A candidate for the performance work, not a defect.

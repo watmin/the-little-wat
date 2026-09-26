@@ -153,6 +153,25 @@
          (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::quot ?pi 3 :undefined -1) ?i))]
   :then [(:ck::Param :name ?F :idx ?i :fn ?fn :ty ?t :tn ?tn :ti ?ti :file ?f :line ?l :col ?c)])
 
+;; the same placement for a `fn` form. Its parameter vector is child 1, not child 2, and
+;; the form has no name of its own: parameter i is still index 3i of that vector. A lifted
+;; function's `CParam` is one of these parameters.
+(:wat::rete::defrule :ck::b-param-fn
+  :when [(:ck::CParam (?f <- :file) (?l <- :line) (?c <- :col) (?i <- :idx) (?fn <- :fn) (?t <- :ty)
+                      (?tn <- :tn) (?ti <- :ti))
+         (:ck::At (?P <- :id) (?f <- :file) (?l <- :line) (?c <- :col))
+         (:wat::grep::Node (?P <- :id) (?V <- :parent) (?pi <- :index))
+         (:wat::grep::Node (?V <- :id) (?D <- :parent) (?vi <- :index) (?vk <- :kind))
+         (:wat::grep::Node (?hd <- :id) (?D <- :parent) (?hi <- :index))
+         (:wat::grep::Named (?hd <- :id) (?hn <- :name))
+         (:wat::rete::where (:wat::rete::core::enum::= ?vk (:wat::grep::NodeKind.Vector {})))
+         (:wat::rete::where (:wat::rete::i64::= ?vi 1))
+         (:wat::rete::where (:wat::rete::i64::= ?hi 0))
+         (:wat::rete::where (:wat::rete::string::= ?hn "wat.core/fn"))
+         (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::mod ?pi 3 :undefined -1) 0))
+         (:wat::rete::where (:wat::rete::i64::= (:wat::rete::i64::quot ?pi 3 :undefined -1) ?i))]
+  :then [(:ck::Param :name ?fn :idx ?i :fn ?fn :ty ?t :tn ?tn :ti ?ti :file ?f :line ?l :col ?c)])
+
 ;; ── ★ THE LANGUAGE'S RULE, joined ──────────────────────────────────────────────
 ;; `:ck::TyFits` is the decision `:ck::fits?` already made, one fact per pair of exported
 ;; types. This rule only joins: the argument, the parameter it feeds, and that decision.
