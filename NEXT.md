@@ -60,7 +60,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 2a'''. **DONE — excursus 007: `to-string` is the written form; `name` is the name (F-207)** (wat-rs `40ddeac4d`). The builder
    accepted the four-YES derivation. 006's re-strike (70 stdlib errors, five classes; 17 of them want
    `name`) and then 004's stepping follow, each parked on its own pushed wat-rs branch meanwhile.
-2b. **Then persistent collections, excursus 008** -- the builder's ruling (2026-09-24): *"in our
+2b. **Then persistent collections and memory, excursus 008 -- itemized in
+   `docs/excursus/2026/09/008-persistent-collections-and-memory/SCOPE.md` (M1-M6, C1-C4).** -- the builder's ruling (2026-09-24): *"in our
    compiler - all of the collections must be persistent - the only thing that differs between our
    compiler and wat-rs runtime would be perf -- we'll deal with this once we have closures"*. The
    compiled Vector included; model wat-rs's `PVec`/`PMap` (array, then an rpds trie, promotion
