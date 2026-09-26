@@ -15605,3 +15605,8 @@ keyword as a string". The builder, 2026-09-25, on seeing Clojure's `name`: *"tha
 accept that 4 YES derivation"* -- `to-string`/`from-string` are the WRITTEN form (`":foo"` <->
 `:foo`, from-string requiring the colon); `name`/`from-name` are the colon-free name. 49 calls to
 `to-string` and 168 to `from-string` across wat-rs and the-little-wat.
+
+**F-206, the builder's ruling on what a macro may return (2026-09-26):** *"macros by definition may
+only return primitives provided by the core language - user defined items cannot exist to be
+returned"*. A macro declaring a user-defined return type is refused at definition (excursus 006
+stone 1, row R6′), not at expansion.

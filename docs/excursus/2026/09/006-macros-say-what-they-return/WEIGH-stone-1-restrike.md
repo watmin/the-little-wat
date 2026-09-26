@@ -74,3 +74,31 @@ and allow-listing constructors — report what it takes.
 
 Then `macro-returns-record.wat` and `macro-returns-enum.wat` agree with the value written by hand, and
 the floor: green except F-197's two lints and the two step tests (the stepper, still parked).
+
+---
+
+# Round 3 — the builder's ruling on R6 (2026-09-26)
+
+> *"macros by definition may only return primitives provided by the core language - user defined
+> items cannot exist to be returned"*
+
+R6 is not a missing capability; it is the rule, and the rule belongs where a declaration is read, not
+where an expansion happens to fail. So:
+
+- **R6′ — a macro's declared return type is a core-language type, or the `defmacro` is refused at
+  definition, naming the rule.** A declared return that names a user-defined type (a `defrecord`, a
+  `defenum`, a `typealias` to one, or any type containing one — a Vector of a user record) is a
+  `MalformedDefmacro` at parse time: "a macro returns a core-language value; `:user::P` is a
+  user-defined type, which does not exist when a macro expands". Today's expansion-time refusal
+  ("aggregate construction requires the type registry") stops being the gate: it is unreachable
+  from a program that parses.
+- `probes/macro-returns-record.wat` and `probes/macro-returns-enum.wat` (user types) become standing
+  NEGATIVE fixtures: refused at definition, the message naming the rule and the type.
+- **Core-language enums** (`:wat::core::Option`, `:wat::core::Result`) are core types, so a declaration
+  naming them is legal; whether their constructors are expand-time legal is NOT this stone's --
+  report what `macro-returns-*` shows for `Option`, and change nothing there.
+- **R7 — your own edit broke `tests/macros/probe_arc279b_subs_tuple_macro_eval.wat`**: the `)` on
+  line 23 closes the `fn` after its new return type, the reader reports the stray close at 33:19.
+  Fix it so the fold declares `(Tuple :- [String i64])` AND the file parses.
+
+Then the floor: green except F-197's two lints and the two step tests.
