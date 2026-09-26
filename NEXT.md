@@ -17,17 +17,16 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — closures' stone 2 (excursus 003), with Grok
+### NEXT STRIKE — closures' stone 3 (the `fn` form), with Grok
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** 003 stone 2 (every function value is a closure object; the gate sees indirect-call
-arguments) is with Grok in THIS repo. wat-rs `the-little-wat` is at `4f6ebcf12`, its floor's only reds
-F-197's two lints. Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh stone 2
-against its EXPECTATIONS on your own runs, then draw stone 3 (the `fn` form) -- its disconfirming
-probe (capture types recorded at the site, read by the lifted body) comes BEFORE its brief.
+**On waking:** 003 stones 1 and 2 LANDED (`edba38e`, `caebf4b`); stone 3 (the `fn` form) is with Grok in
+THIS repo, drawn on the disconfirming probe at the end of `003-closures/DESIGN.md`. Read
+`/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it against its EXPECTATIONS on
+your own runs. After it: excursus 008 (`008-persistent-collections-and-memory/SCOPE.md`).
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
