@@ -268,3 +268,23 @@ The hit is the accessor-head check: a head with no `::` and one data-form argume
 ```
 
 The test's comment says a program body that produces a `Vec` errors because `value_to_watast` rejects `Vec`. The body `(:wat::core::Vector :- [:bogus] x)` with `x` = 1 now expands to a vector of `1`. That is the render this row asked for, landing inside macro expansion. The test still expects `MalformedTemplate`. Left as the arm captured it.
+
+## Resume — the stepper on top of 006
+
+`the-little-wat` is `365ebc014`. The parked stepper was rebased onto it. Conflicts in `value_to_watast` were kept as landed: one `substitute_captures`, and the landed `rendered_record_fields_follow_declaration_order`. 004 adds no second renderer. The six `(:wat::test::time-limit "15s")` annotations came across. The nextest override on `default`, `ci`, and `slow` is the four-test filter (`c5c`, `c5b`, `wat_value_ui`, `to_edn_derive_ui`), period 90s, terminate-after 2. Nothing is committed on `the-little-wat`. The rebase was not pushed. `origin/the-little-wat-004-eval-step` is still `f9ae53550`.
+
+S1. A field read is a head whose `wat_reader::identifier::path` is empty, with one data argument. The line carries `rune:lint(one-variant-separator, namespace)`. `only_identifier_rs_spells_the_variant_separator` passes.
+
+S2. `probes/eval-step-unnamed-closure.wat`: `k` is captured by an unnamed `inner`, and `inner` is captured by an unnamed `outer`. The walk prints `#wat.core/Result.Ok {:value [4 6]}`. Eval of the same form prints `4`.
+
+S3. `probes/eval-step-captures-rec-enum-fn.wat` prints `[4 7]`, `[8 2]`, `[2 3]`, each inside `Result.Ok`. The other `probes/eval-step-*.wat` files match their headers: builtin keyword `Ok [3 1]`, builtin symbol `[3 1]`, let-bound `[43 4]`, recursion `[6 19]`, top-level closure `[15 2]`, user function keyword `[4 3]`, user function symbol `[4 2]`, the trace ends `TERMINAL 43`, and both closure probes print `42` then a `StepNext` of `(:wat.core/+ 3 1)`.
+
+S4. `step_round_trip_agrees_with_eval_ast` now also drives a closure over `:wat::core::Span` (answer 4), a closure over `:wat::core::Option.Some` (answer 8), and the unnamed closure that captures an unnamed closure (answer 4). Each agrees with `eval-ast!`. Reversing the record field zip (`names.iter().rev().zip(fields)`) failed `rendered_record_fields_follow_declaration_order` at the `:a` position assert. That mutant was reverted. The landed test is the one that failed it.
+
+S5. `NEXTEST_TEST_THREADS=4 scripts/floor.sh` alone, `CARGO_TARGET_DIR=/home/watmin/.cache/wat-kw-007`. Doctests exit 0. `.floor/2026-09-26T01-43-58Z`:
+
+```
+Summary [1239.709s] 5405 tests run: 5403 passed (1 slow), 2 failed, 22 skipped
+```
+
+The two failures are F-197: `tests_carry_no_inlined_wat` and `tests_carry_no_loose_string_assert`. `step_user_function_call` passed (0.808s). `step_tail_recursion_terminates_under_bound` passed (0.790s). The arm is `.floor/2026-09-26T01-43-58Z/ARM.txt`.

@@ -15340,7 +15340,9 @@ thing as a known flake: it is a test that sits at its deadline, recorded here, n
 
 ### F-198: `eval-step!` cannot step a call spelled with a namespaced head -- and calls a function that captured nothing "closure-bearing"
 
-**Correct, in wat-rs.** Found while answering the builder's question about closures, 2026-09-24.
+**Fixed** by excursus 004 stone 1 (wat-rs `4f6ebcf12`): namespaced heads step, and a function that
+captured nothing steps -- see F-204. **Correct, in wat-rs.** Found while answering the builder's
+question about closures, 2026-09-24.
 `probes/eval-step-closure.wat` and `probes/eval-step-closure-kw.wat`.
 
 The builder's example is a real closure -- `x` is neither a parameter nor a global, so the `fn` must
@@ -15508,7 +15510,8 @@ rule (a macro returns syntax), not changed.
 
 ### F-204: `eval-step!` steps no user code -- every user function refused, every symbol-spelled head refused, and a `let` binding a `fn` never ends
 
-**Open -- excursus 004.** Found asking what F-198's two red wat-rs tests actually meant.
+**Fixed** by excursus 004 stone 1 (wat-rs `4f6ebcf12`): stepping any pure form to its terminal
+answers what `eval` answers; a no-progress step is an error. Found asking what F-198's two red wat-rs tests actually meant.
 `probes/eval-step-*.wat`, run on wat-rs `75fcc7638` through `:wat::eval::walk`:
 
 | case | `eval` | stepping |

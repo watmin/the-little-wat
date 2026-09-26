@@ -17,16 +17,16 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 004 (eval-step!) with Grok; then closures' stone 2
+### NEXT STRIKE — closures' stone 2 (excursus 003); the orchestrator draws it
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** 003 stone 1 LANDED (`edba38e`, `WEIGH-stone-1-credited.md`). 004 stone 1 is with
-Grok, in wat-rs, building in its OWN target dir. Read `/home/watmin/Work/holon/.pulsare/to-claude`;
-on `kind=scored` weigh 004 against its EXPECTATIONS on your own runs. Then draw 003 stone 2 -- its
-brief MUST carry "the gate sees an indirect call's arguments" as a row (003 stone 1's named gap).
+**On waking:** nothing is in flight. wat-rs `the-little-wat` is at `4f6ebcf12` (excursions 004, 006,
+007 landed and pushed; the floor's only reds are F-197's two lints). The next act is the
+orchestrator's: crawl and draw 003 stone 2 (one closure representation for every function value) --
+its brief MUST carry "the gate sees an indirect call's arguments" as a row (003 stone 1's named gap).
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
@@ -47,7 +47,7 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
    closure) and `probes/closure-nested.wat` (16, 27: closures returned from functions, composed).
    The native compiler refuses `fn` today. A capture is a STORE into a container -- the F-188 class -- so
    the ownership count and both gates must cover it.
-2a. **Excursus 004 — `eval-step!` steps what `eval` runs (F-204), with Grok in wat-rs.** It stepped
+2a. **DONE — excursus 004, `eval-step!` steps what `eval` runs (F-204, F-198)** (wat-rs `4f6ebcf12`). It stepped
    no user code at all: every user function refused, every symbol head refused, a `let`-bound `fn`
    never ending. The builder: *"let's get this fixed - we have a strong habit of fixing what's broken
    when we encounter it"*. Grok builds wat-rs in its OWN target dir until 003 stone 1 is weighed.
