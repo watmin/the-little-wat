@@ -20,6 +20,8 @@ fail=0
 # **every read out of a container goes through `:c::read-out`** (F-188, stone 0a). Static, and
 # first: a new read verb that bypasses the count is a wrong answer that every run below can miss.
 tools/reads.sh || exit 1
+# every bulk copy is counted or is a named byte copy (excursus 008 stone 2)
+tools/copies.sh || exit 1
 
 # SKIP_BUILD=1 uses whatever is already in elf/out/ instead of rebuilding it through the
 # interpreter. tools/bootstrap.sh --fast sets it, because it has just built everything with a
@@ -70,7 +72,8 @@ COMPARED="four arith greet branch fib bench strings shadow churn deep logic vect
           memory linear moved freed strverbs strown extremes nnegsub select counted bits codeat
           reader diag fileio asmbits fnref fnvec enums shapes matchval option escape
           borrowed fn-box fn-ret fn-share fn-twice fn-vecpass
-          closure-captures closure-nested fn-vec fn-rec fn-capfn fn-loop fn-nocap"
+          closure-captures closure-nested fn-vec fn-rec fn-capfn fn-loop fn-nocap
+          count-vec count-trie count-own count-rec"
 # collapsed to single spaces: the guard below matches with a glob on " $n ", and a name that
 # happened to sit at the end of a line was followed by a NEWLINE, so it read as uncovered.
 COMPARED=$(echo $COMPARED)
@@ -161,7 +164,7 @@ echo "== and the compiler refuses what it cannot translate =="
 stale=0
 for f in elf/refuse.wat elf/refuse-nonascii.wat elf/refuse-arity.wat elf/refuse-ptradd.wat elf/refuse-variant.wat \
          elf/refuse-rparen.wat elf/refuse-unclosed.wat elf/refuse-mismatch.wat \
-         elf/refuse-unterm.wat elf/refuse-unterm-top.wat; do
+         elf/refuse-unterm.wat elf/refuse-unterm-top.wat elf/refuse-poke.wat; do
   [ -f "$f" ] || continue
   # the generated body is elf/compile.wat up to its driver; compare that, not the driver
   if ! diff -q <(sed '/^(:wat::core::defn :user::main/,$d' elf/compile.wat) \
@@ -265,6 +268,8 @@ refuses elf/refuse-unterm.wat     'cannot read at elf/probe/reader-unterminated-
         "refused elf/probe/reader-unterminated-string.wat, naming the string, not the list: 6:23"
 refuses elf/refuse-unterm-top.wat 'cannot read at elf/probe/reader-unterminated-string-top.wat 6 1: unterminated string literal -- the string opened here is never closed' \
         "refused elf/probe/reader-unterminated-string-top.wat, at the top level: 6:1"
+refuses elf/refuse-poke.wat 'poke of a pointer' \
+        "refused a poke of a String, naming the form"
 
 # **the compiler must agree with itself at every boundary** (excursus 002 stone 1). The compiler,
 # asked, says the type it gave every argument of every call to a user function and every

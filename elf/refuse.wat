@@ -1562,6 +1562,19 @@
           (:c::ty-node (:wat::core::nth ks (:wat::core::+ m 1)) pg
                        (:wat::core::- depth 1)))))))
 
+;; a bitmask of which record fields are pointers. More than 64 fields has no encoding
+;; here: the runtime walks one register.
+(:wat::core::defn :c::ptr-mask [tys <- (:wat::core::Vector :- [:wat::core::String])
+                                i <- :wat::core::i64 acc <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length tys)) acc
+    (:wat::core::if (:wat::core::>= i 64)
+      (:wat::kernel::assertion-failed!
+        :message "compile: a record with more than 64 fields has no pointer mask")
+      (:c::ptr-mask tys (:wat::core::+ i 1)
+        (:wat::core::if (:c::ptr-ty? (:wat::core::nth tys i))
+          (:wat::i64::bit-or acc (:wat::i64::bit-shift-left 1 i))
+          acc)))))
+
 ;; the element type of a vector type, and the declared type of a record's field
 (:wat::core::defn :c::elem-ty [t <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::string::starts-with? t "vec:")
@@ -2509,9 +2522,16 @@
           ((:c::poke? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "poke arity" a pg)
               (:wat::core::let
-                [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
-                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax) "488908") 8))))
+                [addr-ty (:c::type-of (:wat::core::nth ks 1) env pg)
+                 val-ty (:c::type-of (:wat::core::nth ks 2) env pg)]
+                (:wat::core::if (:wat::core::not= addr-ty "i64")
+                  (:c::fail "poke of a non-i64 address" a pg)
+                  (:wat::core::if (:wat::core::not= val-ty "i64")
+                    (:c::fail "poke of a pointer" a pg)
+                    (:wat::core::let
+                      [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
+                       o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
+                      (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax) "488908") 8)))))))
           ;; wait4(-1, &status, 0, NULL) -- reap any one child and answer its raw STATUS, which is
           ;; more useful than the pid: `(rem (quot st 256) 256)` is the exit code. Sixteen bytes
           ;; of scratch are taken off rsp for the status word and given straight back.
@@ -2641,8 +2661,14 @@
                  ;; allowed to try extending it in place instead of copying
                  own? (:wat::core::and (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))
                         (:c::linear? pg (:c::text pg (:wat::core::nth ks 1)) 0))]
-                (:c::call (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
-                  (:wat::core::if own? (:c::at-vconj-own rt) (:c::at-vconj rt))))))
+                (:wat::core::let
+                  [vt (:c::type-of (:wat::core::nth ks 1) env pg)
+                   ptr (:wat::core::if (:wat::string::starts-with? vt "vec:")
+                         (:wat::core::if (:c::ptr-ty? (:c::elem-ty vt)) 1 0) 0)]
+                  (:c::call
+                    (:c::emit (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
+                      (:c::mov-ri (:c::r10) ptr))
+                    (:wat::core::if own? (:c::at-vconj-own rt) (:c::at-vconj rt)))))))
           ((:c::assoc? head) (:c::assoc-form ks a o env pg rt tb slot))
           ;; a record constructor, and a record field read -- the two forms `defrecord` makes
           ((:wat::core::>= (:c::rec-index (:c::Prog/recs pg) head 0) 0)
@@ -4198,14 +4224,19 @@
             ;; the field index is FIXED-WIDTH either way, but unlike a literal's address it
             ;; cannot change between the measuring pass and the emitting pass -- it comes from
             ;; the program text -- so it does not need the ten-byte `movabs` an address does
-            (:c::call
-              (:wat::core::if rm?
-                (:c::emit o2 (:wat::string::concat "4889c2"
-                  (:c::mov-rr (:c::reg-of (:wat::core::nth ks 1) env pg) (:c::rax))
-                  (:c::mov-ri (:c::rcx) fi)))
-                (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax)
-                  (:c::mov-ri (:c::rcx) fi)) 8))
-              (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt)))))))
+            (:wat::core::let
+              [mask (:c::ptr-mask
+                      (:c::Rec/ftypes (:wat::core::nth (:c::Prog/recs pg) ri)) 0 0)]
+              (:c::call
+                (:c::emit
+                  (:wat::core::if rm?
+                    (:c::emit o2 (:wat::string::concat "4889c2"
+                      (:c::mov-rr (:c::reg-of (:wat::core::nth ks 1) env pg) (:c::rax))
+                      (:c::mov-ri (:c::rcx) fi)))
+                    (:c::popn o2 (:wat::string::concat "4889c2" (:c::pop-rax)
+                      (:c::mov-ri (:c::rcx) fi)) 8))
+                  (:c::movabs (:c::r11) mask))
+                (:wat::core::if own? (:c::at-slot-own rt) (:c::at-slot rt))))))))
       ;; **wat's own `assoc` refuses a Vector** -- "expected (HashMap :- [K V]),
       ;; (PersistentMap :- [K V]), or :wat::core::Record" -- which is F-104 in the language
       ;; itself. The machine code for it is already here and costs nothing extra: `slot_set`

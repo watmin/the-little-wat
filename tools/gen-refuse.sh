@@ -51,6 +51,8 @@ gen elf/refuse-mismatch.wat elf/probe/reader-mismatched-closer.wat \
 gen elf/refuse-unterm.wat    elf/probe/reader-unterminated-string.wat \
     'A string the file ends inside, inside a list. The end of input was read as the string'"'"'s end,
 ;; and the refusal blamed the unclosed `(`; it must name where the STRING opened.'
+gen elf/refuse-poke.wat elf/probe/poke-string.wat \
+    'poke of a String. A pointer must not cross into raw memory; the compiler names the form.'
 gen elf/refuse-unterm-top.wat elf/probe/reader-unterminated-string-top.wat \
     'A string the file ends inside, at the top level. It used to read as a complete string; it
 ;; must be refused, naming where it opened.'

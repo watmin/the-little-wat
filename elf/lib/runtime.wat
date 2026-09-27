@@ -552,6 +552,65 @@
       (:c::mov-rr (:c::r10) (:c::rax))
       (:c::ret))))
 
+;; **a copied pointer slot is one more reference.** `rax` holds a word. A null, a unit tag, or
+;; any integer below a page is not a pointer. A block whose header is 0 is a literal in the
+;; read-only tail: counting it would write there. Anything else is a heap object, and the copy
+;; just made a second reference, so the count goes up. The caller has already decided that
+;; these slots ARE pointers; an `i64` slot never reaches here.
+(:wat::core::defn :c::inc-if-ptr [] -> :wat::core::String
+  (:wat::core::let
+    [inc (:c::bare-hex)
+     nz (:wat::string::concat "488378f800"
+          (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) inc) inc)
+     big (:wat::string::concat "483d00100000"
+          (:c::br-over (:c::jcc-rel8 (:c::cc-below)) nz) nz)]
+    (:wat::string::concat
+      (:c::test-rr (:c::rax) (:c::rax))
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) big)
+      big)))
+
+;; walk `rcx` slots at `rsi`, skipping index `rdx` (`-1` skips none). `rbx` is preserved.
+(:wat::core::defn :c::count-span [] -> :wat::core::String
+  (:wat::core::let
+    [bump (:c::inc-if-ptr)
+     one (:wat::string::concat
+           (:c::rm "8b" (:c::rax) (:c::rsi) (:c::rbx) (:c::word) 0)
+           bump)
+     work (:wat::string::concat
+            (:c::cmp-rr (:c::rdx) (:c::rbx))
+            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) one)
+            one
+            (:c::inc-r (:c::rbx)))
+     guard (:wat::string::concat
+             (:c::cmp-rr (:c::rcx) (:c::rbx))
+             (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-below)))
+               (:wat::core::+ (:c::hexlen work) (:c::rel8-size))))
+     body (:wat::string::concat guard work)]
+    (:wat::string::concat
+      (:c::reg-push (:c::rbx))
+      (:c::xor-rr (:c::rbx) (:c::rbx))
+      body
+      (:c::jmp-back body)
+      (:c::reg-pop (:c::rbx)))))
+
+;; `rdi` is one past the last copied slot, `r8` is how many were copied, `rbx` is nonzero
+;; when those slots are pointers. The new element the caller stores AFTER this is not in
+;; the range: it was counted at the conj site, or it is a fresh word.
+(:wat::core::defn :c::count-copied [] -> :wat::core::String
+  (:wat::core::let
+    [span (:wat::string::concat
+            (:c::mov-rr (:c::rdi) (:c::rsi))
+            (:c::mov-rr (:c::r8) (:c::rax))
+            (:c::shl-ri (:c::rax) 3)
+            (:c::sub-rr (:c::rax) (:c::rsi))
+            (:c::mov-rr (:c::r8) (:c::rcx))
+            (:c::mov-ri (:c::rdx) -1)
+            (:c::count-span))]
+    (:wat::string::concat
+      (:c::test-rr (:c::rbx) (:c::rbx))
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) span)
+      span)))
+
 ;; `vec_conj_own(rax = vec, rcx = value) -> rax` -- `conj` where the compiler has PROVED the
 ;; container is a last use (F-127), so the copy may sometimes be skipped entirely.
 ;;
@@ -614,6 +673,9 @@
             (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
             (:c::movabs (:c::rdx) (:c::arm-own))
             (:c::mov-mr (:c::rdx) (:c::r15) w)
+            ;; r10 is still the caller's flag; the next lea spends the register
+            (:c::reg-push (:c::rbx))
+            (:c::mov-rr (:c::r10) (:c::rbx))
             (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
             (:c::lea-at (:c::r8) 1 (:c::rdx))
             (:c::mov-mr (:c::rdx) (:c::r10) 0)
@@ -621,6 +683,8 @@
             (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
             (:c::mov-rr (:c::r8) (:c::rcx))
             (:c::rep-movsq)
+            (:c::count-copied)
+            (:c::reg-pop (:c::rbx))
             (:c::mov-mr (:c::r9) (:c::rdi) 0)
             (:c::mov-rr (:c::r11) (:c::r15))
             (:c::mov-rr (:c::r10) (:c::rax))
@@ -703,16 +767,39 @@
 ;; hardware runs**: rcx quadwords from (rsi) to (rdi), which is the entire body of the copy.
 (:wat::core::defn :c::rt-node-copy [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
-    [pre (:wat::string::concat (:c::reg-push (:c::rbx)) (:c::mov-rr (:c::rax) (:c::rbx)))
-     at-call (:wat::core::+ (:c::at-ncopy lay) (:c::hexlen pre))]
+    ;; rdx is tree_push's shift, live across this call: count-span spends it as the
+    ;; skip index. r11 is the caller's "these slots are pointers" flag, and node_new
+    ;; spends r11 on the bump. Three pushes keep the call aligned. The flag sits at
+    ;; [rsp+8] and the shift at [rsp+16] once rbx is on top.
+    [pre (:wat::string::concat
+           (:c::reg-push (:c::rdx))
+           (:c::reg-push (:c::r11))
+           (:c::reg-push (:c::rbx))
+           (:c::mov-rr (:c::rax) (:c::rbx)))
+     at-call (:wat::core::+ (:c::at-ncopy lay) (:c::hexlen pre))
+     span (:wat::string::concat
+            (:c::lea-at (:c::rax) (:c::node-data) (:c::rsi))
+            (:c::mov-ri (:c::rcx) (:c::node-arity))
+            (:c::mov-ri (:c::rdx) -1)
+            (:c::reg-push (:c::rax))
+            (:c::count-span)
+            (:c::reg-pop (:c::rax))
+            ;; count-span spent rdx; the shift is still on the stack
+            (:c::mov-rm (:c::rsp) 16 (:c::rdx)))]
     (:wat::string::concat
       pre
       (:c::rt-call (:c::at-nnew lay) (:wat::core::+ at-call (:c::call-size)))
+      (:c::mov-rm (:c::rsp) 8 (:c::r11))
       (:c::lea-at (:c::rax) (:c::node-data) (:c::rdi))
       (:c::lea-at (:c::rbx) (:c::node-data) (:c::rsi))
       (:c::mov-ri (:c::rcx) (:c::node-arity))
       (:c::rep-movsq)
+      (:c::test-rr (:c::r11) (:c::r11))
+      (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) span)
+      span
       (:c::reg-pop (:c::rbx))
+      (:c::reg-pop (:c::r11))
+      (:c::reg-pop (:c::rdx))
       (:c::ret))))
 
 ;; `tree_get(rax = vec, rcx = index) -> rax`. A Vector is a 32-way trie: `shift` says how many
@@ -766,7 +853,12 @@
   (:wat::core::let
     [bits 5
      mask (:wat::core::- (:c::node-arity) 1)
+     one (:c::mov-ri (:c::r11) 1)
      pre (:wat::string::concat
+           ;; r10 is the caller's "elements are pointers" flag. Keep it in rbp, and
+           ;; hand it back in r10 so a loop of pushes still sees it.
+           (:c::reg-push (:c::rbp))
+           (:c::mov-rr (:c::r10) (:c::rbp))
            (:c::reg-push (:c::rbx)) (:c::reg-push (:c::r12)) (:c::reg-push (:c::r13))
            (:c::mov-rr (:c::rcx) (:c::r12))
            (:c::mov-rm (:c::rax) 0 (:c::r13))
@@ -780,13 +872,24 @@
      a-grow (:wat::core::+ (:c::at-tpush lay)
               (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
      ;; the trie is full: a new root, with the old one beneath it
+     ;; the old root is now a child of the new one: that is one more reference
      grow (:wat::string::concat
             (:c::rt-call (:c::at-nnew lay) (:wat::core::+ a-grow (:c::call-size)))
             (:c::mov-mr (:c::r9) (:c::rax) (:c::node-data))
+            (:c::reg-push (:c::rax))
+            (:c::mov-rr (:c::r9) (:c::rax))
+            (:c::inc-if-ptr)
+            (:c::reg-pop (:c::rax))
             (:c::mov-rr (:c::rax) (:c::r9))
             (:c::add-ri (:c::rdx) bits))
      a-mid (:wat::core::+ a-grow (:c::hexlen grow))
-     mid-head (:wat::string::concat (:c::reg-push (:c::rdx)) (:c::mov-rr (:c::r9) (:c::rax)))
+     mid-head (:wat::string::concat
+                (:c::reg-push (:c::rdx)) (:c::mov-rr (:c::r9) (:c::rax))
+                ;; a shift of 0 means this root is a leaf: its slots are elements
+                (:c::xor-rr (:c::r11) (:c::r11))
+                (:c::test-rr (:c::rdx) (:c::rdx))
+                (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) one)
+                one)
      mid (:wat::string::concat
            mid-head
            (:c::rt-call (:c::at-ncopy lay)
@@ -806,11 +909,22 @@
             (:c::rm "8b" (:c::rax) (:c::rbx) (:c::r9) (:c::word) (:c::node-data))
             (:c::test-rr (:c::rax) (:c::rax)))
      a-copy (:wat::core::+ a-body (:wat::core::+ (:c::hexlen slot) (:c::rel8-size)))
-     a-new (:wat::core::+ a-copy (:wat::core::+ (:c::call-size) (:c::rel8-size)))
+     ;; shift == 5 means the child is a leaf. r11 tells node_copy whether to count.
+     kid (:wat::string::concat
+           (:c::xor-rr (:c::r11) (:c::r11))
+           (:c::cmp-ri (:c::rdx) bits)
+           (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) one)
+           one)
+     a-new (:wat::core::+ a-copy
+             (:wat::core::+ (:c::hexlen kid)
+               (:wat::core::+ (:c::call-size) (:c::rel8-size))))
      child (:wat::string::concat
              (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
-               (:wat::core::+ (:c::call-size) (:c::rel8-size)))
-             (:c::rt-call (:c::at-ncopy lay) (:wat::core::+ a-copy (:c::call-size)))
+               (:wat::core::+ (:c::hexlen kid)
+                 (:wat::core::+ (:c::call-size) (:c::rel8-size))))
+             kid
+             (:c::rt-call (:c::at-ncopy lay)
+               (:wat::core::+ a-copy (:wat::core::+ (:c::hexlen kid) (:c::call-size))))
              ;; skip the "make one" call; a call is a call-size, not a string to measure
              (:c::br-len "eb" (:c::call-size))
              (:c::rt-call (:c::at-nnew lay) (:wat::core::+ a-new (:c::call-size))))
@@ -827,7 +941,20 @@
                (:wat::core::+ (:c::hexlen body) (:c::rel8-size)))
              body)
      loop (:wat::string::concat inner (:c::jmp-back inner))
+     leaf-n (:wat::core::let
+              [span (:wat::string::concat
+                      (:c::lea-at (:c::rbx) (:c::node-data) (:c::rsi))
+                      (:c::mov-ri (:c::rcx) (:c::node-arity))
+                      (:c::mov-rr (:c::rax) (:c::rdx))
+                      (:c::count-span))]
+              (:wat::string::concat
+                (:c::test-rr (:c::rbp) (:c::rbp))
+                (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) span)
+                span))
      leaf (:wat::string::concat
+            (:c::mov-rr (:c::r13) (:c::rax))
+            (:c::and-ri (:c::rax) mask)
+            leaf-n
             (:c::mov-rr (:c::r13) (:c::rax))
             (:c::and-ri (:c::rax) mask)
             (:c::rm "89" (:c::r12) (:c::rbx) (:c::rax) (:c::word) (:c::node-data))
@@ -849,7 +976,9 @@
       (:c::mov-mr (:c::rdx) (:c::rax) (:c::vec-shift))
       (:c::mov-mr (:c::r8) (:c::rax) (:c::vec-root))
       (:c::mov-rr (:c::r11) (:c::r15))
+      (:c::mov-rr (:c::rbp) (:c::r10))
       (:c::reg-pop (:c::r13)) (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::rbx))
+      (:c::reg-pop (:c::rbp))
       (:c::ret))))
 
 ;; `tree_from_arr(rax = flat array) -> rax` -- promote a flat Vector to the 32-way trie, by
@@ -858,6 +987,11 @@
 (:wat::core::defn :c::rt-tree-from-arr [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
+           ;; the caller's element-kind flag (r10) has to survive node_new and the bump,
+           ;; which clobber it, and the five pushes keep the call aligned. The pad is
+           ;; the extra one: three callee-saves plus r10 is an even count.
+           (:c::reg-push (:c::rax))
+           (:c::reg-push (:c::r10))
            (:c::reg-push (:c::rbx)) (:c::reg-push 1) (:c::reg-push 2)
            (:c::mov-rr (:c::rax) (:c::rbx))
            (:c::mov-rm (:c::rbx) 0 2)
@@ -877,9 +1011,15 @@
              (:c::mov-mi (:c::rax) (:c::vec-shift) 0)
              (:c::mov-mr (:c::r9) (:c::rax) (:c::vec-root))
              (:c::mov-rr (:c::r11) (:c::r15)))
-     exit (:wat::string::concat (:c::reg-pop 2) (:c::reg-pop 1) (:c::reg-pop (:c::rbx)) (:c::ret))
-     ;; one element: fetch it and push it
-     step0 (:c::rm "8b" (:c::rcx) (:c::rbx) 1 (:c::word) (:c::vec-data))
+     ;; the pad comes off into r11, not rax: rax is the tree this function returns
+     exit (:wat::string::concat
+            (:c::reg-pop 2) (:c::reg-pop 1) (:c::reg-pop (:c::rbx))
+            (:c::reg-pop (:c::r10)) (:c::reg-pop (:c::r11)) (:c::ret))
+     ;; one element: fetch it, and put the saved flag back in r10. After the three
+     ;; callee-saves the flag sits at [rsp+24]; the pad is at [rsp+32].
+     step0 (:wat::string::concat
+             (:c::rm "8b" (:c::rcx) (:c::rbx) 1 (:c::word) (:c::vec-data))
+             (:c::mov-rm (:c::rsp) 24 (:c::r10)))
 ]
     (:wat::core::let
       [bump (:c::rt-bump (:wat::core::+ at-nn (:c::hexlen mk)) lay
@@ -927,7 +1067,10 @@
                               (:wat::core::+ at-jmp (:c::call-size)))))
      size (:c::lea (:c::no-reg) (:c::r8) (:c::word)
             (:wat::core::+ (:c::varr-hdr) (:c::word)) (:c::rdx))
-     pre (:wat::string::concat (:c::mov-rr (:c::rcx) (:c::r10)) size)
+     pre (:wat::string::concat
+           (:c::reg-push (:c::rbx))
+           (:c::mov-rr (:c::r10) (:c::rbx))
+           (:c::mov-rr (:c::rcx) (:c::r10)) size)
      at-bump (:wat::core::+ at-promote
                (:wat::core::+ (:c::hexlen spill) (:c::hexlen pre)))]
     (:wat::string::concat
@@ -944,10 +1087,43 @@
       (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
       (:c::mov-rr (:c::r8) (:c::rcx))
       (:c::rep-movsq)
+      (:c::count-copied)
       (:c::mov-mr (:c::r10) (:c::rdi) 0)
       (:c::mov-rr (:c::r11) (:c::r15))
       (:c::mov-rr (:c::r9) (:c::rax))
+      (:c::reg-pop (:c::rbx))
       (:c::ret))))
+
+;; `rsi` slots, `r8` of them, skip index `r10`, bitmask of pointer slots in `r12`.
+(:wat::core::defn :c::count-masked [] -> :wat::core::String
+  (:wat::core::let
+    [bump (:c::inc-if-ptr)
+     hit (:wat::string::concat
+           (:c::rm "8b" (:c::rax) (:c::rsi) (:c::rbx) (:c::word) 0)
+           bump)
+     bit (:wat::string::concat
+           (:c::mov-rr (:c::rbx) (:c::rcx))
+           (:c::mov-ri (:c::rax) 1)
+           (:c::shl-cl (:c::rax))
+           (:c::test-rr (:c::rax) (:c::r12))
+           (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) hit)
+           hit)
+     work (:wat::string::concat
+            (:c::cmp-rr (:c::r10) (:c::rbx))
+            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) bit)
+            bit
+            (:c::inc-r (:c::rbx)))
+     guard (:wat::string::concat
+             (:c::cmp-rr (:c::r8) (:c::rbx))
+             (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-below)))
+               (:wat::core::+ (:c::hexlen work) (:c::rel8-size))))
+     body (:wat::string::concat guard work)]
+    (:wat::string::concat
+      (:c::reg-push (:c::rbx))
+      (:c::xor-rr (:c::rbx) (:c::rbx))
+      body
+      (:c::jmp-back body)
+      (:c::reg-pop (:c::rbx)))))
 
 ;; `slot_set(rax = vector, rcx = index, rdx = value) -> rax` -- a copy of the whole array with
 ;; one slot changed, which is what an immutable `assoc` on a leaf costs. The allocation is
@@ -957,6 +1133,9 @@
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::reg-push (:c::rbx))
+           (:c::reg-push (:c::r12))
+           ;; r11 is the caller's bitmask of pointer fields; the bump spends r11
+           (:c::mov-rr (:c::r11) (:c::r12))
            (:c::mov-rm (:c::rax) 0 (:c::r8))
            (:c::mov-rr (:c::rcx) (:c::r10))
            (:c::mov-rr (:c::rdx) (:c::rbx)))
@@ -973,10 +1152,21 @@
       (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
       (:c::mov-rr (:c::r8) (:c::rcx))
       (:c::rep-movsq)
+      (:wat::core::let [span (:wat::string::concat
+                               (:c::mov-rr (:c::rdi) (:c::rsi))
+                               (:c::mov-rr (:c::r8) (:c::rax))
+                               (:c::shl-ri (:c::rax) 3)
+                               (:c::sub-rr (:c::rax) (:c::rsi))
+                               (:c::count-masked))]
+        (:wat::string::concat
+          (:c::test-rr (:c::r12) (:c::r12))
+          (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) span)
+          span))
       (:c::mov-rr (:c::r11) (:c::r15))
       (:c::mov-rr (:c::r9) (:c::rax))
       ;; the one slot that differs
       (:c::rm "89" (:c::rbx) (:c::rax) (:c::r10) (:c::word) (:c::vec-data))
+      (:c::reg-pop (:c::r12))
       (:c::reg-pop (:c::rbx))
       (:c::ret))))
 

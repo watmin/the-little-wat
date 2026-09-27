@@ -54,3 +54,18 @@ isolates it). Say where the 292 million are, and whether any of it is a defect r
 `rt-slot-set-own` because a record passed on arrives with count ≥ 2 (`:c::share` increments it) and
 `linear` names parameters only. Stone 3's settled ownership rule MOVES a last-use argument (no
 increment), which would put that `assoc` on the in-place path.
+
+---
+
+**Credited, 2026-09-27, on the orchestrator's own runs:** `tools/elf-run.sh` exit 0 (103 binaries; `reads.sh`
+and `copies.sh` ok inside it; `rules: 0` in 12,398 pairs, `types: 0` in 20,946 nodes, over 143 programs);
+`tools/bootstrap.sh` byte-identical at **304,181 bytes**; emission adopted.
+
+**The cost, recorded as a cost with its parts** (the strike's attribution, round 3): +10.22% instructions for
+the COMPILER compiling itself = +36.9 M (its bigger source computing flags and masks) + ~134 M in string
+equality / `concat` (emitting and computing the new loads -- compile-time work a user program never does)
++ ~91 M in the rewritten `tree_push` / `node_copy` (runtime, on trie paths) + 11.3 M the increments
+themselves; every round agrees to ~1,000 instructions -- a cost, not a defect. A program that copies no
+pointer slot is byte-identical. **Recovery paths, measured against stone 1's numbers when they land:**
+stone 3's moves (a last-use argument moves uncounted, so `:c::emit`'s `assoc` on `:c::Out` can take
+`rt-slot-set-own`); caching the per-site mask computation.
