@@ -116,4 +116,5 @@ construction, and a `fn` cannot capture itself (a `let` binds after its initiali
 
 **Synchronous, iterative** — on the reading that *"no gc that pauses anything"* rules out a collector
 stopping the world at moments the program cannot predict, not a program freeing inline what it just
-released. Awaiting the builder's confirmation of that reading.
+released. **CONFIRMED by the builder, 2026-09-26:** *"i do not want GC pauses like java or go - it
+should be very close to what rust feels like"*.
