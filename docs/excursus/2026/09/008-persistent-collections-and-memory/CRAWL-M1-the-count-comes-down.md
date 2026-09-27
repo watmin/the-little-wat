@@ -118,3 +118,17 @@ construction, and a `fn` cannot capture itself (a `let` binds after its initiali
 stopping the world at moments the program cannot predict, not a program freeing inline what it just
 released. **CONFIRMED by the builder, 2026-09-26:** *"i do not want GC pauses like java or go - it
 should be very close to what rust feels like"*.
+
+## The stones M1 becomes (drawn 2026-09-26)
+
+- **Stone 2 — every reference is counted** (BRIEF on disk): `poke` typed; the five runtime routines that
+  duplicate pointer slots count them; `tools/copies.sh` gates every bulk copy as `reads.sh` gates reads.
+- **Stone 3 — the drop.** The compiler inserts a decrement where each reference dies, by the settled
+  ownership rule (question 2): a `let` binding at its last use; an owned parameter at its last use unless
+  moved on (a call argument, a return); a temporary right after it is consumed; and a synchronous,
+  ITERATIVE drop at zero that decrements what the dead object holds (question 4). Until M2, a zero
+  reclaims only what the bump can take back (the youngest allocation); the counts become TRUE, which is
+  measurable on its own: in-place growth returns whenever a count comes back to 1. Its BRIEF is drawn
+  after stone 2 lands, on a disconfirming probe: that `:c::live-after`'s name-keyed liveness plus the
+  ownership rule places every drop — the anonymous-temporary case (001's DESIGN) is the known gap to probe.
+- Then M2 (reuse), M4 (pages back), the region release retired, C2/C3 on the counted trie.

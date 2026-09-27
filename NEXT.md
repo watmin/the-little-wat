@@ -17,17 +17,18 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 008 stone 2 (M1: the count that comes down), the orchestrator crawls it
+### NEXT STRIKE — excursus 008 stone 2 (every reference is counted), with Grok
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** CLOSURES ARE DONE (excursus 003). Excursus 008, MEMORY FIRST: stone 1 LANDED (M3 -- the
-heap reserves what the kernel grants up to RAM + swap, lazily; the 1.9 GB ceiling is gone; M5 ruled:
-the program owns an out-of-memory). Nothing is in flight. Next is the orchestrator's: crawl M1 (a count
-that comes DOWN and an inline drop at zero; fold in or retire 001's caller-side release, M6). The
-items: `008-persistent-collections-and-memory/SCOPE.md`.
+**On waking:** CLOSURES ARE DONE (003). Excursus 008, MEMORY FIRST: stone 1 landed (the heap grows to
+demand). M1 is SETTLED (`CRAWL-M1-the-count-comes-down.md`: one discipline, the count; arguments owned;
+`poke` typed; no cycles; drops synchronous + iterative -- "very close to what rust feels like").
+Stone 2 (every reference counted: `poke` typed, five copying routines count, `tools/copies.sh`) is with
+Grok. Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it on your own runs.
+Then stone 3 (the drop) -- its disconfirming probe first.
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
