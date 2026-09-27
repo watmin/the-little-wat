@@ -981,7 +981,9 @@
       (:c::ret))))
 
 ;; `oom()` -- every allocator compares `r15 + need` against the limit at `r14+8` and calls this
-;; when it would cross. There is no second chance: the heap is one mmap and it does not grow.
+;; when it would cross. The reservation is the machine's RAM plus swap, taken once at startup,
+;; and it does not grow past that. Running out is the program's responsibility: the stop names
+;; it and exits 70.
 (:wat::core::defn :c::rt-oom [lay <- :c::Layout] -> :wat::core::String
   (:c::rt-abort "wat: heap exhausted" lay (:c::at-oom lay)))
 
@@ -1679,6 +1681,8 @@
 (:wat::core::defn :c::sys-open [] -> :wat::core::i64 2)
 (:wat::core::defn :c::sys-close [] -> :wat::core::i64 3)
 (:wat::core::defn :c::sys-exit [] -> :wat::core::i64 60)
+(:wat::core::defn :c::sys-mmap [] -> :wat::core::i64 9)
+(:wat::core::defn :c::sys-sysinfo [] -> :wat::core::i64 99)
 ;; **the open flags, added rather than written.** 0x241 is three bits and saying so is the whole
 ;; difference between a number and a decision.
 (:wat::core::defn :c::o-wronly [] -> :wat::core::i64 1)

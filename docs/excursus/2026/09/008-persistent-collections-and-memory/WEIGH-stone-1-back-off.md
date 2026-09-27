@@ -26,3 +26,12 @@ is refused. Say the floor and why. Fixed-width as before; the stub's length stay
 **Rows to show:** `ulimit -v 4000000` then a corpus program — runs, exit 0; `ulimit -v` below the floor
 — `wat: reservation refused`, exit 70; `live2g` unlimited — still finishes; and the rest as before
 (elf-run in full, bootstrap, the stub delta the same in every binary).
+
+---
+
+**Credited, 2026-09-26, on the orchestrator's own runs (after an unexpected reboot interrupted the
+first attempt):** `tools/elf-run.sh` exit 0 (99 binaries; `rules: 0` in 12,163 pairs, `types: 0` in 20,566
+nodes, over 139 programs); `tools/bootstrap.sh` byte-identical at **296,907 bytes**; `elf/bench/live2g.wat`
+agrees natively past the old ceiling (`2147483648`); under `ulimit -v 4000000`, `1000000` and `100000`
+a corpus program runs, under `4096` it prints `wat: reservation refused`, exit 70; `reads: ok`; 87
+binaries moved by the stub, adopted into the manifest.

@@ -41,6 +41,8 @@ ALLOW=(
   '"480fb6440808"|1|`code-point-at`: a byte, i64'
   '(:c::load-at 8)|1|`match` tier 3: slot 0 is the TAG, i64'
   '(:c::mov-rm r d r)|1|`scalar-bytes`: the prologue of a scalarised record parameter. The register IS the field, and every use of it is an accessor, counted by read-out'"'"'s :Reg arm'
+  '(:c::mov-rm (:c::rsp)|1|the entry stub: totalram from the sysinfo struct on the stack, not a container'
+  '(:c::mov-rm32 (:c::rsp)|1|the entry stub: mem_unit, a u32 in that same stack struct'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do

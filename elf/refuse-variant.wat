@@ -133,8 +133,10 @@
 ;;
 ;; A String value is one machine word, like everything else: the address of `[len:8][bytes...]`.
 ;; Literals live in the read-only data tail. Anything `concat` builds lives in the region the
-;; entry stub `mmap`s -- `:c::heap-bytes`, 1.9 GB of lazily-committed anonymous memory --
-;; bump-allocated through **r15**, which is reserved for the program's whole life.
+;; entry stub reserves. It asks `sysinfo` for RAM plus swap and maps that, lazily, so a program
+;; consumes the pages it touches. If the kernel refuses, the stub asks again for half, down to
+;; an 8 MiB floor. There is no fixed ceiling. The 8192-byte output buffer is the front of
+;; whatever mapping was granted, and the bump is **r15**, reserved for the program's whole life.
 ;;
 ;; **This sentence used to read "no free, no collector, no bounds check", and two thirds of that
 ;; was false** (F-187). There IS a free: a sequence's non-final forms have their allocations
@@ -6712,29 +6714,54 @@
               :faddrs (:wat::core::Vector :- [:wat::core::i64])
               :caps (:wat::core::Vector :- [:c::Cap])))
 
-;; the entry stub, and the only code not compiled from a defn: one mmap for both the output
-;; buffer and the heap, then main, then a flush, then exit(0). 106 bytes.
+;; the entry stub, and the only code not compiled from a defn. It asks `sysinfo` for the
+;; machine's RAM plus swap and reserves the largest prefix of that the kernel grants, then
+;; calls main, flushes, and exits 0.
 ;;
 ;; **r14 and r15 are the whole memory model.** r15 is the heap bump pointer and r14 is the base
-;; of a block laid out `[used:8][heap_limit:8][4096 bytes]`; both are callee-saved in the System
+;; of a block laid out `[used:8][heap_limit:8][buffer...]`. Both are callee-saved in the System
 ;; V ABI, and nothing here ever calls anything this compiler did not emit, so two reserved
 ;; registers are the entire runtime state. `used` needs no initialising because MAP_ANONYMOUS
 ;; memory arrives zero-filled.
 ;;
-;; There is no free and no collector, but there IS a bounds check: the limit sits at `[r14+8]`
-;; and every allocator tests against it before it writes, so a program that wants more than the
-;; heap gets `wat: heap exhausted` on stderr and exit 70 rather than a segmentation fault.
+;; The limit at `[r14+8]` is a 64-bit address: base plus the reservation, added in registers.
+;; A `lea` cannot carry that distance -- its displacement is 32 bits, which is what capped the
+;; old heap under 2 GiB. Every allocator tests against the limit before it writes, so a program
+;; that wants more than the machine gets `wat: heap exhausted` on stderr and exit 70. That stop
+;; is the program's responsibility. The reservation itself does not grow.
 ;;
 ;; **The flush at the end is not optional.** Buffering means the last `println` of a program is
 ;; still in memory when main returns, so the stub writes it before exit(0) -- and every other
 ;; way out of the program has to do the same, which is why `exit`, `fork` and `clone` all flush
 ;; first. That is the same rule C has, and the same bug C programs have when they forget it.
-;; A gibibyte, and it costs nothing to ask for: MAP_ANONYMOUS is lazy, so pages are committed only
-;; when they are first touched. A megabyte was enough while the only thing that
-;; allocated was string concatenation, and 64 MiB until the compiler compiled itself -- which
-;; touches more than that, because nothing is reclaimed except at statement boundaries (C-125).
-(:wat::core::defn :c::heap-bytes [] -> :wat::core::i64 1900000000)
+;;
+;; **`:c::heap-bytes` is gone.** A fixed ceiling is not the machine. The first request is
+;; `(totalram + totalswap) * mem_unit` from `sysinfo` (Linux x86-64: the fields sit at 32, 64
+;; and 104 in a 112-byte struct; the frame below is 128 so `rsp` stays aligned and the refusal
+;; message fits in it). A `mem_unit` of 0 is read as 1, a floor on the unit. A refused `mmap`
+;; is asked again for half, and then for the floor when the next half would be smaller than
+;; the floor. `:c::heap-floor` is 8 MiB: above the 8192-byte buffer, so a granted floor is a
+;; heap the bump can use, and small enough that a multi-gigabyte address-space limit still
+;; grants a much larger step on the way down. The named stop fires only when that floor itself
+;; is refused. Asking for RAM+swap+8192 was measured and refused on this kernel, so the buffer
+;; stays the front of whatever was granted (`r15` = base+8192, `[r14+8]` = base+the size that
+;; succeeded). Pages commit only when touched.
+;;
+;; A refused `sysinfo`, or a floor the kernel will not grant, is `wat: reservation refused`
+;; on stderr and exit 70, before `r14` is set, because `oom()` writes through the buffer that
+;; does not exist yet. `mmap`'s error range is `[-4095, -1]`; `cmp` against -4096 and `jb`
+;; takes the success path without trusting the pointer.
 (:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
+(:wat::core::defn :c::si-totalram [] -> :wat::core::i64 32)
+(:wat::core::defn :c::si-totalswap [] -> :wat::core::i64 64)
+(:wat::core::defn :c::si-unit [] -> :wat::core::i64 104)
+(:wat::core::defn :c::si-frame [] -> :wat::core::i64 128)
+(:wat::core::defn :c::map-rw [] -> :wat::core::i64 3)
+(:wat::core::defn :c::map-anon [] -> :wat::core::i64 34)
+(:wat::core::defn :c::mmap-bad [] -> :wat::core::i64 -4096)
+;; the smallest reservation we will accept. 8 MiB covers the output buffer and a heap a
+;; trivial program can run in. Anything smaller is `wat: reservation refused`.
+(:wat::core::defn :c::heap-floor [] -> :wat::core::i64 8388608)
 
 ;; measured, not asserted: every form in the stub is fixed-width, so its length does not depend
 ;; on the addresses it is given. This was written in by hand as 117.
@@ -6748,29 +6775,137 @@
 ;; up): the compiled compiler drifted 509 -> 690 ms over three more conversions before this was
 ;; noticed. One layout, built once, threaded.
 (:wat::core::defn :c::stub-len [lay0 <- :c::Layout] -> :wat::core::i64
-  (:c::hexlen (:c::stub 0 lay0)))
+  (:wat::core::let [z (:c::hexlen (:c::stub 0 lay0))
+                    a (:c::hexlen (:c::stub (:asm::base) lay0))]
+    ;; STOP-1: both passes, and a real entry address, must emit the same number of bytes.
+    (:wat::core::do (:wat::test::assert-eq z a) z)))
+
+;; `wat: reservation refused` and exit 70. The sysinfo frame is already on the stack.
+(:wat::core::defn :c::stub-stop [] -> :wat::core::String
+  (:wat::core::let [msg "wat: reservation refused"
+                    n (:wat::core::+ (:wat::string::byte-length msg) 1)]
+    (:wat::string::concat
+      (:c::abort-chunks n msg 0 "")
+      (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+      (:c::mov-rr (:c::rsp) (:c::rsi))
+      (:c::mov-ri (:c::rdx) n)
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::syscall)
+      (:c::mov-ri (:c::rdi) (:c::exit-fail))
+      (:c::mov-ri (:c::rax) (:c::sys-exit))
+      (:c::syscall))))
+
+;; `mem_unit` is a u32. Zero means the kernel left it unset; treat that as 1.
+(:wat::core::defn :c::stub-unit [] -> :wat::core::String
+  (:wat::core::let [one (:c::mov-ri (:c::rcx) 1)]
+    (:wat::string::concat
+      (:c::mov-rm32 (:c::rsp) (:c::si-unit) (:c::rcx))
+      (:c::test-rr (:c::rcx) (:c::rcx))
+      ;; `:c::br-over` is only the jump; the instruction it skips follows it.
+      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) one)
+      one)))
+
+;; through `test rax, rax`, before the `js` that every failure shares.
+(:wat::core::defn :c::stub-ask [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::sub-rsp (:c::si-frame))
+    (:c::mov-ri (:c::rax) (:c::sys-sysinfo))
+    (:c::mov-rr (:c::rsp) (:c::rdi))
+    (:c::syscall)
+    (:c::test-rr (:c::rax) (:c::rax))))
+
+;; totalram+totalswap, times the unit, once. The retry loop does not recompute it.
+(:wat::core::defn :c::stub-size [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rm (:c::rsp) (:c::si-totalram) (:c::rax))
+    (:c::add-rm (:c::rsp) (:c::si-totalswap) (:c::rax))
+    (:c::stub-unit)
+    (:c::imul-rr (:c::rcx) (:c::rax))
+    (:c::mov-rr (:c::rax) (:c::r12))))
+
+;; one attempt: mmap the length in r12, then compare against the error range.
+(:wat::core::defn :c::stub-try [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-ri (:c::rax) (:c::sys-mmap))
+    (:c::xor-rr (:c::rdi) (:c::rdi))
+    (:c::mov-rr (:c::r12) (:c::rsi))
+    (:c::mov-ri (:c::rdx) (:c::map-rw))
+    (:c::mov-ri (:c::r10) (:c::map-anon))
+    (:c::mov-ri (:c::r8) -1)
+    (:c::mov-ri (:c::r9) 0)
+    (:c::syscall)
+    (:c::cmp-ri (:c::rax) (:c::mmap-bad))))
+
+;; r14 = base, r15 = base+buffer, [r14+8] = base+reservation, then the frame comes back off.
+(:wat::core::defn :c::stub-arm [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rr (:c::rax) (:c::r14))
+    (:c::lea-at (:c::rax) (:c::buf-bytes) (:c::r15))
+    (:c::mov-rr (:c::rax) (:c::rcx))
+    (:c::add-rr (:c::r12) (:c::rcx))
+    (:c::mov-mr (:c::rcx) (:c::r14) (:c::hdr-limit))
+    (:c::add-rsp (:c::si-frame))))
+
+(:wat::core::defn :c::stub-exit0 [] -> :wat::core::String
+  (:wat::string::concat (:c::mov-ri (:c::rax) (:c::sys-exit))
+                        (:c::xor-rr (:c::rdi) (:c::rdi))
+                        (:c::syscall)))
 
 (:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
-    [o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
+    [stop (:c::stub-stop)
+     arm (:c::stub-arm)
+     exit0 (:c::stub-exit0)
+     ask (:c::stub-ask)
+     size (:c::stub-size)
+     try (:c::stub-try)
+     pre (:c::cmp-ri (:c::r12) (:c::heap-floor))
+     mid (:wat::string::concat (:c::shr-1 (:c::r12))
+                               (:c::cmp-ri (:c::r12) (:c::heap-floor)))
+     one (:c::mov-ri (:c::r12) (:c::heap-floor))
+     jlen (:c::rel32-size)
+     jplen (:c::call-size)
+     ;; `call main` and `call flush` sit between arm and exit0
+     tail (:wat::core::+ (:c::hexlen arm)
+            (:wat::core::+ (:wat::core::* jplen 2) (:c::hexlen exit0)))
+     ;; refused, and this attempt was already the floor: stop
+     to-stop (:wat::core::+ (:c::hexlen mid)
+               (:wat::core::+ jlen
+                 (:wat::core::+ (:c::hexlen one) (:wat::core::+ jplen tail))))
+     jbe (:wat::string::concat (:c::jcc-rel32 (:c::cc-below-eq)) (:asm::le to-stop 4))
+     ;; success skips the backoff and lands on arm
+     back-len (:wat::core::+ (:c::hexlen pre)
+                (:wat::core::+ jlen
+                  (:wat::core::+ (:c::hexlen mid)
+                    (:wat::core::+ jlen (:wat::core::+ (:c::hexlen one) jplen)))))
+     jb (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le back-len 4))
+     ;; both retries land on the mmap attempt
+     back-jae (:wat::core::- 0
+                (:wat::core::+ (:c::hexlen try)
+                  (:wat::core::+ jlen
+                    (:wat::core::+ (:c::hexlen pre)
+                      (:wat::core::+ jlen (:wat::core::+ (:c::hexlen mid) jlen))))))
+     ;; `jb` sits between the attempt and the backoff, so the long jump counts it too
+     back-jmp (:wat::core::- 0
+                (:wat::core::+ (:c::hexlen try)
+                  (:wat::core::+ jlen back-len)))
+     jae (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below)))
+                               (:asm::le back-jae 4))
+     jmp (:c::jmp-rel32 back-jmp)
+     back (:wat::string::concat pre jbe mid jae one jmp)
+     far (:wat::core::+ (:c::hexlen size)
+           (:wat::core::+ (:c::hexlen try)
+             (:wat::core::+ (:c::hexlen jb) (:wat::core::+ (:c::hexlen back) tail))))
+     js (:wat::string::concat (:c::jcc-rel32 (:c::cc-sign)) (:asm::le far 4))
+     o (:c::Out :base (:asm::entry) :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0
                 :fpr false :shared (:wat::core::Vector :- [:wat::core::String])
                 :fnames (:wat::core::Vector :- [:wat::core::String])
                 :faddrs (:wat::core::Vector :- [:wat::core::i64])
                 :caps (:wat::core::Vector :- [:c::Cap]))
-     o1 (:c::emit o (:wat::string::concat
-          (:wat::string::concat (:c::mov-rax 9) (:c::mov-rdi 0)
-            (:c::mov-rsi (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes))))
-          (:wat::string::concat (:c::mov-rdx 3) (:c::mov-r10 34))
-          (:wat::string::concat (:c::mov-r8 -1) (:c::mov-r9 0))
-          (:wat::string::concat "0f05" "4989c6")            ;; syscall ; mov r14, rax
-          (:wat::string::concat "4c8db8" (:asm::le (:c::buf-bytes) 4))     ;; lea r15,[rax+8192]
-          ;; and the end of the heap, where every allocator checks before it writes
-          (:wat::string::concat "488d88"                                   ;; lea rcx,[rax+total]
-            (:asm::le (:wat::core::+ (:c::heap-bytes) (:c::buf-bytes)) 4))
-          "49894e08"))                                       ;; mov [r14+8], rcx
+     o1 (:c::emit o (:wat::string::concat ask js size try jb back arm))
      o2 (:c::call o1 main-addr)
      o3 (:c::call o2 (:c::at-flush rt))]
-    (:c::buf-str (:c::Out/code (:c::emit o3 (:wat::string::concat (:c::mov-rax 60) "31ff" "0f05"))))))
+    (:c::buf-str (:c::Out/code (:c::emit o3 (:wat::string::concat exit0 stop))))))
 
 ;; place every function end to end after the stub
 (:wat::core::defn :c::place [pg <- :c::Prog lens <- (:wat::core::Vector :- [:wat::core::i64])

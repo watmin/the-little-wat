@@ -498,6 +498,12 @@
 (:wat::core::defn :c::mov-rm [base <- :wat::core::i64 disp <- :wat::core::i64
                               dst <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "8b" dst base disp))
+;; the 32-bit load, which zero-extends into the register. `:c::mov-rm` is 64 bits and would
+;; also read whatever sits in the next four bytes; a `u32` field wants this one.
+(:wat::core::defn :c::mov-rm32 [base <- :wat::core::i64 disp <- :wat::core::i64
+                                dst <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::rex-n dst base) "8b"
+                        (:c::mrm (:c::rcode dst) base (:c::no-reg) 1 disp)))
 (:wat::core::defn :c::mov-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "89" src base disp))
@@ -522,6 +528,10 @@
 (:wat::core::defn :c::add-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "01" src base disp))
+;; `add disp(BASE), DST` -- opcode 03, the pair of `:c::add-mr`. The memory operand is the source.
+(:wat::core::defn :c::add-rm [base <- :wat::core::i64 disp <- :wat::core::i64
+                              dst <- :wat::core::i64] -> :wat::core::String
+  (:c::rm-at "03" dst base disp))
 (:wat::core::defn :c::cmp-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "39" src base disp))
