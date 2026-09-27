@@ -132,3 +132,32 @@ should be very close to what rust feels like"*.
   after stone 2 lands, on a disconfirming probe: that `:c::live-after`'s name-keyed liveness plus the
   ownership rule places every drop — the anonymous-temporary case (001's DESIGN) is the known gap to probe.
 - Then M2 (reuse), M4 (pages back), the region release retired, C2/C3 on the counted trie.
+
+## The disconfirming probe for stone 3 — can every drop be placed? (2026-09-27)
+
+**Yes — from what the compiler already knows, with one property carried and one convention added.**
+
+The built-ins split in two (`elf/compile.wat`'s recognised heads): CONSUMING — `conj`, `assoc`, `concat`,
+the Vector / record / variant constructors, `fn` (stores captures) — and READING — `length`, `nth`, the
+comparisons, `contains?`, `starts-with?`, `byte-*`, `code-point-at`, `subs`, `println`, `assert-eq`, the
+`match` scrutinee.
+
+| where a reference dies | where its drop goes | machinery |
+|---|---|---|
+| a temporary operand of a READING built-in | right after the read — a temporary's lifetime IS its consumer | syntax only: 001's "live-after is name-keyed" gap does not arise |
+| a temporary argument to a USER function | moved in; the callee drops it at its own last use | question 2 (owned) |
+| a statement's discarded value | right after the statement | syntax |
+| a named binding / parameter | after its last use | `:c::live-after` |
+| a name dead in one `if` arm | at that arm's start | `live-after`'s arm rule ("from inside an arm, the other one never does") |
+| a parameter not passed on at a self tail call | before the jump | `:c::pass-at` / the pass-through analysis |
+| a `match` scrutinee | at arm entry, after its parts are counted out | `:c::read-out` |
+
+**The property carried:** `live-after` is name-keyed and counts textual occurrences THROUGH shadowing, and
+reads `cond` / `match` clauses as a sequence — it can OVER-count liveness, never under-count. For drops
+that means some are placed LATER than Rust would (memory held a little longer), never EARLY (a
+use-after-free). Safe by direction; the brief says so, and a probe of a shadowed name shows the lateness.
+
+**The convention added:** a CONSUMING built-in takes ownership of the operand it consumes. Today the
+copying paths of `vec_conj`, `slot_set`, `str_cat` leave the source's count untouched; under the settled
+rule a copying `conj` consumed one reference to the old container and must drop it after copying. A
+runtime row in stone 3.
