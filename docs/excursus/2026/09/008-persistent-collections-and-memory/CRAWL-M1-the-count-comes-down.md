@@ -87,3 +87,33 @@ not — it sizes cost in today's corpus, it does not choose a convention. By the
 **Own.** It is what the compiler half-does already: indirect calls share every argument (the caller
 keeping its copy), and a `linear` parameter is owned. M1 makes it uniform and adds the callee's drop.
 A census belongs to the elision work later — which drops to prove away first — measured stone by stone.
+
+## Scored — question 7 (`poke`) and C4 (cycles), 2026-09-26
+
+`peek`/`poke` are the COMPILER's intrinsics, not wat's (`elf/compile.wat:45-55`), used only by
+`elf/native/thread*.wat` to share integers between `clone`d threads over `mmap`'d memory. `poke`
+compiles its value argument with NO type check (`:2502`): it can write a counted object's POINTER into
+raw memory, uncounted, and `peek` answers an `i64`, so a heap address can be read back as a number and
+poked at.
+
+| | Obvious | Simple | Honest | Good UX |
+|---|---|---|---|---|
+| leave it untyped | YES | YES | **NO** — counts and memory safety bypassable through it | — |
+| remove `peek`/`poke` | YES | YES | YES | **NO** — the native thread programs need shared words |
+| **type it: address `i64`, value `i64`; a pointer-typed value refused at compile time** | YES | YES | YES — no wat value ever crosses raw memory, so no heap address is obtainable | YES — every use writes integers |
+
+**Type it.** C4 follows: with `poke` typed, one counted object reaches another only by immutable
+construction, and a `fn` cannot capture itself (a `let` binds after its initialiser; recursion is a
+`defn`) — **no cycle can form.** Reasoning, not measurement: a probe when M1 is built.
+
+## Scored — question 4 (the drop cascade), 2026-09-26 — the builder to confirm the reading
+
+| | Obvious | Simple | Honest | Good UX |
+|---|---|---|---|---|
+| deferred (a queue drained a bounded amount per allocation) | **NO** — freed later than the code says | **NO** — queue, policy, allocator interaction | — | — |
+| synchronous, recursive (Rust's `Drop`) | YES | YES | YES | **NO** — a 100,000-node `Cons` chain recurses 100,000 deep |
+| **synchronous, ITERATIVE** — freed where the value dies, children walked with a worklist | YES | YES | YES — the cost lands on the statement that released it | YES — no stack limit; the program's own forward progress |
+
+**Synchronous, iterative** — on the reading that *"no gc that pauses anything"* rules out a collector
+stopping the world at moments the program cannot predict, not a program freeing inline what it just
+released. Awaiting the builder's confirmation of that reading.
