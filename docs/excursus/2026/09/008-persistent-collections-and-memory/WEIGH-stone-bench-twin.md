@@ -27,3 +27,15 @@ update `BENCH-baseline.md` and the SCORE's prose (its W1/W2 paragraph compares a
 path). W4 and W5 stand. Apply the same test to the other opponents and say so: does each one's W1–W3 do
 what its language's idiom does for one owner (Clojure: plain `conj`; note transients as the idiomatic
 fast path, measured or not, labelled)?
+
+---
+
+**Credited, 2026-09-27, on the orchestrator's own runs:** `tools/verify.sh` ok (gates zero over 143
+programs); spot-checks at 10^6, `taskset -c 0`, `cpu_core/instructions/u`, answers `499999500000`:
+compiled wat W1 63.0 M, W4 1.4916 B; Rust one-owner W1 932.35 M, Rust W4 9.2584 B — the SCORE's figures.
+
+**How to read the one-owner rows:** a uniquely owned Vector grown by `vec_conj_own` stays a FLAT array
+doubled in place (path 2) and never becomes a trie, so on W1–W3 compiled wat behaves like Rust's `Vec`
+while `rpds` stays a trie even when owned — the 12–15x is representation, and the imperative C loop
+(10.5 M on W1) is the fairer floor there. W4, where versions are shared, is the trie-to-trie comparison:
+6.2x in wat's favour at similar memory. The baseline for stone 3 is this table.

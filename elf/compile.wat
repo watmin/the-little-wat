@@ -53,6 +53,7 @@
 ;;   (wat.os/mmap N)                                     anonymous read+write memory
 ;;   (wat.os/clone SP)                                   a child sharing the address space
 ;;   (wat.os/peek A) (wat.os/poke A V)                   eight bytes at an address
+;;   (wat.os/clock-ns)                                   CLOCK_MONOTONIC, nanoseconds, an i64
 ;;
 ;; Both spellings of every name are accepted -- `wat.core/+` and `:wat::core::+` -- because the
 ;; reader keeps whichever the source used and this repository writes one while the migration
@@ -459,6 +460,8 @@
   (:c::is? s "wat.os/clone" ":wat::os::clone"))
 (:wat::core::defn :c::peek? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.os/peek" ":wat::os::peek"))
+(:wat::core::defn :c::clock? [s <- :wat::core::String] -> :wat::core::bool
+  (:c::is? s "wat.os/clock-ns" ":wat::os::clock-ns"))
 (:wat::core::defn :c::poke? [s <- :wat::core::String] -> :wat::core::bool
   (:c::is? s "wat.os/poke" ":wat::os::poke"))
 
@@ -1714,6 +1717,7 @@
         ((:c::bit-not? head) "i64")
         ((:wat::core::or (:c::len? head) (:c::strlen? head)) "i64")
         ((:wat::core::>= (:c::syscall-nr head) 0) "i64")
+        ((:c::clock? head) "i64")
         ((:wat::core::or (:c::mmap? head) (:c::clone? head)) "i64")
         ((:wat::core::or (:c::peek? head) (:c::wait? head)) "i64")
         ;; `elf/lib/prim.wat` declares it `-> :wat::core::i64`
@@ -2466,6 +2470,13 @@
                 "48f7d0")))                                             ;; not rax
           ((:c::do? head) (:c::seq ks 1 o env pg rt tb slot tc))
           ;; a no-argument syscall: the number goes in rax, the result comes back in rax
+          ;; clock_gettime(CLOCK_MONOTONIC, &ts) -> seconds*10^9 + nanoseconds.
+          ;; 228 is the syscall. The 16-byte timespec sits on the stack; syscall
+          ;; clobbers rcx, so both fields are read after it returns.
+          ((:c::clock? head)
+            (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1)
+              (:c::fail "clock-ns arity" a pg)
+              (:c::emit o "4883ec10bf010000004889e6b8e40000000f05488b0424488b4c24084869c000ca9a3b4801c84883c410")))
           ((:wat::core::>= (:c::syscall-nr head) 0)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 1) (:c::fail "syscall arity" a pg)
               ;; fork duplicates the address space, buffer included -- so anything still pending
@@ -7335,7 +7346,8 @@
       (:wat::core::or
         (:wat::core::or (:c::is? s "wat.os/fork" ":wat::os::fork") (:c::is? s "wat.os/wait" ":wat::os::wait"))
         (:wat::core::or (:c::is? s "wat.os/clone" ":wat::os::clone") (:c::is? s "wat.os/getpid" ":wat::os::getpid")))
-      (:c::is? s "wat.os/getppid" ":wat::os::getppid"))))
+      (:wat::core::or (:c::is? s "wat.os/getppid" ":wat::os::getppid")
+                      (:c::is? s "wat.os/clock-ns" ":wat::os::clock-ns")))))
 
 ;; a bool can be printed, so anything that makes one reaches print_bool
 (:wat::core::defn :c::lvl-bool? [s <- :wat::core::String] -> :wat::core::bool
