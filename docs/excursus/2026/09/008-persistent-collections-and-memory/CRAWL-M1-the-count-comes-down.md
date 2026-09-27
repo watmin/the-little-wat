@@ -51,3 +51,24 @@ versions says 1.
    fast path, or retired against M1 (M6).
 7. **Cycles** (C4): with immutable values and capture-by-copy, can a cycle form? `poke` can write any
    address — the one door to rule on.
+
+## SETTLED — question 5: one reclamation discipline, the count (2026-09-26)
+
+The builder: *"settle it"*. By the four questions:
+
+| | Obvious | Simple | Honest | Good UX |
+|---|---|---|---|---|
+| A. regions only (the statement release + 001's caller-side release) | YES | YES | **NO** — cannot free what escapes a statement, incl. every old version a persistent collection leaves | — |
+| B. counts + regions as a fast path, free lists never holding memory above the innermost mark | **NO** — correctness hangs on an address-vs-mark rule a reader cannot see | **NO** — two disciplines braided by a cross-rule | **NO** — a rewind skips the decrements of outer objects the region referenced: their counts stay high, they never free, the count lies | — |
+| **C. the count, alone** — freed at zero, by a drop the compiler inserts where the last reference dies (Rust's drop / `Arc`, inferred); the bump pointer stays as the allocator's fast path | YES | YES | YES — every free is justified by a count | YES — nothing to annotate; no pause once the cascade is bounded (question 4) |
+
+**C.** Consequences, recorded so they cannot be lost:
+- **The region release retires — LAST, not first.** It is the only reclamation today and the compiler
+  compiling itself leans on it; it stays until M1's drops cover what it covers, measured by
+  `tools/mem.sh` equal or better, and then it is removed. Removing it early blows memory; keeping it
+  after is B's lie.
+- **M6 answered: excursus 001 stone 1 retires** with the region release — it is the same idea one level
+  up. Branch `excursus-001-stone-1` stays as history.
+- **Cost is measured, never assumed**: per-object drops cost more than an 8-byte rewind. Where the
+  compiler PROVES a value uniquely owned, it drops without a runtime count test (Rust's static drop) —
+  the elision path, measured stone by stone.

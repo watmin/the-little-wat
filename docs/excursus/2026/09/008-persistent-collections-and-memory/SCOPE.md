@@ -41,7 +41,7 @@ just make sure we've got these itemized on disk so we durably don't forget"*.
 | **M3** | **DONE — stone 1**: the heap reserves what the kernel grants, up to RAM + swap, lazily; the stub's `mmap` is checked | -- | the fixed 1.9 GB ceiling is gone |
 | **M4** | **shrink**: hand whole free pages back to the OS (`madvise`) | M2 | |
 | **M5** | ~~exhaustion is a matchable error~~ — RULED 2026-09-26: the program owns an out-of-memory; exhaustion is the machine's limit, a NAMED stop (no failure value in the language) | -- | *"they own responsibility if they oom - we just consume the least amount necessary"* |
-| **M6** | excursus 001 stone 1 (caller-side release) folded in or retired against M1 | M1 | branch `excursus-001-stone-1` needs a rebase and a real gate |
+| **M6** | ~~fold in or retire 001 stone 1~~ -- SETTLED: RETIRES, with the region release, once M1's drops cover what they cover (`CRAWL-M1-...md`, question 5) | M1 | one reclamation discipline: the count |
 | **C1** | ~~the compiled Vector becomes persistent~~ -- ALREADY IS (array ≤ 8, then a path-copying 32-way trie). What remains: its shared trie NODES reclaimed under M1, and the representation shown unobservable | M1 | corrected 2026-09-26 |
 | **C2** | a compiled **map** on the same machinery (array, then HAMT) | C1 | a map `get` is a counted read: `tools/reads.sh` already demands it be classified |
 | **C3** | a compiled **set** -- the trie without values | C2 | |
