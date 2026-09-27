@@ -24,8 +24,11 @@ just make sure we've got these itemized on disk so we durably don't forget"*.
   totality ruling forbids.
 - The count only ever RISES: `:c::share`'s prose, "It never comes down: this is not reclamation, it is
   a 'has this ever been shared?' flag".
-- The compiled Vector is flat `[count][slot]...`, extended in place when the count is 1, else copied.
-  There is no compiled map or set at all.
+- **CORRECTED 2026-09-26 (the M1 crawl):** the compiled Vector is ALREADY persistent in wat-rs's `PVec`
+  shape -- a flat array up to `:c::arr-max` (8, the same threshold as `PVec`), then a 32-way trie with
+  PATH COPYING (`elf/lib/runtime.wat` `tree_push`, `tree_from_arr`, `tree_get`). This file said "flat";
+  that was written without grepping the runtime. What the trie lacks is reclamation: nodes are shared
+  between versions and nothing counts them down. There is no compiled map or set.
 - Freeing today is only C-120's statement-boundary release (mark / restore `r15`). Excursus 001 stone 1
   (caller-side release) is HELD on branch `excursus-001-stone-1`.
 
@@ -39,7 +42,7 @@ just make sure we've got these itemized on disk so we durably don't forget"*.
 | **M4** | **shrink**: hand whole free pages back to the OS (`madvise`) | M2 | |
 | **M5** | ~~exhaustion is a matchable error~~ — RULED 2026-09-26: the program owns an out-of-memory; exhaustion is the machine's limit, a NAMED stop (no failure value in the language) | -- | *"they own responsibility if they oom - we just consume the least amount necessary"* |
 | **M6** | excursus 001 stone 1 (caller-side release) folded in or retired against M1 | M1 | branch `excursus-001-stone-1` needs a rebase and a real gate |
-| **C1** | the compiled **Vector** becomes persistent (array, then trie) | -- | the corpus's Vector probes and F-188's doors are the regression floor |
+| **C1** | ~~the compiled Vector becomes persistent~~ -- ALREADY IS (array ≤ 8, then a path-copying 32-way trie). What remains: its shared trie NODES reclaimed under M1, and the representation shown unobservable | M1 | corrected 2026-09-26 |
 | **C2** | a compiled **map** on the same machinery (array, then HAMT) | C1 | a map `get` is a counted read: `tools/reads.sh` already demands it be classified |
 | **C3** | a compiled **set** -- the trie without values | C2 | |
 | **C4** | cycles: show that wat's immutable data cannot form one under counting, or say where it can | M1 | stated as unverified since 2026-09-23 |
