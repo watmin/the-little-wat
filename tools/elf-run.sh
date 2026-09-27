@@ -23,9 +23,23 @@ tools/reads.sh || exit 1
 # every bulk copy is counted or is a named byte copy (excursus 008 stone 2)
 tools/copies.sh || exit 1
 
-# SKIP_BUILD=1 uses whatever is already in elf/out/ instead of rebuilding it through the
-# interpreter. tools/bootstrap.sh --fast sets it, because it has just built everything with a
-# compiled compiler and rebuilding the same bytes at 150x the cost proves nothing.
+# SKIP_BUILD=1 checks the binaries already in elf/out/ instead of rebuilding them through the
+# interpreter -- the same computation bootstrap.sh's stage 0 just did. tools/verify.sh is the way to
+# use it: bootstrap (no --fast), then this. **It refuses stale binaries**: a successful bootstrap
+# writes a stamp of every build input (tools/sums.sh), and this run proceeds only if the tree still
+# matches it. Without SKIP_BUILD this run rebuilds elf/out/ itself, so it removes the stamp first.
+. tools/sums.sh
+if [ -n "${SKIP_BUILD:-}" ]; then
+  have=$(cat "$STAMP" 2>/dev/null); want=$(buildsum)
+  if [ "$have" != "$want" ]; then
+    echo "elf-run: REFUSED -- SKIP_BUILD=1 but elf/out/ is not the verified build of this tree"
+    echo "         (${have:-no stamp} vs $want). Run tools/verify.sh."
+    exit 1
+  fi
+  echo "elf-run: SKIP_BUILD=1 on the bootstrap-verified build ($want)"
+else
+  rm -f "$STAMP"
+fi
 echo "== hand-written: elf/hello.wat =="
 if [ -z "${SKIP_BUILD:-}" ]; then "$WAT" elf/hello.wat || exit 1; fi
 chmod +x elf/out/hello.elf elf/out/exit42.elf

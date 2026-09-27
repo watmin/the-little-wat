@@ -17,18 +17,24 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 008 stone 2 (every reference is counted), with Grok
+### NEXT STRIKE — excursus 008: the bench stone (collections and memory vs Rust `rpds`), then stone 3 (the drop)
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
 conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
 
-**On waking:** CLOSURES ARE DONE (003). Excursus 008, MEMORY FIRST: stone 1 landed (the heap grows to
-demand). M1 is SETTLED (`CRAWL-M1-the-count-comes-down.md`: one discipline, the count; arguments owned;
-`poke` typed; no cycles; drops synchronous + iterative -- "very close to what rust feels like").
-Stone 2 (every reference counted: `poke` typed, five copying routines count, `tools/copies.sh`) is with
-Grok. Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it on your own runs.
-Then stone 3 (the drop) -- its disconfirming probe first.
+**On waking:** CLOSURES ARE DONE (003). Excursus 008, MEMORY FIRST: stone 1 (the heap grows to demand)
+and stone 2 (every reference is counted; +10.22% compiler instructions, attributed, recovery paths
+recorded) LANDED. M1 is SETTLED (`CRAWL-M1-the-count-comes-down.md`). NEXT, the builder's order: draw a
+BENCH stone -- collection/memory workloads (conj build, assoc-in-a-loop, persistent updates keeping old
+versions, strings) against Rust `rpds` (the semantic twin), C malloc/free and C never-free, the wat-rs
+interpreter, and Clojure for GC-pause tails; instructions, cycles (per-workload floor), peak RSS, and
+per-op latency tails -- a baseline BEFORE stone 3 (the drop), whose recovery of stone 2's cost is measured
+against it.
+
+**VERIFY WITH `tools/verify.sh`** (2026-09-27): a full bootstrap, then `SKIP_BUILD=1 tools/elf-run.sh`
+on the binaries it proved -- ONE interpreted compile instead of two (~16 min, was ~30). A stamp of every
+build input (`tools/sums.sh`) makes `SKIP_BUILD` refuse stale binaries. Briefs say "run tools/verify.sh".
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in

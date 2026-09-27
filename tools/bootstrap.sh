@@ -82,8 +82,10 @@ fi
 # C-174 split the compiler into three files, so this hashes ALL of them -- hashing only
 # compile.wat would let an edit to lib/x86.wat or lib/runtime.wat through, which is this very
 # check defeated by the refactor that was supposed to make the file easier to edit.
-sources () { echo elf/compile.wat elf/lib/*.wat; }
-srcsum () { sha256sum $(sources) | sha256sum | cut -c1-16; }
+# the definitions live in tools/sums.sh, shared with elf-run.sh's stale-binary check
+. tools/sums.sh
+# a bootstrap in progress -- or one that fails -- leaves NO stamp: elf/out/ is not verified until the end
+rm -f "$STAMP"
 SRC_SUM=$(srcsum)
 
 # **the negative tests are a DERIVED artifact, so derive them** (F-152). elf/refuse-*.wat are
@@ -139,5 +141,8 @@ else
 fi
 
 echo
+# **the stamp**: only a bootstrap that reached the fixpoint vouches for elf/out/. tools/verify.sh
+# then runs `SKIP_BUILD=1 tools/elf-run.sh`, which refuses unless this matches the tree it checks.
+[ $fail -eq 0 ] && buildsum > "$STAMP"
 [ $fail -eq 0 ] && echo "bootstrap: ok" || echo "bootstrap: FAILED"
 exit $fail
