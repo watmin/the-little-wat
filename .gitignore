@@ -8,3 +8,5 @@ elf/out/stage1.elf
 elf/out/scan.txt
 elf/out/.emitted-manifest
 elf/out/.variant-*.log
+# the bootstrap-verified build stamp (tools/sums.sh) -- local state, never committed
+elf/out/.build-stamp
