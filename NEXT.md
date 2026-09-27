@@ -17,7 +17,7 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
 line below, and read the newest entries before you move.
 
-### NEXT STRIKE — excursus 008 stone 3 (the drop); its disconfirming probe first
+### NEXT STRIKE — excursus 008 stone 3 (the drop), with Grok
 
 **Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
 (F-202), one closure representation for every function value, then the `fn` form by closure
@@ -27,7 +27,8 @@ conversion at the front of the pipeline. Then `002-no-guesses/` for the typer an
 and stone 2 (every reference is counted; +10.22% compiler instructions, attributed, recovery paths
 recorded) LANDED. M1 is SETTLED (`CRAWL-M1-the-count-comes-down.md`). The BENCH stone LANDED
 (`25c1637`, `BENCH-baseline.md`: W4 wat 1.49B vs Rust rpds 9.26B instructions; Clojure's GC tail visible) --
-the baseline. NEXT: stone 3 (the drop), probe first. The bench stone's brief, for reference -- collection/memory workloads (conj build, assoc-in-a-loop, persistent updates keeping old
+the baseline. Stone 3's probe RAN (every drop placeable; liveness late, never early) and stone 3 (the drop: drop glue
+per type, a D5 underflow check build) is with Grok -- weigh it on your own runs against the baseline. The bench stone's brief, for reference -- collection/memory workloads (conj build, assoc-in-a-loop, persistent updates keeping old
 versions, strings) against Rust `rpds` (the semantic twin), C malloc/free and C never-free, the wat-rs
 interpreter, and Clojure for GC-pause tails; instructions, cycles (per-workload floor), peak RSS, and
 per-op latency tails -- a baseline BEFORE stone 3 (the drop), whose recovery of stone 2's cost is measured

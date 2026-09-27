@@ -161,3 +161,12 @@ use-after-free). Safe by direction; the brief says so, and a probe of a shadowed
 copying paths of `vec_conj`, `slot_set`, `str_cat` leave the source's count untouched; under the settled
 rule a copying `conj` consumed one reference to the old container and must drop it after copying. A
 runtime row in stone 3.
+
+## Pinned in stone 3's brief — how a drop at zero knows what the object holds (2026-09-27)
+
+| | Obvious | Simple | Honest | Good UX |
+|---|---|---|---|---|
+| a layout descriptor on every object, one generic drop | YES | YES | YES | **NO** — every object pays for what the compiler already knows |
+| **per-type drop glue** — one routine per type, emitted by the compiler (Rust's drop glue; wat's totality means every type is known) | YES | YES | YES | YES |
+
+**Drop glue**; a self-recursive type walks with an explicit worklist (the builder's synchronous, iterative ruling).
