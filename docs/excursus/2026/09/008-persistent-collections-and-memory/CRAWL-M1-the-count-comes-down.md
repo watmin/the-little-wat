@@ -72,3 +72,18 @@ The builder: *"settle it"*. By the four questions:
 - **Cost is measured, never assumed**: per-object drops cost more than an 8-byte rewind. Where the
   compiler PROVES a value uniquely owned, it drops without a runtime count test (Rust's static drop) —
   the elision path, measured stone by stone.
+
+## SETTLED — question 2: arguments are OWNED — Rust's move (2026-09-26)
+
+The builder asked whether a census of today's parameters would inform the long-term choice; it would
+not — it sizes cost in today's corpus, it does not choose a convention. By the four questions:
+
+| | Obvious | Simple | Honest | Good UX |
+|---|---|---|---|---|
+| borrow by default (the caller keeps ownership, drops after the call) | YES | YES | YES | **NO** — a borrowed parameter can never grow in place (the caller still holds it): the measured in-place wins loops rely on (F-127, C-151) are lost |
+| per parameter (read-only borrows, linear owns), recorded on the `:c::Fn` | YES | **NO** — two conventions and metadata every caller consults, and indirect calls need a third fixed rule | — | — |
+| **own, uniformly** — passing hands the value over; a caller that still needs it increments first; the callee drops it at its own last use | YES — Rust's by-value move | YES — one convention, direct and indirect alike | YES | YES — a loop passing its accumulator to itself MOVES it, so in-place growth remains |
+
+**Own.** It is what the compiler half-does already: indirect calls share every argument (the caller
+keeping its copy), and a `linear` parameter is owned. M1 makes it uniform and adds the callee's drop.
+A census belongs to the elision work later — which drops to prove away first — measured stone by stone.
