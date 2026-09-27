@@ -30,3 +30,27 @@ unseen. So:
    path (`slot-own`, as `conj` has `vec_conj_own`) — say what it would take; change nothing.
 
 Append a section to the SCORE; the tree stays as it is.
+
+---
+
+# Round 2 — the split says the increments are not the cost (2026-09-27)
+
+Measured by the strike: the five routines' increments together account for **11,253,471** instructions —
+**3.7%** of the +303,213,642. `perf record` lands on string equality and `concat`, not the counting walks.
+**About 292 million instructions (96% of the rise) are unattributed.** An unexplained 10% can hide a
+defect — this strike's first run exposed three — so it cannot be accepted as "the price of counts".
+
+**The orchestrator's unmeasured suspicion:** the PLUMBING added to every call, not the counting — every
+conj site loading the pointer flag into `r10`, every assoc site loading the mask into `r11`,
+`tree_from_arr` saving and reloading `r10` around every push, `node_copy` saving/restoring `rdx`/`r11`,
+and any walk that now visits slots even when its flag is 0.
+
+**Owed:** attribute the other ~292 million — by routine, from `perf record` sample addresses mapped onto
+the runtime layout's entry offsets (`:c::at-*`), comparing the stone-1 and stone-2 compilers on the same
+input; and by call-site plumbing (a compiler with the flag/mask loads but no runtime change, if that
+isolates it). Say where the 292 million are, and whether any of it is a defect rather than a cost.
+
+**Credited as data, and carried to stone 3:** `:c::emit`'s `assoc` on `:c::Out` cannot take
+`rt-slot-set-own` because a record passed on arrives with count ≥ 2 (`:c::share` increments it) and
+`linear` names parameters only. Stone 3's settled ownership rule MOVES a last-use argument (no
+increment), which would put that `assoc` on the in-place path.
