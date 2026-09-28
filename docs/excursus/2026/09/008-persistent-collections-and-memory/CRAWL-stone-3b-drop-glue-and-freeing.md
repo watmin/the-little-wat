@@ -41,7 +41,7 @@ at every drop site. It retires.
    root node (trie; the node glue recurses by level — depth ≤ 13 for a 64-bit index, so recursion there is
    bounded); for `rec:R` the pointer fields by the mask, each with its field type's glue; for a payload enum by
    the tag. A type with a free variable (`…;?`, `:c::free-ty?`) cannot name its elements' glue: those
-   elements are NOT dropped (a leak — late, never early). The census of how many drop sites that is comes first.
+   elements are NOT dropped (a leak — late, never early). The census below finds no such drop site today.
 
 2. **A closure's glue cannot come from its type.** Two closures of one `fn:` type capture different things, and
    the object no longer says how many. The glue belongs to the CREATION site (the lifted function, whose `Cap`
