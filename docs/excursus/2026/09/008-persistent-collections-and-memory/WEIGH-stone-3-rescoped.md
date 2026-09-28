@@ -297,3 +297,59 @@ behaviour differs between two runs on the same input is a defect of its own: fin
 
 Then the landing gates on the real tree: `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`, both
 `verify: ok`, zero `ud2`. Append a round-6 section to the SCORE. Commit nothing.
+
+---
+
+# Round 7 — round 6's bisection measured the seed; the root is a name that leaves through an `if` arm uncounted (2026-09-28)
+
+**R15 credited:** the second-run crash was `elf/out/compiler.elf` run in place, writing its own executable;
+`tools/bootstrap.sh` copies it to `stage1.elf` for exactly that reason. Closed.
+
+**R14's result is void, and the fault is in MY brief.** Round 6 wrote that a `--fast` build "is a check-on
+compiler whose drops exist only in that set". It is not: in a `--fast` build the SEED (built from the ungated
+tree) compiles the gated source, so stage 1's own machine code carries every drop, gated or not — the gate
+only changes what stage 1 EMITS. Every step of round 6, and the five one-name steps, measured the same
+all-drops binary. A gated build takes two native hops: the seed compiles the gated source into `s1`
+(all drops, check off — which runs), then `s1` with `WAT_DROP_CHECK=1` compiles it into `s2` (drops only in
+the set, check on); `s2` running is the test. The script is kept here, `probe-3a-twohop-step.sh`.
+
+**On my own runs, sandbox `/tmp/stone3a-orch`:**
+- drops only in `:c::seq`, check on: `s2` compiles itself to a fixpoint. `:c::seq` is the VICTIM.
+- every function, check on: traps. Delta-debugging over subsets did not converge (any 28-function removal
+  from the trapping half passed) — so I watched the object instead.
+- a hardware watchpoint on the trapping object's count word (gdb, ASLR off), with the region release
+  switched off so no memory is reused: allocated at 1 → decremented to 0 in `:c::form` → decremented
+  again in `:c::seq` → `ud2`. No increment in between. Function names from a sandbox trace of `Fn/addr`
+  in `:c::pass`.
+- the drop in `:c::form` is the `if` arm drop at the start of the THEN arm of
+  `(let [fi (:c::fn-of pg head 0)] (if (< fi 0) <indirect call> (:c::call-user ... tc)))`
+  (`elf/compile.wat:2873`): `head` and `tc` are used only by the ELSE arm, so the THEN arm drops them. Correct —
+  IF `:c::form` owns `tc`.
+- it does not: `:c::seq` passes it as `(:wat::core::if last? tc (:c::no-tail))` (`elf/compile.wat:5622`) — an
+  argument that is an `if` form, not a Symbol, so `:c::share` never fires, and `:c::seq` still holds `tc`
+  for its own tail call. The callee drops a reference it was never given.
+
+**The class** is the door F-188 named for reads (`(bump (nth g 3))` — "not a Symbol, so no `:c::share`
+fires"), now for NAMES: a name's value that leaves through the value position of an `if` / `cond` /
+`match` arm, or the tail of a `let` / `do`, reaches an owning consumer without a count. The probe,
+kept here as `probe-3a-ifval.wat` — `(user/take (if c b other))`, then `b` used again — agrees check off and
+traps check on (`tools/probe.sh`).
+
+## R16 — a name's value that leaves an expression is counted where it leaves
+
+One rule, at one place: where a pointer-typed Symbol is compiled as a VALUE that flows on (an argument, a
+stored field, the value of an arm or a body that flows on), it is `:c::share`d — incremented, or moved at
+its last use — exactly as a Symbol argument is today; where it is only READ by a built-in (`nth`, `length`,
+a field read, a comparison), it is not. Say where the rule lives and why no value position can miss it. The
+`if`-valued argument in `:c::seq` is one instance; find the others by the rule, not by search.
+`probe-3a-ifval.wat` becomes `elf/probe/drop-ifval.wat`, plus a `let`-tail and a `match`-arm variant.
+
+## R17 — a check trap must read as a trap
+
+Outside gdb the check-on probe did not die with SIGILL: `tools/probe.sh` reported `CRASH signal=9` (killed
+at its 60 s timeout), and so did round 3's "hangs". Under gdb it is an immediate `ud2`. Find why (a handler
+that returns to the `ud2`?) and make an underflow end the process with a named stop, as stone 1's
+`wat: heap exhausted` does: an `ud2` that spins is not a gate.
+
+Then the landing gates on the real tree: `tools/verify.sh`, and `WAT_DROP_CHECK=1 tools/verify.sh`, both
+`verify: ok`, zero traps. Append a round-7 section to the SCORE. Commit nothing.
