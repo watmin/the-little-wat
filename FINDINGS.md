@@ -15614,3 +15614,21 @@ accept that 4 YES derivation"* -- `to-string`/`from-string` are the WRITTEN form
 only return primitives provided by the core language - user defined items cannot exist to be
 returned"*. A macro declaring a user-defined return type is refused at definition (excursus 006
 stone 1, row R6′), not at expansion.
+
+### F-208: liveness skips a call's HEAD -- harmless while heads were names, a use-after-drop once closures made them values
+
+**Open -- excursus 008 stone 3a.** Found weighing stone 3a's round-2 failure (the compiled compiler dies
+in `asm::fits?` on `0xffff8017499e8e06`). `:c::eval-seq` (`elf/compile.wat`), the order `:c::live-after`
+believes a form's children run in, returns an ordinary call's kids FROM INDEX 1 (`conj-range … ks 1 …`) --
+the head is not in it. While every head was a function NAME that was harmless. Closures (excursus 003) made
+a head a VALUE: in `(f (g f))` liveness never sees the head `f`, so the `f` in the argument is "last" and
+is dropped -- and `:c::call-indirect` evaluates the arguments FIRST and the head SECOND, so the head is
+then called on a dropped closure.
+
+The deeper class, named in `eval-seq`'s own prose: *"the third form of the same mistake (F-169)"* --
+several walks each re-deriving what runs in what order; and *"deliberately CONSERVATIVE ... can only
+decline the optimisation"* -- true while its only consumer was in-place mutation, where over-counting is
+safe. A drop asks the opposite question: an omission there is not "decline", it is "free too early". The
+same walk, reused for a new question, turned from safe to unsafe without a line changing. The fix is one
+definition of evaluation order (every child, the head included, in the order the code generator emits),
+consulted by the generator and every analysis, and each consumer stating its safe direction.

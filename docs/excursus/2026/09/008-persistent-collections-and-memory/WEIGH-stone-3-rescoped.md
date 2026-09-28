@@ -77,3 +77,23 @@ be the last in EVALUATION order** — derive it from the order the code generato
    build, and run `tools/verify.sh` to the fixpoint.
 
 Append a round-2 section to the SCORE. Commit nothing.
+
+---
+
+# Round 2, amended — the root is found in the source (2026-09-27)
+
+**F-208**: `:c::eval-seq` omits a call's HEAD (kids from index 1), and `:c::call-indirect` evaluates the
+arguments before the head — so in `(f (g f))` the argument's `f` is taken as last, dropped, and the head is
+then called on it. This is not a candidate; it is on the page. Fix the CLASS, not the site:
+
+- **R4 — one definition of evaluation order.** A single function answers, for every form, which children
+  run and in what order — the head INCLUDED, and exactly the order the code generator emits (for an
+  indirect call: arguments, then head — or change the generator to head-first; say which and why).
+  `:c::live-after`, the drop placement, and every other walk that asks "what runs after this" consult it;
+  no walk re-derives it.
+- **R5 — each consumer states its safe direction.** "May I mutate in place" is safe when liveness
+  OVER-counts; "may I drop" is fatal when it UNDER-counts. Where a consumer needs the other direction than
+  the walk gives, it says so at the call.
+
+The bisection by class and by function remains the fallback for any failure R4 does not explain. Then
+`tools/verify.sh` to the fixpoint.
