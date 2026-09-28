@@ -97,3 +97,50 @@ then called on it. This is not a candidate; it is on the page. Fix the CLASS, no
 
 The bisection by class and by function remains the fallback for any failure R4 does not explain. Then
 `tools/verify.sh` to the fixpoint.
+
+---
+
+# Round 3 — the stage-1 corruption is gone; the check finds a double drop (2026-09-27)
+
+**Credited:** R4 — `:c::eval-seq` is the generator's order, the head after the arguments for an
+indirect call (`:c::value-head?`), and the reason the generator stays arguments-first is on the page;
+`:c::last-walk` and `:c::live-after` both consult it; `elf/probe/drop-head.wat` is the F-208 shape.
+R5 — `:c::last-use?` is the drop question and says its safe direction (a doubt leaves it false);
+in-place mutation keeps `:c::live-after`. The bisection by class was run and named `copy` → `concat`,
+and the root was found: an untracked `push rax` shifted every rsp-relative local through
+`:c::cat-fold`. The check-off tree reaches the fixpoint at 362,792 bytes and elf-run is clean.
+
+**Not landable.** Expectation 2 is the landing gate: the compiler under `:c::drop-check?` dies on `ud2`
+with a heap pointer whose count is already 0. A heap object starts at 1; zero on the heap means one
+decrement more than the increments. The check-off fixpoint passing is not evidence against it — with
+nothing freed yet, a count of -1 is invisible. In 3b, when zero frees, it is a use-after-free.
+
+## R6 — the double drop, to its root
+
+The site as reported: *"increment one argument, call, then drop a different stack slot"*. That is the
+signature the `concat` fix just showed — a displacement off by a slot — so test that hypothesis first
+against the stack depth at that site; if it is not that, find which of the two references the extra
+decrement belongs to. Fix the root the site shows. Then the check build must be ONE command, not a
+source edit (the BRIEF's D5: an environment switch, off by default), so it can be run as a gate:
+the compiler's own bootstrap under it AND the whole corpus — zero underflows.
+
+## R7 — the rsp rule becomes a gate
+
+`elf/compile.wat:305`: *"Every instruction that moves rsp goes through one of these and nothing else may
+move it."* That is a convention, and it failed. It still fails in two more places the crawl found:
+`:c::drop-saved` (`"59504889c8"`, a raw pop and push) and the `nth` drop at `elf/compile.wat:2605-2609`
+(`"...504889c8"` a raw push, then a raw `"58"`). Both are harmless TODAY only because nothing between
+the push and the pop addresses rsp — the exact condition `concat` broke. Climb the ladder: every
+rsp-moving opcode reaches the output through `:c::push` / `:c::popn` and a gate (in the shape of
+`tools/reads.sh`) fails the build on any other; or the emitter makes a raw one unwritable. Say which
+rung and why.
+
+## R8 — `:c::drop-on?` has a catch-all
+
+`(:else false)` on a string: a misspelled class silently turns its drops OFF, and nothing says so —
+exactly the silent default this compiler refuses everywhere else (no `_`, no catch-all; unknown is
+`:c::fail`). Either the switches leave the tree, or they become a closed set a typo cannot reach.
+Say which.
+
+Then `tools/verify.sh` (check off) and the check build over bootstrap + corpus, both on your own runs.
+Append a round-3 section to the SCORE. Commit nothing.
