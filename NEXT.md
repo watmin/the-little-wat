@@ -7,36 +7,38 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-24, HEAD a0830a6)
+## elf/ — the live queue (2026-09-27, HEAD eb95386)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`21c737d`**. `git diff --stat 21c737d HEAD -- elf/compile.wat
-elf/lib tools` must print NOTHING -- the compiler and its tools are as this map describes. If it prints anything else this map is stale: trust the git log and `FINDINGS.md` over every
-line below, and read the newest entries before you move.
+**Freshness probe:** written against **`eb95386`**. `git log --oneline -1` must show it (or a later
+commit that only adds notes). The working tree CARRIES GROK'S UNCOMMITTED STONE-3a WORK
+(`elf/compile.wat`, `elf/lib/runtime.wat`, `tools/reads.sh`, `elf/refuse*.wat`, `elf/probe/drop-*.wat`) —
+that is the strike in flight, not drift. Do not revert it.
 
-### NEXT STRIKE — excursus 008 stone 3 (the drop), with Grok
+### NEXT STRIKE — excursus 008 stone 3a (drops placed correctly), with Grok
 
-**Read `docs/excursus/2026/09/003-closures/DESIGN.md` first** -- three stones: whole function types
-(F-202), one closure representation for every function value, then the `fn` form by closure
-conversion at the front of the pipeline. Then `002-no-guesses/` for the typer and the gates.
+**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md` (the items,
+the builder's rulings), `CRAWL-M1-the-count-comes-down.md` (everything M1 settled, and stone 3's probe),
+`BENCH-baseline.md`, then `WEIGH-stone-3-rescoped.md` (the live refutation, rounds 1-2 and the amendment).
 
-**On waking:** CLOSURES ARE DONE (003). Excursus 008, MEMORY FIRST: stone 1 (the heap grows to demand)
-and stone 2 (every reference is counted; +10.22% compiler instructions, attributed, recovery paths
-recorded) LANDED. M1 is SETTLED (`CRAWL-M1-the-count-comes-down.md`). The BENCH stone LANDED
-(`25c1637`, `BENCH-baseline.md`: W4 wat 1.49B vs Rust rpds 9.26B instructions; Clojure's GC tail visible) --
-the baseline. Stone 3's probe RAN (every drop placeable; liveness late, never early) and stone 3 (the drop: drop glue
-per type, a D5 underflow check build) is with Grok -- weigh it on your own runs against the baseline. The bench stone's brief, for reference -- collection/memory workloads (conj build, assoc-in-a-loop, persistent updates keeping old
-versions, strings) against Rust `rpds` (the semantic twin), C malloc/free and C never-free, the wat-rs
-interpreter, and Clojure for GC-pause tails; instructions, cycles (per-workload floor), peak RSS, and
-per-op latency tails -- a baseline BEFORE stone 3 (the drop), whose recovery of stone 2's cost is measured
-against it.
+**On waking:** closures DONE (003). Excursus 008, MEMORY FIRST, the builder's rulings: memory "very close
+to what rust feels like", no Java/Go GC pauses; one discipline (the count); arguments OWNED; `poke` typed;
+drops synchronous + iterative; the program owns an out-of-memory. LANDED: stone 1 (the heap grows to
+demand), stone 2 (every reference counted, +10.22% compiler instructions, attributed), the bench baseline
+(W4 wat 1.49B vs Rust rpds 9.26B instructions). IN FLIGHT with Grok: stone 3a — the drops, placed
+correctly — its compiled compiler corrupts itself at stage 1; the root is **F-208** (`:c::eval-seq`
+omits a call's HEAD, and indirect calls evaluate arguments before the head). Grok has R4 (ONE definition
+of evaluation order, head included, as the generator emits it) and R5 (each consumer states its safe
+direction). Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it with
+`tools/verify.sh` on your own runs. Then 3b (drop glue per type + freeing), then the bench against the
+baseline. Grok runs at MEDIUM effort by the builder's choice — same briefs, same weighing.
 
-**VERIFY WITH `tools/verify.sh`** (2026-09-27): a full bootstrap, then `SKIP_BUILD=1 tools/elf-run.sh`
-on the binaries it proved -- ONE interpreted compile instead of two (~16 min, was ~30). A stamp of every
-build input (`tools/sums.sh`) makes `SKIP_BUILD` refuse stale binaries. Briefs say "run tools/verify.sh".
+**VERIFY WITH `tools/verify.sh`**: a full bootstrap, then `SKIP_BUILD=1 tools/elf-run.sh` on the
+binaries it proved — one interpreted compile (~16 min). A stamp of every build input (`tools/sums.sh`)
+makes `SKIP_BUILD` refuse stale binaries. Briefs say "run tools/verify.sh".
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
