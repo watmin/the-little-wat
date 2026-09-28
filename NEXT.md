@@ -7,38 +7,39 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-27, HEAD eb95386)
+## elf/ — the live queue (2026-09-28, HEAD 586907a)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`eb95386`**. `git log --oneline -1` must show it (or a later
-commit that only adds notes). The working tree CARRIES GROK'S UNCOMMITTED STONE-3a WORK
-(`elf/compile.wat`, `elf/lib/runtime.wat`, `tools/reads.sh`, `elf/refuse*.wat`, `elf/probe/drop-*.wat`) —
-that is the strike in flight, not drift. Do not revert it.
+**Freshness probe:** written against **`586907a`** (008 stone 3a landed). `git log --oneline -1` must show it
+(or a later commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
 
-### NEXT STRIKE — excursus 008 stone 3a (drops placed correctly), with Grok
+### NEXT STRIKE — excursus 008 stone 3b (drop glue per type + freeing), CRAWL FIRST
 
-**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md` (the items,
-the builder's rulings), `CRAWL-M1-the-count-comes-down.md` (everything M1 settled, and stone 3's probe),
-`BENCH-baseline.md`, then `WEIGH-stone-3-rescoped.md` (the live refutation, rounds 1-2 and the amendment).
+**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md` (the items, the
+builder's rulings), `CRAWL-M1-the-count-comes-down.md`, `NOTE-stone-3a-landed.md` (what 3a is and the six
+roots it took), `BRIEF-stone-3-the-drop.md` (D1 drop glue with a worklist, D4 freeing to the bump when
+youngest), `BENCH-baseline.md`.
 
-**On waking:** closures DONE (003). Excursus 008, MEMORY FIRST, the builder's rulings: memory "very close
-to what rust feels like", no Java/Go GC pauses; one discipline (the count); arguments OWNED; `poke` typed;
-drops synchronous + iterative; the program owns an out-of-memory. LANDED: stone 1 (the heap grows to
-demand), stone 2 (every reference counted, +10.22% compiler instructions, attributed), the bench baseline
-(W4 wat 1.49B vs Rust rpds 9.26B instructions). IN FLIGHT with Grok: stone 3a — the drops, placed
-correctly — its compiled compiler corrupts itself at stage 1; the root is **F-208** (`:c::eval-seq`
-omits a call's HEAD, and indirect calls evaluate arguments before the head). Grok has R4 (ONE definition
-of evaluation order, head included, as the generator emits it) and R5 (each consumer states its safe
-direction). Read `/home/watmin/Work/holon/.pulsare/to-claude`; on `kind=scored` weigh it with
-`tools/verify.sh` on your own runs. Then 3b (drop glue per type + freeing), then the bench against the
-baseline. Grok runs at MEDIUM effort by the builder's choice — same briefs, same weighing.
+**On waking:** closures DONE (003). Excursus 008, MEMORY FIRST — the builder: memory "very close to what rust
+feels like", no Java/Go GC pauses; one discipline (the count); arguments OWNED; `poke` typed; drops
+synchronous + iterative. LANDED: stone 1 (the heap grows to demand), stone 2 (every reference counted), the
+bench baseline, **stone 3a (every drop placed, one emission, the check build `WAT_DROP_CHECK=1`: the compiler and
+the whole corpus run under it with zero underflows)**. NOTHING IS FREED YET: 3b is drop glue per type and freeing;
+then the bench against the baseline and the compiler's cost against stones 1 and 2. The region release
+(C-120) and 001 stone 1 retire LAST.
+
+**Executors:** Grok is out of credits for some days (builder, 2026-09-27): strike with a Claude Sonnet agent
+(Agent tool, `model: sonnet`, background) — the WEIGH round is its brief; it commits nothing; weigh on your OWN
+runs. **Every gate is `tools/verify.sh` AND `WAT_DROP_CHECK=1 tools/verify.sh`.** To measure an instrumented
+compiler, go two native hops (a `--fast` seed decides stage 1's code) — `probe-3a-twohop-step.sh`; to find who
+takes a count to zero, a gdb hardware watchpoint on its `[p-8]`.
 
 **VERIFY WITH `tools/verify.sh`**: a full bootstrap, then `SKIP_BUILD=1 tools/elf-run.sh` on the
-binaries it proved — one interpreted compile (~16 min). A stamp of every build input (`tools/sums.sh`)
-makes `SKIP_BUILD` refuse stale binaries. Briefs say "run tools/verify.sh".
+binaries it proved — one interpreted compile (~15-25 min; ~30 min for the whole verify). A stamp of every
+build input (`tools/sums.sh`), removed before `elf/out` is touched, makes `SKIP_BUILD` refuse stale binaries. Briefs say "run tools/verify.sh".
 
 **Where it stands (2026-09-24).** The compiler's typer is ONE derivation, total: every guess is a
 compile-time refusal. Two rete gates -- self-agreement and agreement with wat's checker -- run in
