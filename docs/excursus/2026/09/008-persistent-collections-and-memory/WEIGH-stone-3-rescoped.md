@@ -385,3 +385,31 @@ It answers nothing a container holds: it is an abort. NOTREAD, with that reason.
 Then both landing gates on the real tree: `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`, both
 `verify: ok` — the second is the whole corpus under the check, zero underflows. `tools/emitted.sh check`, what
 moved and why. Append a round-8 section to the SCORE. Commit nothing.
+
+---
+
+# Round 9 — one program underflows under the check: `assocn` (2026-09-28)
+
+**Credited, on my own runs:** R18 (`uflow` is NOTREAD, `tools/reads.sh:66-69`) and R19 (`:c::lit-then` beside
+`:c::tag-then`; `:c::dropchk-hex`'s prefix is the guards' own `hexlen`; `:c::rt-level`'s floor is
+`(- (:c::rt-count) 1)` — true while `uflow` is LAST in `:c::rt-nth`; its own index by name would say
+exactly what it means, so do that). **`tools/verify.sh` (check off): `verify: ok`** — fixpoint, 54 agree,
+`rules: 0`, `types: 0` over 153 programs.
+
+**`WAT_DROP_CHECK=1 tools/verify.sh`:** the compiler compiles itself under the check (stage1 == stage2,
+391,736 bytes); elf-run: every program agrees but ONE — `FAIL assocn: interpreter and binary differ`,
+`wat: reference count underflow`. `elf/src/assocn.wat` is 30 lines: `v` passed, while still live, to
+`user/at` (which moves it into `user/assoc-n`, where `v` is read-only: `nth`, `length`, a pass-through);
+`(if (= i k) x (nth v i))` as a `conj` argument; `(nth (user/at v 2 99) 2)` — a temporary read; `v`'s last
+use a read, `(nth v 2)`.
+
+## R20 — `assocn`'s underflow, to its root
+
+Shrink it with `WAT_DROP_CHECK=1 tools/probe.sh` to the smallest shape that stops; find who took the count to
+zero (gdb, ASLR off, a hardware watchpoint on `[p-8]` of the object the stop names — the stop's `rax`); name
+the placement defect and fix the ROOT, as the class, not the program. The shape joins `elf/probe/`.
+
+Then both gates again: `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`, both `verify: ok`, zero
+underflows across the corpus. `tools/emitted.sh check` against the CHECK-OFF build (the check-on build moves
+every program with a drop, by construction), what moved and why. Append a round-9 section to the SCORE.
+Commit nothing.
