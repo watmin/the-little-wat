@@ -1,0 +1,58 @@
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.archlinux.org>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+
+Program received signal SIGILL, Illegal instruction.
+0x00000000004398d7 in ?? ()
+rip            0x4398d7            0x4398d7
+rax            0x7fe8b669b920      140637469522208
+rsp            0x7fffffffbe28      0x7fffffffbe28
+0x7fe8b669b918:	0x0000000000000000	0x0000000000000007
+   0x439873:	push   %r12
+   0x439875:	push   %r13
+   0x439877:	push   %rbp
+   0x439878:	mov    0xe8(%rsp),%rbx
+   0x439880:	mov    0xe0(%rsp),%r12
+   0x439888:	mov    0xd8(%rsp),%r13
+   0x439890:	mov    0xd0(%rsp),%rbp
+   0x439898:	mov    %rbx,%rax
+   0x43989b:	mov    %rax,0x60(%rsp)
+   0x4398a0:	mov    %r13,%rax
+   0x4398a3:	mov    %rax,0x50(%rsp)
+   0x4398a8:	mov    %rbp,%rax
+   0x4398ab:	mov    %rax,0x48(%rsp)
+   0x4398b0:	mov    %r12,%rax
+   0x4398b3:	push   %rax
+   0x4398b4:	mov    %rbx,%rax
+   0x4398b7:	mov    (%rax),%rax
+   0x4398ba:	mov    %rax,%rcx
+   0x4398bd:	pop    %rax
+   0x4398be:	cmp    %rcx,%rax
+   0x4398c1:	jl     0x43993c
+   0x4398c7:	push   %rax
+   0x4398c8:	mov    0xb0(%rsp),%rax
+   0x4398d0:	cmpq   $0x1,-0x8(%rax)
+   0x4398d5:	jae    0x4398d9
+=> 0x4398d7:	ud2
+   0x4398d9:	decq   -0x8(%rax)
+   0x4398dd:	pop    %rax
+   0x4398de:	push   %rax
+   0x4398df:	mov    0xc8(%rsp),%rax
+   0x4398e7:	cmpq   $0x1,-0x8(%rax)
+   0x4398ec:	jae    0x4398f0
+   0x4398ee:	ud2
+   0x4398f0:	decq   -0x8(%rax)
+   0x4398f4:	pop    %rax
+   0x4398f5:	push   %rax
+   0x4398f6:	mov    0xd0(%rsp),%rax
+   0x4398fe:	cmpq   $0x1,-0x8(%rax)
+   0x439903:	jae    0x439907
+   0x439905:	ud2
+#0  0x00000000004398d7 in ?? ()
+#1  0x0000000000000006 in ?? ()
+#2  0x00007fe8b6691808 in ?? ()
+#3  0x00007fe8b662cf30 in ?? ()
+#4  0x0000000000000000 in ?? ()

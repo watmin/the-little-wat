@@ -201,3 +201,46 @@ The gate run is `tools/verify.sh` under that switch: the bootstrap plus the whol
 That run is what lands 3a. So is `tools/verify.sh` with the check off.
 
 Append a round-4 section to the SCORE. Commit nothing.
+
+---
+
+# Round 5 — R9 holds; the check finds another over-drop; R10 reads the environment on every drop (2026-09-28)
+
+**Credited, on my own runs:** R9. `:c::eval-seq` puts a consuming built-in's box LAST (`elf/compile.wat:3811-3821`),
+as the indirect call's head; the D3 drop of a temporary source is restored for `conj`, `assoc` and `concat`.
+`elf/probe/drop-at{1,3,4,5}.wat` agree with the interpreter through `tools/probe.sh`, check off AND on
+(`WAT_DROP_CHECK=1`): at4 prints `"x"`, at5 finishes. The sandbox bootstrap with the check off reaches the
+fixpoint, 367,645 bytes (`/tmp/stone3a-r4/bootstrap-off.log`).
+
+**Not landable:** the sandbox bootstrap with the check on (`/tmp/stone3a-r4/bootstrap-on.log`): stage 0 wrote a
+385,393-byte compiler; stage 1 died on `ud2`. Captured under gdb, kept here as `gdb-3a-r4-checkon.txt`:
+`rip 0x4398d7`, `[rax-8] = 0`. The site: a function whose four parameters arrive on the stack
+(`mov 0xe8/0xe0/0xd8/0xd0(%rsp)` into rbx, r12, r13, rbp), spills three to `0x60`, `0x50`, `0x48(%rsp)`, tests
+`(>= i (length v))` (r12 against `[rbx]`), and in the arm taken drops three stack slots in a row —
+`0xb0`, `0xc8`, `0xd0(%rsp)` after one push, i.e. `0xa8`, `0xc0`, `0xc8` from the body's rsp. Those are not the
+slots the spills wrote. Either the drops read the wrong slots (a displacement defect, the round-2 class), or
+they are right and this object is the VICTIM of an earlier over-drop elsewhere. The trap names where the
+count was found at zero, not who took it there.
+
+**R10 costs every build.** `:c::drop-check?` (`elf/compile.wat:4207`) reads `/proc/self/environ` on every
+call, and `:c::drop-hex` calls it for every drop emitted: I/O hidden inside a predicate that reads as pure,
+thousands of times per compile. Stage 1 went from 1,974 ms (round 3) to 3,220 ms. And `contains?` matches
+`XWAT_DROP_CHECK=1` and `WAT_DROP_CHECK=10`.
+
+## R11 — the environment is read once
+
+Read it ONCE, where the compile begins, and carry the answer in `:c::Prog` (or the layout); `:c::drop-hex`
+reads the field. Match the whole entry (the environ is NUL-separated: the entry equals `WAT_DROP_CHECK=1`).
+Measure stage 1's time before and after.
+
+## R12 — the over-drop at `0x4398d7`, to its root
+
+1. Name the function at `0x4398d7` (an address map of the check-on stage 0 compiler, or the shape above
+   read against the source).
+2. Decide: are the three drop slots the right ones? If not, it is a displacement defect — fix its root, and
+   say why `tools/rsp.sh` could not see it. If they are, find who dropped the object first: shrink the
+   function's shape into a `tools/probe.sh` fixture that traps under `WAT_DROP_CHECK=1`, then fix the placement.
+3. A fixture for the shape goes into `elf/probe/`.
+
+Then the landing gates on the real tree: `tools/verify.sh` (check off) and `WAT_DROP_CHECK=1 tools/verify.sh`,
+both `verify: ok`, zero `ud2`. Append a round-5 section to the SCORE. Commit nothing.
