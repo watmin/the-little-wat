@@ -144,3 +144,60 @@ Say which.
 
 Then `tools/verify.sh` (check off) and the check build over bootstrap + corpus, both on your own runs.
 Append a round-3 section to the SCORE. Commit nothing.
+
+---
+
+# Round 4 — R6's fix is refuted; the root is the consuming call's place in evaluation order (2026-09-28)
+
+The executor changed: Grok is out of credits for some days, and round 3 was struck by Claude Sonnet.
+
+**Credited, on my own runs:** R7 — `tools/rsp.sh` is wired into `tools/elf-run.sh`; it passes the tree,
+and a mutant I planted (`"488b0050"` at `elf/compile.wat:2612`) fails it naming the line. The two raw
+pairs route through `:c::push` / `:c::popn`. R8 — `:c::drop-on?` is gone (0 references).
+
+The round-3 tree passes `tools/verify.sh` with the check off (my run, `verify: ok`, `rsp` inside it). That is
+necessary and not sufficient: at4 below is a wrong answer that tree computes.
+
+**R6's fix is refuted.** It stops dropping the source of a copying `assoc` / `conj` whenever that
+source is not a symbol, reasoning that such a source "was never incremented". But a temporary's own
+allocation IS its one reference, and a copying built-in consumes it (D3). Dropping it once is correct.
+The probes are kept in this directory, `probe-3a-at*.wat`, run via `tools/probe.sh`:
+
+| probe | shape | HEAD (no drops) | 3a before the fix, check on | 3a with the fix, check on |
+|---|---|---|---|---|
+| at1 | `(assoc (mk 3) :sp 5)`, a temporary | — | agree | — |
+| at3 | `(assoc (emit o "ab") :sp i)` in a loop, `o` dead after | agree | agree | — |
+| at4 | `(assoc (emit o "ab") :sp 8)`, `o` printed after | agree | hang (killed) | **WRONG: `o` prints `"xab"`, not `"x"`** |
+| at5 | `t (emit o "ab")`, `(assoc t :sp …)`, `o` printed after | agree | hang (killed) | hang (killed) |
+
+A temporary source is dropped safely (at1, at3). What breaks is `emit`'s
+`(assoc o :code (concat (:user::Out/code o) h))` when the caller still holds `o`. The fix leaves at5
+hanging (a named source it never touches) and turns at4 into a silent wrong answer.
+
+**The root, read from the source.** `o` is `:c::linear?` in `emit` (one write; the read comes before it),
+so the box takes `o` WITHOUT an increment. `:c::eval-seq` says `(assoc o :code V)` runs `o`, then `V`,
+so the `o` inside `V` is the last use, and the drop fires there: the count goes 2 → 1. Only then does
+the consuming call run (`slot_set_own`); it sees count 1 and writes in place over the object main
+still holds. This is F-208's class again: **the generator uses the box at the CALL, after the value,
+but the evaluation-order definition puts the box first.** The consume is an event of its own, and R4's
+one definition does not contain it.
+
+## R9 — revert R6's gate; put the consume where the generator puts it
+
+1. Restore the drop of a non-symbol source after a copying `conj` / `assoc` / `concat` (D3).
+2. In the one evaluation-order definition, a consuming built-in's source is used at the CALL, after
+   every other argument, as an indirect call's head is. The drop walk (`:c::last-walk` / `:c::last-use?`)
+   then cannot place a drop of the source's name inside the value, because the consume comes later.
+   Say how in-place mutation (`:c::linear?` / `:c::dead-after-write?`) reads this, and that it stays
+   on its safe side (R5).
+3. Every consuming built-in, not only `assoc`: `conj`, `concat`, and any other that evaluates a box,
+   then its arguments, then calls.
+4. at1, at3, at4 and at5 agree with the check on. Move them into `elf/probe/` as `drop-at*.wat`.
+
+## R10 — the check as one command
+
+D5 asks for a switch the compiler reads (an environment variable, off by default), not a source edit.
+The gate run is `tools/verify.sh` under that switch: the bootstrap plus the whole corpus, zero `ud2`.
+That run is what lands 3a. So is `tools/verify.sh` with the check off.
+
+Append a round-4 section to the SCORE. Commit nothing.
