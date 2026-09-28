@@ -353,3 +353,35 @@ that returns to the `ud2`?) and make an underflow end the process with a named s
 
 Then the landing gates on the real tree: `tools/verify.sh`, and `WAT_DROP_CHECK=1 tools/verify.sh`, both
 `verify: ok`, zero traps. Append a round-7 section to the SCORE. Commit nothing.
+
+---
+
+# Round 8 — the compiler compiles itself under the check; the corpus is next (2026-09-28)
+
+**Credited, on my own runs:** R16 — `:c::expr-val` (`elf/compile.wat:4141`, `:c::share` around `:c::expr`) stands
+at every place a value flows on unchanged: both `if` arms (general and `:c::if-cmp`), the peeled head, the
+last form of a body (which `cond` / `match` / `let` lower to), and `:c::compile-fn`'s `wrap?` arm. A value
+discarded after it is counted is a leak (late), never an early drop. R17 — the hang was systemd-coredump
+dumping a tens-of-GB reservation; an underflow now ends with `wat: reference count underflow`, exit 70.
+**`WAT_DROP_CHECK=1 tools/verify.sh`: stage 0 891 s, the compiler 391,574 bytes, stage 1 1,503 ms, stage 1 ==
+stage 2 byte for byte — the compiler compiles itself under the check with zero underflows.**
+
+**Not landable yet:** both verifies (check off, check on) stop in elf-run at `tools/reads.sh`:
+`runtime entry 'uflow' (elf/compile.wat:4287) is not classified`. The gate doing its job. So the corpus has not
+yet run under the check.
+
+## R18 — classify `uflow`
+
+It answers nothing a container holds: it is an abort. NOTREAD, with that reason.
+
+## R19 — two constants that stand for something
+
+- `:c::dropchk-hex` adds `8` for the tag guard and `7` for the literal guard: the lengths of bytes
+  other functions emit. Derive them from those functions' own output, so a change to a guard cannot
+  silently move the jump.
+- `:c::rt-level`'s floor `35` (`elf/compile.wat:8117`) is the underflow stub's place in the routine order. Derive
+  it from `:c::rt-nth`'s order, as the at-* chain already is.
+
+Then both landing gates on the real tree: `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`, both
+`verify: ok` — the second is the whole corpus under the check, zero underflows. `tools/emitted.sh check`, what
+moved and why. Append a round-8 section to the SCORE. Commit nothing.
