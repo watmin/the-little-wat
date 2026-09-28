@@ -31,6 +31,16 @@ SNAP=$(mktemp -d); trap 'rm -rf "$SNAP"' EXIT
 fail=0
 ms () { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
 
+# R13 (excursus 008 stone 3a round 5): this must run BEFORE the first write into elf/out
+# (the --fast branch's seed run, or stage 0 below) -- not after, as it read before. A
+# bootstrap killed mid-stage-0 on UNCHANGED sources used to leave the OLD stamp in place,
+# still matching a half-rewritten elf/out/, so `SKIP_BUILD=1 tools/elf-run.sh` would accept
+# it. Sourced and removed here so no run of this script, --fast or not, can write elf/out
+# with a stale stamp still sitting there.
+. tools/sums.sh
+rm -f "$STAMP"
+SRC_SUM=$(srcsum)
+
 if [ -n "$FAST" ]; then
   [ -x elf/out/compiler.elf ] || { echo "bootstrap --fast: no elf/out/compiler.elf to seed from."
                                    echo "                  run tools/bootstrap.sh once without --fast."; exit 2; }
@@ -82,11 +92,8 @@ fi
 # C-174 split the compiler into three files, so this hashes ALL of them -- hashing only
 # compile.wat would let an edit to lib/x86.wat or lib/runtime.wat through, which is this very
 # check defeated by the refactor that was supposed to make the file easier to edit.
-# the definitions live in tools/sums.sh, shared with elf-run.sh's stale-binary check
-. tools/sums.sh
-# a bootstrap in progress -- or one that fails -- leaves NO stamp: elf/out/ is not verified until the end
-rm -f "$STAMP"
-SRC_SUM=$(srcsum)
+# the definitions live in tools/sums.sh, shared with elf-run.sh's stale-binary check, sourced
+# and the stamp removed ABOVE, before stage 0 -- see R13's comment there.
 
 # **the negative tests are a DERIVED artifact, so derive them** (F-152). elf/refuse-*.wat are
 # elf/compile.wat with a different driver; they are committed, and nothing regenerated them,

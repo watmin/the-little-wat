@@ -1696,7 +1696,32 @@
 ;; lookup instead of a walk.
 (:wat::core::typealias :c::Layout (:wat::core::Vector :- [:wat::core::i64]))
 
-(:wat::core::defn :c::rt-count [] -> :wat::core::i64 34)
+;; `drop1(rax = object, rcx = field offset)` -- decrement, and if this was the last
+;; reference follow the one pointer field. A chain is a loop, not a call, so a
+;; 100,000-deep Cons does not grow the stack. A count of zero is a literal and is
+;; left alone. Bytes are not returned here: the youngest-allocation rewind is D4
+;; and this routine only makes the count true.
+(:wat::core::defn :c::rt-drop1 [] -> :wat::core::String
+  ;; cmp [rax-8], 0 / je ret / dec / jnz ret / mov rax,[rax+rcx] / cmp rax,0x1000 / jae loop / ret
+  ;; A field below a page is a tag or nil, not a pointer, so the walk stops.
+  (:wat::string::concat
+    "488378f800"
+    "7412"
+    "48ff48f8"
+    "750c"
+    "488b0408"
+    "483d00100000"
+    (:c::br-back (:c::jcc-rel8 (:c::negate-cc (:c::cc-below)))
+      "488378f800741248ff48f8750c488b0408483d00100000")
+    "c3"))
+
+;; excursus 008 stone 3a round 7 (R17): the check build's abort, reached by a `jb rel32` from
+;; every drop site instead of a bare `ud2` -- see `:c::dropchk-hex` in elf/compile.wat for why
+;; a raw trap does not read as one on this machine.
+(:wat::core::defn :c::rt-uflow [lay <- :c::Layout] -> :wat::core::String
+  (:c::rt-abort "wat: reference count underflow" lay (:c::at-uflow lay)))
+
+(:wat::core::defn :c::rt-count [] -> :wat::core::i64 36)
 
 ;; **the one place the routine order is written.** It used to be in three: this list, the
 ;; `rt-at lvl N` table inside `:c::runtime`, and the recursion in the `at-*` chain. The other two
@@ -1737,7 +1762,9 @@
     ((:wat::core::= i 30) (:c::rt-hexchar))
     ((:wat::core::= i 31) (:c::rt-prim-write-hex lay))
     ((:wat::core::= i 32) (:c::rt-prim-read-hex lay))
-    (:else (:c::rt-io-read-file lay))))
+    ((:wat::core::= i 33) (:c::rt-io-read-file lay))
+    ((:wat::core::= i 34) (:c::rt-drop1))
+    (:else (:c::rt-uflow lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
                               acc <- :wat::core::String] -> :wat::core::String
@@ -1847,6 +1874,10 @@
 (:wat::core::defn :c::at-wrhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 31))
 (:wat::core::defn :c::at-rdhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 32))
 (:wat::core::defn :c::at-rdfile [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 33))
+;; answers nothing a container still holds: it decrements the object it is given
+(:wat::core::defn :c::at-drop1 [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 34))
+;; R17: the check build's underflow abort -- see `:c::rt-uflow` above and `:c::dropchk-hex`
+(:wat::core::defn :c::at-uflow [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 35))
 
 ;; ---------------------------------------------------------------- what the heap looks like
 ;;

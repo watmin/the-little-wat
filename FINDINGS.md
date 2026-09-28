@@ -15617,7 +15617,10 @@ stone 1, row R6′), not at expansion.
 
 ### F-208: liveness skips a call's HEAD -- harmless while heads were names, a use-after-drop once closures made them values
 
-**Open -- excursus 008 stone 3a.** Found weighing stone 3a's round-2 failure (the compiled compiler dies
+**Fixed -- excursus 008 stone 3a (landed 2026-09-28).** `:c::eval-seq` is the one evaluation order, the head of an
+indirect call after its arguments and a consuming built-in's box at the call (rounds 2 and 4); the drop
+question (`:c::last-use?`) and the mutation question (`:c::live-after`) each state their safe direction.
+Found weighing stone 3a's round-2 failure (the compiled compiler dies
 in `asm::fits?` on `0xffff8017499e8e06`). `:c::eval-seq` (`elf/compile.wat`), the order `:c::live-after`
 believes a form's children run in, returns an ordinary call's kids FROM INDEX 1 (`conj-range … ks 1 …`) --
 the head is not in it. While every head was a function NAME that was harmless. Closures (excursus 003) made

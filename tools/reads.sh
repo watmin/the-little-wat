@@ -14,7 +14,7 @@
 #   2. every runtime entry the compiler calls, `(:c::at-NAME rt)`, is classified here. An entry
 #      that answers a value a container holds may appear only as a `:c::Read.*` argument. An
 #      unclassified entry fails: whoever adds `map_get` has to come here and say which it is;
-#   3. `:c::read-out` still emits the count, and `:c::count-hex` has exactly its two callers.
+#   3. `:c::read-out` still emits the count, and `:c::count-hex` has its six callers.
 #
 # Fail-closed on purpose: a reformatted line fails this rather than slipping past it.
 # Exit: 0 clean, 1 a read that bypasses `:c::read-out` (or an unclassified entry).
@@ -64,7 +64,10 @@ done
 READS=' tget '
 # the rest answer something FRESH, the container ITSELF, a scalar, or nothing
 NOTREAD=' flush subs starts contains tostr die wrhex rdfile rdhex vconj vconj-own streq quot rem ovf '
-NOTREAD+='cat cat-own slot slot-own varr vnew str bool put i64 '
+NOTREAD+='cat cat-own slot slot-own varr vnew str bool put i64 drop1 '
+# uflow (excursus 008 stone 3a round 8, R18): the check build's underflow abort -- it answers
+# nothing a container holds; it is reached instead of `ud2` and ends the process. Not a read.
+NOTREAD+='uflow '
 while IFS= read -r h; do
   [ -z "$h" ] && continue
   n=${h%%:*}
@@ -87,7 +90,8 @@ done <<< "$(echo "$code" | grep -E '\(:c::at-[a-z0-9-]+ rt\)')"
 echo "$code" | awk -F: -v s="$start" -v e="$end" '$1>=s && $1<=e' | grep -q '(:c::count-hex t pg)' \
   || { echo "reads: FAIL -- :c::read-out no longer emits :c::count-hex"; fail=1; }
 callers=$(echo "$code" | grep -c '(:c::count-hex ')
-[ "$callers" -eq 2 ] || { echo "reads: FAIL -- :c::count-hex has $callers callers, expected 2 (:c::share, :c::read-out)"; fail=1; }
+# 3: share, read-out, and the copying conj, which takes one reference to its source
+[ "$callers" -eq 6 ] || { echo "reads: FAIL -- :c::count-hex has $callers callers, expected 6 (:c::share, :c::read-out, copying conj, copying concat, copying assoc twice)"; fail=1; }
 
 [ $fail -eq 0 ] && echo "reads: ok -- every read out of a container goes through :c::read-out (lines $start-$end)"
 exit $fail

@@ -22,6 +22,11 @@ fail=0
 tools/reads.sh || exit 1
 # every bulk copy is counted or is a named byte copy (excursus 008 stone 2)
 tools/copies.sh || exit 1
+# every rsp-moving opcode goes through :c::push / :c::popn (excursus 008 stone 3a round 3, R7):
+# an untracked raw push/pop shifts every rsp-relative local for the rest of its window, which is
+# exactly what the copying `concat` fix (round 2) and this gate's own crawl (drop-saved, length)
+# each found once already.
+tools/rsp.sh || exit 1
 
 # SKIP_BUILD=1 checks the binaries already in elf/out/ instead of rebuilding them through the
 # interpreter -- the same computation bootstrap.sh's stage 0 just did. tools/verify.sh is the way to
