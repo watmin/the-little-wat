@@ -43,3 +43,35 @@ Closure glue by creation site; the intrusive worklist through the dead object's 
 100,000-deep list drops in a loop with a flat stack and its peak RSS falls to about one list.
 
 Then the bench against `BENCH-baseline.md`, and the compiler's cost against stones 1 and 2.
+
+---
+
+# 3b-1, round 2 — G5 works: the compiler uses a dead object (2026-09-28)
+
+**Credited:** G5's two halves are on the page — `:c::poison-count` (-1) written when a decrement reaches zero
+(`:c::dropchk-hex`), and `:c::countchk-hex` refusing an increment on a poisoned object, both only under
+`WAT_DROP_CHECK=1`; the plain build's fast path is unchanged (its `--fast` fixpoint, 371,678 bytes).
+
+**The `written` / `filesz` assert is not the finding.** When the source changes what is EMITTED, a `--fast`
+bootstrap is not a fixpoint test: the seed emits with the OLD logic, so the chain needs three hops. On my own
+run (sandbox `/tmp/s3b1`, the tree's G5 source, `WAT_DROP_CHECK=1` throughout):
+
+| hop | binary | its own code has | result |
+|---|---|---|---|
+| seed (370,028, the committed plain compiler) → `s1` | 393,776 | the OLD check | `compile: ok` |
+| `s1` → `s2` | 469,096 | poison + the increment check | — |
+| `s2` → `s3` | 469,096 | | **`wat: reference count underflow`, exit 70** |
+
+`s2` is the first compiler whose OWN code poisons dead objects, and running it stops: **somewhere the compiler
+increments or decrements an object whose count already reached zero.** Before G5 such an under-count netted out
+unseen (1 → 0 → 1). That is what G5 is for; it is the next root.
+
+## R1 — the dead object's history, to its root
+
+In `/tmp/s3b1` (keep it; `s2.elf` is there): run `s2.elf` under gdb (ASLR off) with `WAT_DROP_CHECK=1`, break at
+the underflow stub (`:c::at-uflow` — its address from the layout, or catch the `exit` 70), read `rax` (the dead
+object). Re-run with a hardware watchpoint on `[rax-8]` (`watch -l`, after `starti`) logging every write with
+`$pc`: allocation (1), increments, the decrement to 0 and the poison (-1), then the use that stopped. Map each
+`$pc` to its function (a sandbox trace of `Fn/addr` in `:c::pass`, printed while `s1` compiles `s2`). Name the
+defect — which drop or which missing increment — fix its ROOT as a class, add a fixture in `elf/probe/`, and
+repeat until `s2 → s3` runs and `s3 → s4` is a fixpoint. Then G1.
