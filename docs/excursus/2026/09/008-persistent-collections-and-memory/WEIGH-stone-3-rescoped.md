@@ -244,3 +244,12 @@ Measure stage 1's time before and after.
 
 Then the landing gates on the real tree: `tools/verify.sh` (check off) and `WAT_DROP_CHECK=1 tools/verify.sh`,
 both `verify: ok`, zero `ud2`. Append a round-5 section to the SCORE. Commit nothing.
+
+## R13 — the stamp is removed before `elf/out` is touched
+
+`tools/bootstrap.sh` removes `elf/out/.build-stamp` at line 88, but stage 0 (line 55, and `--fast` at line 37)
+has already rewritten `elf/out` by then. A bootstrap killed in stage 0 on UNCHANGED sources leaves a stamp
+that still matches, over half-rewritten binaries, and `SKIP_BUILD=1 tools/elf-run.sh` accepts them. (Found
+2026-09-28: a killed verify left a stamp; it was stale only because the sources had also changed.) Remove
+the stamp before the first write to `elf/out`, and prove it with the mutant that shows the hole: a bootstrap
+killed mid-stage-0 on unchanged sources, then `SKIP_BUILD=1 tools/elf-run.sh` must REFUSE.
