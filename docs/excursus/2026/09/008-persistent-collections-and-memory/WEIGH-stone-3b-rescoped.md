@@ -75,3 +75,33 @@ object). Re-run with a hardware watchpoint on `[rax-8]` (`watch -l`, after `star
 `$pc` to its function (a sandbox trace of `Fn/addr` in `:c::pass`, printed while `s1` compiles `s2`). Name the
 defect — which drop or which missing increment — fix its ROOT as a class, add a fixture in `elf/probe/`, and
 repeat until `s2 → s3` runs and `s3 → s4` is a fixpoint. Then G1.
+
+---
+
+# 3b-1, round 3 — the dead object was a compound box deferred whole; one change comes back out (2026-09-28)
+
+**Credited:** the watchpoint history (alloc 1 → a share to 2 in `rt-tree-push` → two decrements in `:c::hexlen`, the
+second poisoning) and its root: `:c::eval-seq` deferred a consuming built-in's kid 1 to the END whenever the head
+was `conj`/`assoc`/`concat`. That is right for the box's VALUE, used at the call (round 4 of stone 3a), but
+when kid 1 is a COMPOUND expression the names inside it are evaluated FIRST, where it sits; deferring them made
+an early occurrence look like the last one. The fix — defer kid 1 only when it is a bare Symbol
+(`elf/compile.wat:3831`) — refines round 4's rule rather than undoing it. `elf/probe/drop-concat-box.wat`
+reproduces the class (diverges under the check with the fix reverted) and agrees both ways. `tools/reads.sh`
+followed `:c::count-hex`'s new signature. The chain seed → s1 → s2 → s3 is clean under the check with a fixpoint,
+and both verifies are `verify: ok` (372,501 / 470,582 bytes) on the executor's runs.
+
+**Refuted: the `:c::cat-fold` share** (`elf/compile.wat:3423-3439`). `str_cat` / `str_cat_own` COPY their right
+operand (rcx) and consume only the left, the accumulator — so a folded operand is READ, like `nth`'s, and nothing
+drops it after the call. Sharing it is an increment no one gives back: a leak on every `concat` of a live name.
+The SCORE's own ablation shows it did not fix the crash. It is a guard, not a root; it comes out.
+
+## R2 — take the `cat-fold` share back out
+
+Show the fixture and the chain still pass without it.
+
+## R3 — G1, glue per type (the rest of 3b-1)
+
+As `3b-1` above: one CALLED glue routine per non-recursive pointer type, from a drop site's slow path (the count
+reached zero); the recursive types listed and left without glue. With G5 in place, every dead object the glue
+walks is poisoned under the check, so the chain under `WAT_DROP_CHECK=1` is the proof that the glue's drops are
+right. Then both verifies.
