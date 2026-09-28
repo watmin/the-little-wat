@@ -42,3 +42,38 @@ Named bindings and parameters at their LAST use (`:c::live-after`), not only unu
 one `if` arm at that arm's start. Closures' captures belong with drop glue (3b) — leave them.
 
 Then `tools/verify.sh`, and append a re-strike section to the SCORE. Commit nothing.
+
+---
+
+# Round 2 — the drops corrupt the compiler itself (2026-09-27)
+
+**Credited:** R1 done at the root — the `-691` / `0x40028e` drops were STALE RELOADS (a register let
+reloaded after a call reused the register; a stack binding read with the raw frame displacement), fixed by
+spilling register lets when bound and pointer parameters on entry; the guard is gone. R3's placements
+(copying `assoc` / `concat`, the `match` subject, `if` arms, unused parameters kept off `rax`, read-only
+parameters exempted at tail pass-through — which the check caught with `ud2`). R2's answer on the mutant
+(2 -> 1 is a legal release; no count check can see it). Eleven probes agree with the check on.
+
+**Not landable:** stage 1 — the compiled compiler — dies in `asm::fits?` on `0xffff8017499e8e06`, check on
+or off. The signature of a drop placed too early somewhere in the compiler's own code: a count reaches 1
+while another holder remains, something grows in place, memory is corrupted — the case the underflow check
+cannot see.
+
+**A named candidate class — evaluation order ≠ textual order.** Drops sit at a name's last TEXTUAL
+occurrence, but `:c::call-indirect` pushes the arguments FIRST and evaluates the head SECOND ("the
+arguments are pushed first and the target loaded second"): in `(f (g f))` the textual last `f` is in the
+argument, evaluated before the head `f` — a use after drop. Every form whose evaluation order differs from
+its text is the same class (check the binary-operator fold's operand order too). **The last occurrence must
+be the last in EVALUATION order** — derive it from the order the code generator emits, not the text.
+
+**Find the site systematically, not by hunting:**
+1. **Per-class switches**: one compiler flag per drop class (temporaries, discarded statements, last-use
+   names, copying `conj`/`assoc`/`concat` sources, `match` subjects, `if` arms, `ret`, tail parameters).
+   Build stage 1 with ONE class on at a time — stage 1 compiling the compiler is the test. The class that
+   fails is the class.
+2. **Then by function**: within that class, enable drops only for functions in a name range and halve —
+   the site falls out in ~9 builds.
+3. Fix the ROOT the site shows (as R1 did), keep the switches out of the final tree or behind the check
+   build, and run `tools/verify.sh` to the fixpoint.
+
+Append a round-2 section to the SCORE. Commit nothing.
