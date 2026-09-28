@@ -253,3 +253,47 @@ that still matches, over half-rewritten binaries, and `SKIP_BUILD=1 tools/elf-ru
 2026-09-28: a killed verify left a stamp; it was stale only because the sources had also changed.) Remove
 the stamp before the first write to `elf/out`, and prove it with the mutant that shows the hole: a bootstrap
 killed mid-stage-0 on unchanged sources, then `SKIP_BUILD=1 tools/elf-run.sh` must REFUSE.
+
+---
+
+# Round 6 — R11 and R13 hold; R12's reading ran out — bisect by function, now cheap (2026-09-28)
+
+**Credited:** R11 — `:c::empty-prog` reads the environment once per compile into `:c::Prog/dchk`
+(`elf/compile.wat:1210,1275`); `:c::envvar-set?` matches a whole NUL-separated entry; stage 1 1,725 ms.
+R13 — the stamp is removed at `tools/bootstrap.sh:41`, before either stage-0 branch, proven with the killed
+build. The check-off `tools/verify.sh` of that tree is `verify: ok` at 367,987 bytes (the executor's run;
+mine comes at landing). R12's STOP is honest: the trap is `:c::seq`'s base case (`elf/compile.wat:5616`)
+dropping `ks`/`env`/`pg`/`rt`/`tc` through `:c::drop-arm`; the slots are the right ones (not a
+displacement); the `:c::ronly?` hypothesis changed no byte and was reverted. I also read `:c::share`: it
+increments once per use and moves only at a last use — no dedup is left to under-count.
+
+So `:c::seq` is the VICTIM: some reference it drops was never given to it, or was taken away first.
+Reading has run out. The round-2 fallback — bisection by FUNCTION — was never run, and it is now cheap:
+
+## R14 — which function's drops take the count to zero
+
+A `--fast` bootstrap seeds from a compiler already built. Seeded from the proven check-off compiler
+(`elf/out/compiler.elf` of the real tree), it compiles a sandbox's source natively in seconds, so each step
+is seconds, not a 24-minute interpreted stage 0.
+
+1. In a sandbox, restrict drop EMISSION (every caller of `:c::emit-drop`) to a set of function names
+   (`:c::Prog/cur`), with `WAT_DROP_CHECK=1`. Build with `tools/bootstrap.sh --fast` from the check-off seed,
+   so the resulting stage 1 is a check-on compiler whose drops exist only in that set.
+2. Set = `{:c::seq}` alone. A trap means `:c::seq`'s own drops exceed what its callers hand it: then find the
+   caller that moves a reference it does not own. No trap means another function over-drops: halve the
+   set of all functions (keeping `:c::seq` in) until one function remains whose drops, added to the rest,
+   bring the trap. About ten builds.
+3. Shrink that function's shape into a `tools/probe.sh` fixture that traps under `WAT_DROP_CHECK=1`; fix the
+   ROOT the placement shows; the fixture goes into `elf/probe/`. The restriction is a sandbox instrument:
+   it does not enter the real tree.
+
+## R15 — the compiler that crashes when run again
+
+Round 5 reports that the check-on compiler, "re-invoked by hand a second time on its own unchanged
+source, reliably crashes or hangs", though the stage 0 → stage 1 run succeeded. One explanation to rule out
+first: `elf/out/compiler.elf` run in place writes `elf/out/compiler.elf` — the file it is executing
+(`tools/bootstrap.sh` copies it to `stage1.elf` first for that reason). If that is not it, a compiler whose
+behaviour differs between two runs on the same input is a defect of its own: find what differs.
+
+Then the landing gates on the real tree: `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`, both
+`verify: ok`, zero `ud2`. Append a round-6 section to the SCORE. Commit nothing.
