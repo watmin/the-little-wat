@@ -52,6 +52,13 @@ ALLOW=(
   '(:c::mov-rm (:c::rbx) 8 (:c::rax))|1|:c::henum-glue-body: the tag at slot 0, i64, not a reference'
   '(:c::mov-rm (:c::rbx) 8 (:c::rdx))|1|:c::vec-glue-body: a trie Vector'"'"'s shift, i64, not a reference'
   '(:c::mov-rm (:c::rbx) 16 (:c::rax))|1|:c::vec-glue-body: the root node, read to drop it (its own count, not the Vector'"'"'s) as the Vector dies'
+  # excursus 008 stone 3b-2 (F1/F2): every load below is inside a FREE routine, reading a
+  # header field OF THE OBJECT BEING FREED (its length, or a closure'"'"'s code address) to
+  # recompute the block'"'"'s size -- never a reference handed anywhere, so none of these is the
+  # F-188 shape either.
+  '(:c::mov-rm (:c::rax) 0 (:c::rdx))|1|:c::freestr-glue-body: a String'"'"'s length, read to size `:c::rt-cap` recomputes'
+  '(:c::mov-rm (:c::rax) 0 (:c::r8))|2|:c::freerec-glue-body and :c::freevec-glue-body: a record/payload-enum'"'"'s or a flat Vector'"'"'s length, read to size `len*8+16`/`len*8+24`'
+  '(:c::mov-rm (:c::rax) 0 (:c::r9))|1|:c::closize-glue-body: a closure'"'"'s code address (its length word, overwritten) -- not a field value, the lookup key for its own creation site'"'"'s capture count'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do

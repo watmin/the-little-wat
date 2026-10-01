@@ -791,7 +791,12 @@
    ;; `:c::argreg-fns`.
    nargs <- :wat::core::i64
    ;; a `fn`, lifted. Only ever reached through `call [rax]`.
-   lifted <- :wat::core::bool])
+   lifted <- :wat::core::bool
+   ;; excursus 008 stone 3b-2 (F1): how many names this `fn` captures, 0 for a non-lifted
+   ;; function. The closure object's length word is overwritten with its code address
+   ;; (`:c::close-form`), so the ONE place this count still exists after allocation is here,
+   ;; keyed by the lifted function's own address (`:c::closize-glue-body`).
+   ncaps <- :wat::core::i64])
 (:wat::core::typealias :c::FnV (:wat::core::Vector :- [:c::Fn]))
 
 ;; ---------------------------------------------------------------- records and type aliases
@@ -3132,8 +3137,26 @@
 (:wat::core::defn :c::scratch-safe? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::let [ks (:c::kidsof pg a)]
     (:wat::core::cond
-      ;; a leaf emits nothing
-      ((:wat::core::= (:wat::core::length ks) 0) (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})))
+      ;; a leaf emits nothing -- UNLESS it is a bare name's read, and that read is the
+      ;; name's own LAST USE. excursus 008 stone 3b-2: before freeing, only a GLUE-bearing
+      ;; type's drop could call anything, and `:c::quiet-head?` already stayed clear of the
+      ;; few heads (`nth`, `length`, ...) whose argument might be one. Freeing makes EVERY
+      ;; pointer's drop potentially call a free routine, so the same risk now reaches every
+      ;; bare name, not just those few heads' own arguments -- caught here, at the one place
+      ;; every leaf (bare name or otherwise) is asked, rather than widening every caller.
+      ;; `:c::lookup-ty-opt`, not `:c::type-of`: this is asked from more than one pass, and
+      ;; at least one (`:c::noret?`, over a lifted closure's body) runs before captures are
+      ;; bound, where a capture name is -- correctly, at that point -- one nothing binds yet.
+      ;; `:c::type-of` refuses such a name outright (`:c::fn-value-ty`'s own failure); the
+      ;; direct, non-refusing lookup answers "" instead, which is treated as "not a pointer
+      ;; worth asking about", the same as a non-pointer leaf (an index, a literal, a keyword).
+      ((:wat::core::= (:wat::core::length ks) 0)
+        (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
+          (:wat::core::not
+            (:wat::core::and
+              (:c::ptr-ty? (:c::lookup-ty-opt env (:c::text pg a) (:wat::core::- (:wat::core::length env) 1)))
+              (:c::last-use? a (:c::text pg a) pg)))
+          (:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {}))))
       ;; **a node with kids that is not a list is still a node with kids** -- a `let`'s binding
       ;; VECTOR is one, and keying this on "list" meant its initialisers were never looked at.
       ;; An initialiser holding a call was judged quiet, and the call then clobbered whichever
@@ -4399,64 +4422,76 @@
 ;; byte what it was before this round (the plain build's fast path is still one `dec`), and the
 ;; existing G5 poison, when the check build is also on, is simply one more thing the same "zero"
 ;; branch does, after the glue call.
+;; excursus 008 stone 3b-2 (F2): the old plain-build/no-glue fast path (a bare `dec`, no
+;; zero check at all) is gone for every POINTER type -- freeing applies whether or not the
+;; type has glue (a `str` never has glue and must still be considered for freeing). A
+;; non-pointer type (`:c::drop-hex` calls this EAGERLY, in a `let`, before its own `cond`
+;; decides whether to keep the result -- `(not (:c::ptr-ty? t))` discards it, but the call
+;; still happens) keeps the bare `dec` with no free/glue dispatch at all: `:c::free-target`
+;; only knows the five POINTER shapes, and a type such as an all-unit `enum:` (tier 0, never
+;; a pointer, `:c::match-arms`' own scrutinee drop reaches here with exactly that type) has
+;; no free shape to ask for.
 (:wat::core::defn :c::dropchk-hex [t <- :wat::core::String pg <- :c::Prog o <- :c::Out
                                    rt <- :c::Layout lit? <- :wat::core::bool
                                    tag? <- :wat::core::bool] -> :wat::core::String
+  (:wat::core::if (:wat::core::not (:c::ptr-ty? t)) (:c::dec-hex)
   (:wat::core::let
     [glue (:c::glue-addr t pg)
      has-glue? (:wat::core::>= glue 0)
-     dchk? (:c::Prog/dchk pg)]
-    (:wat::core::if (:wat::core::and (:wat::core::not dchk?) (:wat::core::not has-glue?))
-      (:c::dec-hex)
-      (:wat::core::let
-        ;; the prefix any OUTER guard contributes before these bytes land: `:c::tag-then`'s
-        ;; `cmp rax,0x1000 ; jb` and the literal guard's `cmp [rax-8],0 ; je` are each fixed size
-        ;; regardless of what they skip over -- so calling each with an EMPTY body asks the
-        ;; function itself how many bytes that fixed part is, rather than copying the count by
-        ;; hand where a change to either guard could leave it stale.
-        [tag-pfx (:c::hexlen (:c::tag-then ""))
-         lit-pfx (:c::hexlen (:c::lit-then ""))
-         prefix (:wat::core::+ (:wat::core::if tag? tag-pfx 0) (:wat::core::if lit? lit-pfx 0))
-         ;; cmp [rax-8],1 (5) ; jb rel32 (2 opcode + 4 displacement) -- the underflow guard,
-         ;; check build only, unchanged from before this round
-         guard (:wat::core::if dchk?
-                 (:wat::core::let
-                   [jb-end (:wat::core::+ (:c::here o) (:wat::core::+ prefix 11))
-                    rel (:wat::core::- (:c::at-uflow rt) jb-end)]
-                   (:wat::string::concat "488378f801"
-                     (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
-                 "")
-         dec (:c::dec-hex)
-         ;; the dec above just took this object's count from 1 to 0 -- died right here -- or
-         ;; left it above 0 (still live). Only in the first case does anything else run: the
-         ;; glue call (G1), then the poison (G5, check build only). Nothing is freed: the bytes
-         ;; stay put, only unusable (G5) or unreachable through this reference (G1); G4 is a
-         ;; later strike.
-         zchk (:c::cmp-mi (:c::rax) -8 0)
-         ;; a glue routine returns with `rax` holding whatever it last touched (its own last
-         ;; field or element), not the dying object -- `:c::rec-glue-fields`/`:c::vec-glue-body`/
-         ;; etc. all end their walk with `rax` pointing at the last thing THEY dropped, exactly
-         ;; like every other callee in this compiler leaves `rax` as scratch. The poison write
-         ;; below needs the ORIGINAL object back, so the call is wrapped in `push rax`/`pop rax`
-         ;; here, at the one call site, rather than asking every glue body to preserve it itself.
-         call-pos (:wat::core::+ (:c::here o)
-                     (:wat::core::+ prefix
-                       (:wat::core::+ (:c::hexlen guard)
-                         (:wat::core::+ (:c::hexlen dec)
-                           (:wat::core::+ (:c::hexlen zchk)
-                             (:wat::core::+ (:c::rel8-size) 1))))))
-         call-hex (:wat::core::if has-glue?
-                    (:wat::string::concat (:c::push-rax)
-                      (:wat::string::concat "e8"
-                        (:wat::string::concat (:asm::le (:wat::core::- glue (:wat::core::+ call-pos 5)) 4)
-                          (:c::pop-rax))))
-                    "")
-         poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
-         body (:wat::string::concat call-hex poison)
-         zskip (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)]
-        (:wat::string::concat guard
-          (:wat::string::concat dec
-            (:wat::string::concat zchk (:wat::string::concat zskip body))))))))
+     dchk? (:c::Prog/dchk pg)
+     ;; the prefix any OUTER guard contributes before these bytes land: `:c::tag-then`'s
+     ;; `cmp rax,0x1000 ; jb` and the literal guard's `cmp [rax-8],0 ; je` are each fixed size
+     ;; regardless of what they skip over -- so calling each with an EMPTY body asks the
+     ;; function itself how many bytes that fixed part is, rather than copying the count by
+     ;; hand where a change to either guard could leave it stale.
+     tag-pfx (:c::hexlen (:c::tag-then ""))
+     lit-pfx (:c::hexlen (:c::lit-then ""))
+     prefix (:wat::core::+ (:wat::core::if tag? tag-pfx 0) (:wat::core::if lit? lit-pfx 0))
+     ;; cmp [rax-8],1 (5) ; jb rel32 (2 opcode + 4 displacement) -- the underflow guard,
+     ;; check build only, unchanged from before this round
+     guard (:wat::core::if dchk?
+             (:wat::core::let
+               [jb-end (:wat::core::+ (:c::here o) (:wat::core::+ prefix 11))
+                rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+               (:wat::string::concat "488378f801"
+                 (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+             "")
+     dec (:c::dec-hex)
+     ;; the dec above just took this object's count from 1 to 0 -- died right here -- or
+     ;; left it above 0 (still live). Only in the first case does anything else run: freeing
+     ;; (plain build only, F2, BEFORE the glue walks the children -- the CONTRACT's order),
+     ;; the glue call (G1), then the poison (G5, check build only).
+     zchk (:c::cmp-mi (:c::rax) -8 0)
+     ;; `free-pos` is where `body` -- and so `free-hex`, now its first piece -- begins: right
+     ;; after `zskip`'s own `rel8-size` bytes. None of the five free routines ever touch
+     ;; `rax`, so this call needs no `push`/`pop` of its own, unlike the glue call below.
+     free-pos (:wat::core::+ (:c::here o)
+                 (:wat::core::+ prefix
+                   (:wat::core::+ (:c::hexlen guard)
+                     (:wat::core::+ (:c::hexlen dec)
+                       (:wat::core::+ (:c::hexlen zchk) (:c::rel8-size))))))
+     free-hex (:wat::core::if dchk? ""
+                (:wat::string::concat "e8"
+                  (:asm::le (:wat::core::- (:c::free-target t pg) (:wat::core::+ free-pos 5)) 4)))
+     ;; a glue routine returns with `rax` holding whatever it last touched (its own last
+     ;; field or element), not the dying object -- `:c::rec-glue-fields`/`:c::vec-glue-body`/
+     ;; etc. all end their walk with `rax` pointing at the last thing THEY dropped, exactly
+     ;; like every other callee in this compiler leaves `rax` as scratch. The poison write
+     ;; below needs the ORIGINAL object back, so the call is wrapped in `push rax`/`pop rax`
+     ;; here, at the one call site, rather than asking every glue body to preserve it itself.
+     call-pos (:wat::core::+ free-pos (:wat::core::+ (:c::hexlen free-hex) 1))
+     call-hex (:wat::core::if has-glue?
+                (:wat::string::concat (:c::push-rax)
+                  (:wat::string::concat "e8"
+                    (:wat::string::concat (:asm::le (:wat::core::- glue (:wat::core::+ call-pos 5)) 4)
+                      (:c::pop-rax))))
+                "")
+     poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
+     body (:wat::string::concat free-hex (:wat::string::concat call-hex poison))
+     zskip (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)]
+    (:wat::string::concat guard
+      (:wat::string::concat dec
+        (:wat::string::concat zchk (:wat::string::concat zskip body)))))))
 
 ;; Same guards as `:c::count-hex`, then the decrement. A literal (count 0) is skipped.
 ;; A check build compares the count against 1 first and jumps to `:c::rt-uflow` when it is
@@ -4971,10 +5006,156 @@
               (:wat::core::conj acc1 nd))]
       (:c::gtys-from-vecs vecs (:wat::core::+ i 1) acc2))))
 
+;; excursus 008 stone 3b-2 (F1/F2): five pseudo-types, ALWAYS present (unconditionally
+;; appended, never found by `:c::census-walk`) so the five free routines they name are
+;; always placed and always addressable: `freestr` (a String's bytes), `freerec` (a
+;; record's OR a payload enum's, the same `len*8+16` shape), `freevec` (a flat, owned-flat,
+;; or trie Vector's own header -- the tag word says which), `freenode` (a trie node's fixed
+;; shape, called only from `:c::vec-glue-body`'s root and `:c::node-glue-body`'s child, not
+;; from a drop site directly), and `closize` (a closure's size, which cannot be read from
+;; the object -- see `:c::Fn/ncaps`).
 (:wat::core::defn :c::glue-census [pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
-  (:wat::core::let [c (:c::census-run pg)]
-    (:c::gtys-from-vecs (:c::Census/vecs c) 0
-      (:c::gtys-from-shapes (:c::Census/shapes c) 0 pg (:wat::core::Vector :- [:wat::core::String])))))
+  (:wat::core::let [c (:c::census-run pg)
+                    base (:c::gtys-from-vecs (:c::Census/vecs c) 0
+                           (:c::gtys-from-shapes (:c::Census/shapes c) 0 pg
+                             (:wat::core::Vector :- [:wat::core::String])))]
+    (:wat::core::conj
+      (:wat::core::conj
+        (:wat::core::conj
+          (:wat::core::conj (:wat::core::conj base "freestr") "freerec") "freevec") "freenode")
+      "closize")))
+
+;; the shared tail every free routine ends with: `rax` is the dying object, `startdisp` is
+;; how far its block's START sits before the pointer (`:c::vec-ptr` or `:c::varr-ptr`,
+;; negated), and `sizereg` already holds the block's size. **The one test freeing ever
+;; asks**: does this object's end equal the heap top? A wrong size answers no and the
+;; object simply stays -- a leak, never an overlap (the CONTRACT). `r10`/`r11` are this
+;; tail's own scratch, so no caller may pass either as `sizereg`.
+(:wat::core::defn :c::free-tail-emit [o <- :c::Out startdisp <- :wat::core::i64
+                                      sizereg <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::lea-at (:c::rax) startdisp (:c::r10)))
+     o2 (:c::emit o1 (:c::mov-rr (:c::r10) (:c::r11)))
+     o3 (:c::emit o2 (:c::add-rr sizereg (:c::r11)))
+     o4 (:c::emit o3 (:c::cmp-rr (:c::r15) (:c::r11)))
+     o5 (:c::emit o4 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     skip-at (:wat::core::- (:c::codelen o5) 4)
+     o6 (:c::emit o5 (:c::mov-rr (:c::r10) (:c::r15)))
+     o7 (:c::patch o6 skip-at (:asm::le (:wat::core::- (:c::codelen o6) (:wat::core::+ skip-at 4)) 4))]
+    (:c::emit o7 (:c::ret))))
+
+;; `freestr(rax = String) -> `, free to the bump. The size is `:c::rt-cap(len)` -- the SAME
+;; function `rt-str-cat`/`rt-str-subs`/`rt-i64-to-str` call to size the allocation, read
+;; back from the length the String itself still carries.
+(:wat::core::defn :c::freestr-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-rm (:c::rax) 0 (:c::rdx)))
+     o2 (:c::emit o1 (:c::rt-cap (:c::rdx) (:c::r8) (:c::r9)))]
+    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+
+;; `freerec(rax = record or payload enum) -> `. Both allocate through `:c::rt-vec-new`'s
+;; own `len*8+16` shape; a tier-3 enum's tag occupies field 0, which is exactly why its size
+;; is a FIELD COUNT and not a payload-type question.
+(:wat::core::defn :c::freerec-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-rm (:c::rax) 0 (:c::r8)))
+     o2 (:c::emit o1 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::vec-hdr) (:c::r9)))]
+    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+
+;; `freevec(rax = Vector) -> `. The one exception the CONTRACT names: a Vector's block can
+;; be any of three sizes, told apart by its own tag word, and the owned-flat case has no
+;; stored capacity at all -- its size is `:c::rt-vec-conj-own`'s OWN power-of-two rounding
+;; (`grown-test`'s `len*8+23` fed to the same bsr-and-shift `:c::rt-cap`'s `+15` bias already
+;; does, reproduced here by calling `:c::rt-cap` with `len*8+8`), the one function, two
+;; callers the WEIGH names. Three independent cases, each ending in its own `ret` -- no
+;; merge, so nothing has to be patched twice.
+(:wat::core::defn :c::freevec-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-tree)))
+     o2 (:c::emit o1 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     jne-tree-at (:wat::core::- (:c::codelen o2) 4)
+     ;; tree: fixed size (varr-hdr + shift + root)
+     o3 (:c::emit o2 (:c::mov-ri (:c::r9) (:wat::core::+ (:c::varr-hdr) (:wat::core::* 2 (:c::word)))))
+     o4 (:c::free-tail-emit o3 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))
+     ;; flat or owned: the jne above lands here
+     o5 (:c::patch o4 jne-tree-at (:asm::le (:wat::core::- (:c::codelen o4) (:wat::core::+ jne-tree-at 4)) 4))
+     o6 (:c::emit o5 (:c::mov-rm (:c::rax) 0 (:c::r8)))
+     o7 (:c::emit o6 (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat-own)))
+     o8 (:c::emit o7 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     jne-own-at (:wat::core::- (:c::codelen o8) 4)
+     ;; owned: spare capacity, recomputed, never stored
+     o9 (:c::emit o8 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::word) (:c::rdx)))
+     o10 (:c::emit o9 (:c::rt-cap (:c::rdx) (:c::r10) (:c::r9)))
+     o11 (:c::free-tail-emit o10 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))
+     ;; plain flat: the jne above lands here
+     o12 (:c::patch o11 jne-own-at (:asm::le (:wat::core::- (:c::codelen o11) (:wat::core::+ jne-own-at 4)) 4))
+     o13 (:c::emit o12 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::varr-hdr) (:c::r9)))]
+    (:c::free-tail-emit o13 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))))
+
+;; `freenode(rax = trie node) -> `. Fixed size, like `:c::rt-node-new`'s own allocation:
+;; one header word and 32 slots.
+(:wat::core::defn :c::freenode-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-ri (:c::r9) (:wat::core::+ (:c::vec-hdr) (:wat::core::* (:c::node-arity) (:c::word)))))]
+    (:c::free-tail-emit o1 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+
+;; `closize(rax = closure) -> `. `:c::close-form`'s last store overwrites the length word
+;; with the lifted function's code address, so the one place `ncaps` still exists is the
+;; creation site -- here, as a cascade comparing that code address against every LIFTED
+;; function's own address (`:c::Fn/addr`, real only in pass two; the comparison is done
+;; through a fixed-width `movabs` specifically so pass one, where every address is still the
+;; placeholder zero, measures the SAME length). Same `:c::jmp-unpatched`/`:c::patch` shape
+;; `:c::henum-glue-tags` already uses for its own tag cascade.
+(:wat::core::defrecord :c::CZ [o <- :c::Out jmps <- (:wat::core::Vector :- [:wat::core::i64])])
+
+(:wat::core::defn :c::closize-fns [fs <- :c::FnV i <- :wat::core::i64 cz <- :c::CZ] -> :c::CZ
+  (:wat::core::if (:wat::core::>= i (:wat::core::length fs)) cz
+    (:wat::core::let [f (:wat::core::nth fs i)]
+      (:wat::core::if
+        (:wat::core::not (:wat::core::and (:c::Fn/lifted f) (:wat::core::> (:c::Fn/ncaps f) 0)))
+        (:c::closize-fns fs (:wat::core::+ i 1) cz)
+        (:wat::core::let
+          [o (:c::CZ/o cz)
+           o1 (:c::emit o (:c::movabs (:c::r10) (:c::Fn/addr f)))
+           o2 (:c::emit o1 (:c::cmp-rr (:c::r10) (:c::r9)))
+           o3 (:c::emit o2 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+           jne-at (:wat::core::- (:c::codelen o3) 4)
+           o4 (:c::emit o3 (:c::mov-ri (:c::r11) (:c::Fn/ncaps f)))
+           o5 (:c::emit o4 (:c::jmp-unpatched))
+           jmp-at (:wat::core::- (:c::codelen o5) 4)
+           o6 (:c::patch o5 jne-at (:asm::le (:wat::core::- (:c::codelen o5) (:wat::core::+ jne-at 4)) 4))
+           cz2 (:c::CZ :o o6 :jmps (:wat::core::conj (:c::CZ/jmps cz) jmp-at))]
+          (:c::closize-fns fs (:wat::core::+ i 1) cz2))))))
+
+(:wat::core::defn :c::closize-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-rm (:c::rax) 0 (:c::r9)))
+     cz0 (:c::CZ :o o1 :jmps (:wat::core::Vector :- [:wat::core::i64]))
+     cz1 (:c::closize-fns (:c::Prog/fns pg) 0 cz0)
+     o2 (:c::emit (:c::CZ/o cz1) (:c::xor-rr (:c::r11) (:c::r11)))
+     o3 (:c::patch-jmps (:c::CZ/jmps cz1) 0 o2)
+     o4 (:c::emit o3 (:c::lea (:c::no-reg) (:c::r11) (:c::word) (:c::vec-hdr) (:c::r9)))]
+    (:c::free-tail-emit o4 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+
+;; the address of a pseudo-glue entry by its exact name, bypassing `:c::glue-target-ty`
+;; (these five are never a value's TYPE, so that resolution does not apply)
+(:wat::core::defn :c::pseudo-addr [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::let [i (:c::index-of-str (:c::Prog/gtys pg) name 0)]
+    (:wat::core::if (:wat::core::< i 0) -1 (:wat::core::nth (:c::Prog/gaddrs pg) i))))
+
+;; which free routine a drop site's type resolves to -- the SAME resolution `:c::glue-addr`
+;; already applies (a `penum:` value IS its payload), so a `rec:`/`henum:` share one free
+;; shape and a `penum:` is asked for its payload's.
+(:wat::core::defn :c::free-target [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::let [t2 (:c::glue-target-ty t pg)]
+    (:wat::core::cond
+      ((:wat::core::= t2 "str") (:c::pseudo-addr pg "freestr"))
+      ((:wat::string::starts-with? t2 "rec:") (:c::pseudo-addr pg "freerec"))
+      ((:wat::string::starts-with? t2 "henum:") (:c::pseudo-addr pg "freerec"))
+      ((:wat::string::starts-with? t2 "vec:") (:c::pseudo-addr pg "freevec"))
+      ((:wat::string::starts-with? t2 "fn:") (:c::pseudo-addr pg "closize"))
+      (:else (:wat::kernel::assertion-failed!
+               :message (:wat::string::concat "compile: no free shape for " t2))))))
 
 (:wat::core::defn :c::zvec [n <- :wat::core::i64 i <- :wat::core::i64
                             acc <- (:wat::core::Vector :- [:wat::core::i64])]
@@ -5112,7 +5293,11 @@
      o6d (:c::emit o6c (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
      root-jne-at (:wat::core::- (:c::codelen o6d) 4)
      o6e (:c::emit o6d (:c::push-rax))
-     o7a (:c::call o6e (:c::glue-addr (:wat::string::concat "node:" elem) pg))
+     ;; excursus 008 stone 3b-2 (F2): free the root NODE itself -- plain build only, BEFORE
+     ;; walking its own children -- the same order `:c::dropchk-hex` uses, so a child node
+     ;; whose block sat just below this root becomes the youngest in turn.
+     o6f (:wat::core::if dchk? o6e (:c::call o6e (:c::pseudo-addr pg "freenode")))
+     o7a (:c::call o6f (:c::glue-addr (:wat::string::concat "node:" elem) pg))
      o7b (:c::emit o7a (:c::pop-rax))
      o7c (:wat::core::if dchk? (:c::emit o7b (:c::mov-mi (:c::rax) -8 (:c::poison-count))) o7b)
      o7 (:c::patch o7c root-jne-at (:asm::le (:wat::core::- (:c::codelen o7c) (:wat::core::+ root-jne-at 4)) 4))
@@ -5191,7 +5376,10 @@
      o16d (:c::emit o16c (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
      child-jne-at (:wat::core::- (:c::codelen o16d) 4)
      o16e (:c::emit o16d (:c::push-rax))
-     o17 (:c::emit o16e (:c::mov-rr (:c::r13) (:c::rdx)))
+     ;; excursus 008 stone 3b-2 (F2): free the child NODE itself -- plain build only,
+     ;; BEFORE walking ITS children -- same order as the root's, above.
+     o16f (:wat::core::if dchk? o16e (:c::call o16e (:c::pseudo-addr pg "freenode")))
+     o17 (:c::emit o16f (:c::mov-rr (:c::r13) (:c::rdx)))
      o18 (:c::emit o17 (:c::sub-ri (:c::rdx) 5))
      o18a (:c::call o18 (:c::glue-addr (:wat::string::concat "node:" elem) pg))
      o18b (:c::emit o18a (:c::pop-rax))
@@ -5218,6 +5406,12 @@
     ((:wat::string::starts-with? t "vec:") (:c::vec-glue-body t pg rt o))
     ((:wat::string::starts-with? t "node:")
       (:c::node-glue-body (:wat::string::subs t 5 (:wat::string::length t)) pg rt o))
+    ;; excursus 008 stone 3b-2 (F1/F2): the five free routines, always present
+    ((:wat::core::= t "freestr") (:c::freestr-glue-body pg rt o))
+    ((:wat::core::= t "freerec") (:c::freerec-glue-body pg rt o))
+    ((:wat::core::= t "freevec") (:c::freevec-glue-body pg rt o))
+    ((:wat::core::= t "freenode") (:c::freenode-glue-body pg rt o))
+    ((:wat::core::= t "closize") (:c::closize-glue-body pg rt o))
     (:else (:wat::kernel::assertion-failed!
              :message (:wat::string::concat "compile: no glue shape for " t)))))
 
@@ -8203,7 +8397,7 @@
                 ;; is allowed to be declared after the function that uses it, as it is in wat
                 (:c::Fn :name (:c::text pg (:wat::core::nth ks 1)) :node t :addr 0 :ret ""
                         :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0
-                        :lifted false)))
+                        :lifted false :ncaps 0)))
             dir))
         ((:c::defrecord? head)
           (:wat::core::let [fv (:c::kidsof pg (:wat::core::nth ks 2))]
@@ -9381,7 +9575,8 @@
        df (:c::mknode (:c::NodeR/pg n) (:rd::Kind.List {}) (:c::text pg a)
              (:c::cat-kids base (:c::KidL/kids br) 0) -1)
        this (:c::Fn :name nm :node (:c::NodeR/node df) :addr 0 :ret ""
-                    :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0 :lifted true)
+                    :ptys (:wat::core::Vector :- [:wat::core::String]) :nargs 0 :lifted true
+                    :ncaps (:wat::core::length syms))
        hd (:c::mknode (:c::NodeR/pg df) (:rd::Kind.Symbol {}) ":c::close"
              (:wat::core::Vector :- [:wat::core::i64]) -1)
        sn (:c::mknode (:c::NodeR/pg hd) (:rd::Kind.Symbol {}) nm
