@@ -43,6 +43,15 @@ ALLOW=(
   '(:c::mov-rm r d r)|1|`scalar-bytes`: the prologue of a scalarised record parameter. The register IS the field, and every use of it is an accessor, counted by read-out'"'"'s :Reg arm'
   '(:c::mov-rm (:c::rsp)|1|the entry stub: totalram from the sysinfo struct on the stack, not a container'
   '(:c::mov-rm32 (:c::rsp)|1|the entry stub: mem_unit, a u32 in that same stack struct'
+  # excursus 008 stone 3b-1 round 3 (G1): every load below is inside a drop-GLUE routine, reading
+  # a field OF THE OBJECT THAT IS DYING so it can be dropped in turn -- the field's one reference
+  # is being given back, never duplicated, so none of these is the F-188 shape :c::read-out
+  # guards against (a read that keeps a NEW reference while the container still holds its own).
+  '(:c::mov-rm (:c::rbx) (:wat::core::+ 8 (:wat::core::* 8 i)) (:c::rax))|1|:c::rec-glue-fields: a record field read to be dropped as the record dies'
+  '(:c::mov-rm (:c::rbx) (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ j 1)))|1|:c::henum-glue-drop-fields: a payload field read to be dropped as the payload dies'
+  '(:c::mov-rm (:c::rbx) 8 (:c::rax))|1|:c::henum-glue-body: the tag at slot 0, i64, not a reference'
+  '(:c::mov-rm (:c::rbx) 8 (:c::rdx))|1|:c::vec-glue-body: a trie Vector'"'"'s shift, i64, not a reference'
+  '(:c::mov-rm (:c::rbx) 16 (:c::rax))|1|:c::vec-glue-body: the root node, read to drop it (its own count, not the Vector'"'"'s) as the Vector dies'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do
@@ -87,7 +96,12 @@ while IFS= read -r h; do
 done <<< "$(echo "$code" | grep -E '\(:c::at-[a-z0-9-]+ rt\)')"
 
 # ---- 3. the count is still there, and still one spelling
-echo "$code" | awk -F: -v s="$start" -v e="$end" '$1>=s && $1<=e' | grep -q '(:c::count-hex t pg)' \
+#
+# excursus 008 stone 3b-1 (G5): `:c::count-hex` grew an `rt <- :c::Layout` parameter (the
+# increment's own poison check needs `:c::at-uflow rt`), so `:c::read-out`'s call is now
+# `(:c::count-hex t pg lo rt)`, not `(:c::count-hex t pg)`. The pattern follows the call, not
+# the other way around.
+echo "$code" | awk -F: -v s="$start" -v e="$end" '$1>=s && $1<=e' | grep -q '(:c::count-hex t pg lo rt)' \
   || { echo "reads: FAIL -- :c::read-out no longer emits :c::count-hex"; fail=1; }
 callers=$(echo "$code" | grep -c '(:c::count-hex ')
 # 3: share, read-out, and the copying conj, which takes one reference to its source

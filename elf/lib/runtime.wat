@@ -1914,6 +1914,14 @@
 ;; from `:c::heap-arm` so that a Vector built by the COPYING `vec_conj` can never be mistaken
 ;; for one this routine made and may extend in place again.
 (:wat::core::defn :c::arm-own [] -> :wat::core::i64 4294967297)
+;; excursus 008 stone 3b-1 (G5): what a dead object's count word becomes, under
+;; `WAT_DROP_CHECK=1`, the moment a decrement takes it to zero. Not 0 -- a literal's count is
+;; already 0, and a poisoned object must never read as one. Not `:c::arm-own` -- that word sits
+;; one slot further from the pointer for a Vector and never overlaps this one. `-1` sign-extends
+;; through `:c::mov-mi`'s 32-bit immediate to fill the whole 64-bit word, and no live count is
+;; ever negative, so one comparison tells a poisoned object from a live one. Nothing is freed
+;; this strike -- the bytes stay exactly where they were, only unusable.
+(:wat::core::defn :c::poison-count [] -> :wat::core::i64 -1)
 ;; a tree node: one header word, then a fixed fan-out of child slots
 (:wat::core::defn :c::node-data [] -> :wat::core::i64 8)
 (:wat::core::defn :c::node-arity [] -> :wat::core::i64 32)

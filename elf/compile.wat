@@ -1235,7 +1235,15 @@
    ;; parallel to `otys`: the node each made node stands for, or -1 -- so a refusal inside
    ;; inlined code can say where the program WROTE it (`:c::where`), tracking or not
    oorgs <- (:wat::core::Vector :- [:wat::core::i64])
-   src <- :rd::St])
+   src <- :rd::St
+   ;; excursus 008 stone 3b-1 round 3 (G1): the drop-glue census, computed once from
+   ;; declarations before either pass runs (`:c::glue-census`) -- every non-recursive pointer
+   ;; type that reaches a drop site and holds something. `gaddrs` is parallel: zero (a
+   ;; placeholder) during pass one, the real address of each routine during pass two, filled in
+   ;; by `:c::glue-place` the same way `:c::place` fills in `:fns`. `:c::glue-addr` is the one
+   ;; reader.
+   gtys <- (:wat::core::Vector :- [:wat::core::String])
+   gaddrs <- (:wat::core::Vector :- [:wat::core::i64])])
 
 ;; `:c::Bind/name` is a record accessor and `user/main` is a function; the difference is whether
 ;; the part before the LAST slash names a record. Scanning from the end is the only way to find
@@ -1286,7 +1294,9 @@
             :track false :exp false :final false :cur ""
             :obase 0 :otys (:wat::core::Vector :- [:wat::core::String])
             :oorgs (:wat::core::Vector :- [:wat::core::i64])
-            :src (rd/read "")))
+            :src (rd/read "")
+            :gtys (:wat::core::Vector :- [:wat::core::String])
+            :gaddrs (:wat::core::Vector :- [:wat::core::i64])))
 
 (:wat::core::defn :c::fn-ret [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64
                               a <- :wat::core::i64] -> :wat::core::String
@@ -2401,10 +2411,10 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::if (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
       (:c::tail-share (:wat::core::nth ks i) pv (:wat::core::- i 1) env pg
-        (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)))
+        (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) rt)
       (:c::push-but-last ks (:wat::core::+ i 1)
         (:c::push (:c::tail-share (:wat::core::nth ks i) pv (:wat::core::- i 1) env pg
-                    (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) (:c::push-rax) 8)
+                    (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) rt) (:c::push-rax) 8)
         env pg rt tb slot pv))))
 
 ;; ---------------------------------------------------------------- expressions
@@ -2578,7 +2588,7 @@
                  ;; a named source that is not linear is incremented, then the copy
                  ;; drops that extra, and a last use drops the binding as well
                  o2 (:wat::core::if (:wat::core::and sym? (:wat::core::not own?))
-                      (:c::emit o1 (:c::count-hex (:c::type-of arg env pg) pg))
+                      (:c::emit o1 (:c::count-hex (:c::type-of arg env pg) pg o1 rt))
                       o1)
                  ;; R9 (excursus 008 stone 3a round 4): D3's copy takes ownership of its
                  ;; source and drops it once, always, whenever the copying (not `own?`)
@@ -2711,7 +2721,7 @@
                  o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)]
                 (:c::drop-if-last (:wat::core::nth ks 1)
                   (:c::read-out (:c::elem-ty (:c::type-of (:wat::core::nth ks 1) env pg))
-                    (:c::Read.Elem {:tget (:c::at-tget rt)}) o3 a pg)
+                    (:c::Read.Elem {:tget (:c::at-tget rt)}) o3 a pg rt)
                   env pg rt))))
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
@@ -2728,12 +2738,12 @@
                       ;; skip the second use of the same name in one expression, and the
                       ;; matching drop would then drive the count down.
                       (:wat::core::if (:wat::core::and sym? (:wat::core::not own?))
-                        (:c::emit (:c::expr box o env pg rt tb slot (:c::no-tail))
-                          (:c::count-hex (:c::type-of box env pg) pg))
+                        (:wat::core::let [ob (:c::expr box o env pg rt tb slot (:c::no-tail))]
+                          (:c::emit ob (:c::count-hex (:c::type-of box env pg) pg ob rt)))
                         (:c::expr box o env pg rt tb slot (:c::no-tail)))
                       (:c::push-rax) 8)
                  o2 (:c::share (:wat::core::nth ks 2) env pg
-                      (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)))]
+                      (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)) rt)]
                 (:wat::core::let
                   [vt (:c::type-of box env pg)
                    ptr (:wat::core::if (:wat::string::starts-with? vt "vec:")
@@ -2785,16 +2795,16 @@
                     (:c::fail "scalar field" a pg))
                   ((:wat::core::and (:wat::core::>= sf 0) (:wat::core::>= r 0))
                     (:c::drop-if-last opnd
-                      (:c::read-out (:c::acc-ty pg head) (:c::Read.Reg {:r r}) o a pg)
+                      (:c::read-out (:c::acc-ty pg head) (:c::Read.Reg {:r r}) o a pg rt)
                       env pg rt))
                   ((:wat::core::>= r 0)
                     (:c::drop-if-last opnd
-                      (:c::read-out (:c::acc-ty pg head) (:c::Read.AtReg {:r r :d d}) o a pg)
+                      (:c::read-out (:c::acc-ty pg head) (:c::Read.AtReg {:r r :d d}) o a pg rt)
                       env pg rt))
                   (:else
                     (:c::drop-if-last opnd
                       (:c::read-out (:c::acc-ty pg head) (:c::Read.At {:d d})
-                        (:c::expr opnd o env pg rt tb slot (:c::no-tail)) a pg)
+                        (:c::expr opnd o env pg rt tb slot (:c::no-tail)) a pg rt)
                       env pg rt))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
@@ -3408,16 +3418,27 @@
     (:c::emit o (:c::mov-rr (:c::reg-of a env pg) (:c::rcx)))))
 
 ;; the same shape, with a call where the arithmetic fold has an instruction
+;;
+;; excursus 008 stone 3b-1 (round 3): round 2 added a `needs-share?` increment here, reasoning
+;; that a folded operand (`ks[i]`, i >= 2) read again later needed one. Refuted: `str_cat` /
+;; `str_cat_own` (`elf/lib/runtime.wat`) COPY their right operand (rcx) and consume only the
+;; left, the accumulator -- a folded operand is READ, exactly like an `nth` argument, and
+;; nothing downstream drops it after this call returns. The share was therefore an increment
+;; nothing gives back: a leak on every `concat` of a live name. The real defect this round 2
+;; chased was `:c::eval-seq`'s write-head deferral (fixed at `elf/compile.wat:3831`); the
+;; SCORE's own ablation already showed this share was not what made the crash go away. Back to
+;; handing the operand to `:c::expr` bare, with no share.
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                 rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64
                                 own? <- :wat::core::bool] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
-      [direct? (:c::rcx-direct? (:wat::core::nth ks i) env pg)
+      [arg (:wat::core::nth ks i)
+       direct? (:c::rcx-direct? arg env pg)
        o1 (:wat::core::if direct? o (:c::push o (:c::push-rax) 8))      ;; push rax
-       o2 (:wat::core::if direct? (:c::rcx-direct (:wat::core::nth ks i) o1 env pg tb)
-            (:c::expr (:wat::core::nth ks i) o1 env pg rt tb slot (:c::no-tail)))
+       o2 (:wat::core::if direct? (:c::rcx-direct arg o1 env pg tb)
+            (:c::expr arg o1 env pg rt tb slot (:c::no-tail)))
        o3 (:wat::core::if direct? o2 (:c::emit o2 "4889c1"))  ;; mov rcx, rax
        o4 (:wat::core::if direct? o3 (:c::popn o3 (:c::pop-rax) 8))     ;; pop rax
        o5 (:c::call o4 (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))]
@@ -3823,8 +3844,22 @@
           ;; and hands it to the runtime routine that consumes it (D3). That is when the
           ;; generated code actually uses it, not where it sits in the text -- the same
           ;; class F-208 named for an indirect call's head.
+          ;;
+          ;; excursus 008 stone 3b-1 (round 2): that deferral is only sound when kid 1 IS the
+          ;; box -- a bare Symbol with nothing beneath it. `:c::concat`'s own generator (and
+          ;; `:c::conj`'s) always compiles kid 1's own EXPRESSION first, unconditionally,
+          ;; before the rest -- only the box's own last-use BOOKKEEPING is finalized after
+          ;; (`:c::drop-saved`, once the rest is compiled). Deferring a COMPOUND kid 1 (e.g.
+          ;; `(:c::br-len ... (:c::hexlen kid) ...)`) drags every name nested inside it along
+          ;; to the end of the walk too, even though those nested occurrences run FIRST, not
+          ;; last: a name used there and again in a later operand (`:c::rt-tree-push`'s `kid`,
+          ;; used inside kid 1's own subexpression and again as a later operand) then gets
+          ;; recorded as the function's last mention one occurrence too early, so the true
+          ;; later use finds it already dropped. A bare-Symbol kid 1 has no such subtree to
+          ;; drag, so only that case still defers.
           (:wat::core::if (:wat::core::and (:c::write-head? (:c::text pg (:wat::core::nth ks 0)))
-                            (:wat::core::>= (:wat::core::length ks) 2))
+                            (:wat::core::and (:wat::core::>= (:wat::core::length ks) 2)
+                              (:wat::core::= (:c::kindv (:wat::core::nth ks 1) pg) (:rd::Kind.Symbol {}))))
             (:wat::core::conj
               (:c::conj-range pg (:wat::core::Vector :- [:wat::core::i64]) ks 2 (:wat::core::length ks))
               (:wat::core::nth ks 1))
@@ -4051,7 +4086,8 @@
 ;; the name of parameter j -- so the store is `mov %rN,%rax ; mov %rax,%rN` -- and nothing in
 ;; the body retains it.
 (:wat::core::defn :c::tail-share [a <- :wat::core::i64 pv <- :c::Kids j <- :wat::core::i64
-                                  env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
+                                  env <- :c::Env pg <- :c::Prog o <- :c::Out
+                                  rt <- :c::Layout] -> :c::Out
   (:wat::core::if
     (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
       (:wat::core::and (:wat::core::< (:wat::core::* 3 j) (:wat::core::length pv))
@@ -4059,7 +4095,7 @@
           (:wat::core::= (:c::text pg a) (:c::text pg (:wat::core::nth pv (:wat::core::* 3 j))))
           (:c::ronly? pg (:c::text pg a) 0))))
     o
-    (:c::share a env pg o)))
+    (:c::share a env pg o rt)))
 
 
 ;; A SYMBOL gets the two proofs above. A non-symbol operand used to get a sentence instead:
@@ -4107,7 +4143,8 @@
 ;; that the allocator already gave it. The other caller is `:c::read-out`, below: a pointer
 ;; read out of a CONTAINER, which is the one way a value reaches a name or an argument already
 ;; held somewhere else without passing through here.
-(:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out] -> :c::Out
+(:wat::core::defn :c::share [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog o <- :c::Out
+                             rt <- :c::Layout] -> :c::Out
   (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
                     (:c::ptr-ty? (:c::type-of a env pg)))
     ;; A last use is a move: the callee or the store takes the reference the caller had.
@@ -4115,7 +4152,7 @@
     ;; under-counted a second store of the same name, and the matching drop then
     ;; drove the count too low.
     (:wat::core::if (:c::last-use? a (:c::text pg a) pg) o
-      (:c::emit o (:c::count-hex (:c::type-of a env pg) pg)))
+      (:c::emit o (:c::count-hex (:c::type-of a env pg) pg o rt)))
     o))
 
 ;; excursus 008 stone 3a round 7 (R16). **The rule for a VALUE POSITION, in one place.** An
@@ -4141,7 +4178,7 @@
 (:wat::core::defn :c::expr-val [a <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                 rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64
                                 tc <- :c::TC] -> :c::Out
-  (:c::share a env pg (:c::expr a o env pg rt tb slot tc)))
+  (:c::share a env pg (:c::expr a o env pg rt tb slot tc) rt))
 
 ;; **the bytes of the increment, for a value of type `t` already in rax.** One emission, two
 ;; callers (`:c::share`, `:c::read-out`). What is emitted follows what a value of `t` can BE:
@@ -4228,14 +4265,37 @@
 (:wat::core::defn :c::tag-needed? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:c::maybe-unit? t) (:wat::core::< (:c::variant-of t pg) 0)))
 
-(:wat::core::defn :c::count-hex [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+;; excursus 008 stone 3b-1 (G5): the increment's half of the poison check. A poisoned object's
+;; count word (`:c::poison-count`) cannot equal any live count, so one equality test in front
+;; of the ordinary increment is enough -- and it reuses the SAME named stop the decrement side
+;; reaches (`:c::rt-uflow`), not a second message: "a poisoned object was touched" is one fact,
+;; whichever direction touched it. `tag?` is the same convention `:c::dropchk-hex`'s `prefix`
+;; is: whether an outer `:c::tag-then` sits between `:c::here o` and these bytes, asked of the
+;; guard itself with an empty body rather than copied by hand.
+(:wat::core::defn :c::countchk-hex [o <- :c::Out rt <- :c::Layout pg <- :c::Prog
+                                    tag? <- :wat::core::bool] -> :wat::core::String
+  (:wat::core::if (:wat::core::not (:c::Prog/dchk pg)) ""
+    (:wat::core::let
+      [tag-pfx (:wat::core::if tag? (:c::hexlen (:c::tag-then "")) 0)
+       chk (:c::cmp-mi (:c::rax) -8 (:c::poison-count))
+       jcc-end (:wat::core::+ (:c::here o)
+                  (:wat::core::+ tag-pfx (:wat::core::+ (:c::hexlen chk) (:c::rel32-size))))
+       rel (:wat::core::- (:c::at-uflow rt) jcc-end)]
+      (:wat::string::concat chk
+        (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero)) (:asm::le rel 4))))))
+
+(:wat::core::defn :c::count-hex [t <- :wat::core::String pg <- :c::Prog o <- :c::Out
+                                 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::cond
     ((:c::unit-variant? t pg) "")
     ((:wat::core::not (:c::ptr-ty? t)) "")
     ((:c::tag-needed? t pg)
-      (:c::tag-then (:wat::core::if (:c::maybe-literal? t pg) (:c::lit-hex) (:c::bare-hex))))
-    ((:c::maybe-literal? t pg) (:c::lit-hex))
-    (:else (:c::bare-hex))))
+      (:c::tag-then
+        (:wat::string::concat (:c::countchk-hex o rt pg true)
+          (:wat::core::if (:c::maybe-literal? t pg) (:c::lit-hex) (:c::bare-hex)))))
+    (:else
+      (:wat::string::concat (:c::countchk-hex o rt pg false)
+        (:wat::core::if (:c::maybe-literal? t pg) (:c::lit-hex) (:c::bare-hex))))))
 
 ;; R11 (excursus 008 stone 3a round 5): whether `WAT_DROP_CHECK=1` is a WHOLE entry of the
 ;; NUL-separated environ, not a substring anywhere in it -- `contains?` alone wrongly accepted
@@ -4280,25 +4340,70 @@
 ;; there. The fix is not to make `ud2` faster; it is to never let the kernel's crash path decide,
 ;; exactly as stone 1's `wat: heap exhausted` does: a named message on stderr and a syscall exit,
 ;; the shared `:c::rt-uflow` stub (`elf/lib/runtime.wat`) reached by a `jb rel32`, not a trap.
+;; excursus 008 stone 3b-1 round 3 (G1): a glue-bearing type needs the zero-check REGARDLESS of
+;; the check build, because a plain build must also call the glue when the count reaches zero.
+;; `has-glue?` is the only new branch condition -- when it is false this function is byte-for-
+;; byte what it was before this round (the plain build's fast path is still one `dec`), and the
+;; existing G5 poison, when the check build is also on, is simply one more thing the same "zero"
+;; branch does, after the glue call.
 (:wat::core::defn :c::dropchk-hex [t <- :wat::core::String pg <- :c::Prog o <- :c::Out
                                    rt <- :c::Layout lit? <- :wat::core::bool
                                    tag? <- :wat::core::bool] -> :wat::core::String
-  (:wat::core::if (:wat::core::not (:c::Prog/dchk pg)) (:c::dec-hex)
-    (:wat::core::let
-      ;; the prefix any OUTER guard contributes before these bytes land: `:c::tag-then`'s
-      ;; `cmp rax,0x1000 ; jb` and the literal guard's `cmp [rax-8],0 ; je` are each fixed size
-      ;; regardless of what they skip over -- so calling each with an EMPTY body asks the
-      ;; function itself how many bytes that fixed part is, rather than copying the count by
-      ;; hand where a change to either guard could leave it stale.
-      [tag-pfx (:c::hexlen (:c::tag-then ""))
-       lit-pfx (:c::hexlen (:c::lit-then ""))
-       prefix (:wat::core::+ (:wat::core::if tag? tag-pfx 0) (:wat::core::if lit? lit-pfx 0))
-       ;; cmp [rax-8],1 (5) ; jb rel32 (2 opcode + 4 displacement) ; dec (4)
-       jb-end (:wat::core::+ (:c::here o) (:wat::core::+ prefix 11))
-       rel (:wat::core::- (:c::at-uflow rt) jb-end)]
-      (:wat::string::concat "488378f801"
-        (:wat::string::concat (:c::jcc-rel32 (:c::cc-below))
-          (:wat::string::concat (:asm::le rel 4) (:c::dec-hex)))))))
+  (:wat::core::let
+    [glue (:c::glue-addr t pg)
+     has-glue? (:wat::core::>= glue 0)
+     dchk? (:c::Prog/dchk pg)]
+    (:wat::core::if (:wat::core::and (:wat::core::not dchk?) (:wat::core::not has-glue?))
+      (:c::dec-hex)
+      (:wat::core::let
+        ;; the prefix any OUTER guard contributes before these bytes land: `:c::tag-then`'s
+        ;; `cmp rax,0x1000 ; jb` and the literal guard's `cmp [rax-8],0 ; je` are each fixed size
+        ;; regardless of what they skip over -- so calling each with an EMPTY body asks the
+        ;; function itself how many bytes that fixed part is, rather than copying the count by
+        ;; hand where a change to either guard could leave it stale.
+        [tag-pfx (:c::hexlen (:c::tag-then ""))
+         lit-pfx (:c::hexlen (:c::lit-then ""))
+         prefix (:wat::core::+ (:wat::core::if tag? tag-pfx 0) (:wat::core::if lit? lit-pfx 0))
+         ;; cmp [rax-8],1 (5) ; jb rel32 (2 opcode + 4 displacement) -- the underflow guard,
+         ;; check build only, unchanged from before this round
+         guard (:wat::core::if dchk?
+                 (:wat::core::let
+                   [jb-end (:wat::core::+ (:c::here o) (:wat::core::+ prefix 11))
+                    rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+                   (:wat::string::concat "488378f801"
+                     (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+                 "")
+         dec (:c::dec-hex)
+         ;; the dec above just took this object's count from 1 to 0 -- died right here -- or
+         ;; left it above 0 (still live). Only in the first case does anything else run: the
+         ;; glue call (G1), then the poison (G5, check build only). Nothing is freed: the bytes
+         ;; stay put, only unusable (G5) or unreachable through this reference (G1); G4 is a
+         ;; later strike.
+         zchk (:c::cmp-mi (:c::rax) -8 0)
+         ;; a glue routine returns with `rax` holding whatever it last touched (its own last
+         ;; field or element), not the dying object -- `:c::rec-glue-fields`/`:c::vec-glue-body`/
+         ;; etc. all end their walk with `rax` pointing at the last thing THEY dropped, exactly
+         ;; like every other callee in this compiler leaves `rax` as scratch. The poison write
+         ;; below needs the ORIGINAL object back, so the call is wrapped in `push rax`/`pop rax`
+         ;; here, at the one call site, rather than asking every glue body to preserve it itself.
+         call-pos (:wat::core::+ (:c::here o)
+                     (:wat::core::+ prefix
+                       (:wat::core::+ (:c::hexlen guard)
+                         (:wat::core::+ (:c::hexlen dec)
+                           (:wat::core::+ (:c::hexlen zchk)
+                             (:wat::core::+ (:c::rel8-size) 1))))))
+         call-hex (:wat::core::if has-glue?
+                    (:wat::string::concat (:c::push-rax)
+                      (:wat::string::concat "e8"
+                        (:wat::string::concat (:asm::le (:wat::core::- glue (:wat::core::+ call-pos 5)) 4)
+                          (:c::pop-rax))))
+                    "")
+         poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
+         body (:wat::string::concat call-hex poison)
+         zskip (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)]
+        (:wat::string::concat guard
+          (:wat::string::concat dec
+            (:wat::string::concat zchk (:wat::string::concat zskip body))))))))
 
 ;; Same guards as `:c::count-hex`, then the decrement. A literal (count 0) is skipped.
 ;; A check build compares the count against 1 first and jumps to `:c::rt-uflow` when it is
@@ -4453,6 +4558,524 @@
 (:wat::core::defn :c::emit-drop [t <- :wat::core::String o <- :c::Out pg <- :c::Prog
                                  rt <- :c::Layout] -> :c::Out
   (:c::emit o (:c::drop-hex t pg o rt)))
+
+;; ---------------------------------------------------------------- G1: drop glue per type
+;;
+;; excursus 008 stone 3b-1 round 3. One CALLED routine per non-recursive pointer type that
+;; reaches a drop site: `rec:R` walks its pointer fields by the mask; `vec:T` walks its flat
+;; elements or the trie's nodes; `henum:E` walks the live variant's payload by tag. `str` and a
+;; non-pointer hold nothing, so they get no entry and no call -- `:c::glue-addr` answers -1 and
+;; the drop site's fast path (a bare `dec`) is unchanged, exactly as it was before this round.
+;; A `penum:` value never gets its OWN routine: tier 1's payload IS the pointer, so dropping it
+;; is dropping the SOLE PAYLOAD TYPE directly (`:c::glue-target-ty`). A type that reaches ITSELF
+;; through its `rec:`/`henum:` fields (a cycle, `:c::cyclic?`) gets no routine either: its
+;; references leak, late, never early, exactly as the WEIGH's ruling asks -- a `vec:T`/`fn:...`
+;; field never counts as a cycle edge, because a Vector's own recursion is bounded by the trie
+;; (13 levels, `:c::node-arity`) regardless of what `T` is, and a closure's captures are a
+;; separate strike (G2).
+;;
+;; The census is computed ONCE, purely from declarations, before either compiler pass runs, and
+;; handed to both passes on `:c::Prog` (`:gtys`/`:gaddrs`, parallel). Every glue routine is built
+;; the same two-pass way `:c::Prog/fns` are: pass one measures each routine's length with every
+;; OTHER routine's address at a placeholder zero (a `call rel32` is five bytes regardless of the
+;; value it carries, so the length is unaffected); `:c::glue-place` then assigns real addresses,
+;; one section after the user code and before the runtime block; pass two rebuilds every routine
+;; with the real table now filled in. No topological order is needed -- forward and mutual glue
+;; references (two record types that each hold a Vector of the other) work exactly like two user
+;; functions that call each other, because nothing here is built incrementally against a growing
+;; layout the way the static runtime block is.
+
+;; a `penum:` value's OWN routine would be redundant: it never allocates a header of its own, so
+;; dropping it IS dropping the payload type. Every other type passes through unchanged.
+(:wat::core::defn :c::glue-target-ty [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::string::starts-with? t "penum:")
+    (:wat::core::let [ei (:c::ty-enum t pg) arg (:c::enum-arg t)
+                      p (:c::sole-payload-ty (:c::Prog/enums pg) ei arg pg)]
+      (:wat::core::if (:wat::core::= p "") t p))
+    t))
+
+;; the glue address for a value of type `t`, or -1 when nothing was built for it -- a type
+;; without an entry keeps the bare decrement it always had.
+(:wat::core::defn :c::glue-addr [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
+  (:wat::core::let [t2 (:c::glue-target-ty t pg)
+                    i (:c::index-of-str (:c::Prog/gtys pg) t2 0)]
+    (:wat::core::if (:wat::core::< i 0) -1 (:wat::core::nth (:c::Prog/gaddrs pg) i))))
+
+;; ---------------------------------------------------------------- the census
+
+(:wat::core::defn :c::rec-of [t <- :wat::core::String pg <- :c::Prog] -> :c::Rec
+  (:wat::core::nth (:c::Prog/recs pg) (:c::rec-index (:c::Prog/recs pg) (:c::rec-name-of t) 0)))
+
+(:wat::core::defn :c::filter-ptr [ts <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ts)) acc
+    (:c::filter-ptr ts (:wat::core::+ i 1)
+      (:wat::core::if (:c::ptr-ty? (:wat::core::nth ts i))
+        (:wat::core::conj acc (:wat::core::nth ts i)) acc))))
+
+;; a record's own pointer field types, in field order
+(:wat::core::defn :c::rec-ptr-ftys [t <- :wat::core::String pg <- :c::Prog]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:c::filter-ptr (:c::Rec/ftypes (:c::rec-of t pg)) 0 (:wat::core::Vector :- [:wat::core::String])))
+
+;; every pointer field type across every variant of a `henum:` type, at its instantiation
+(:wat::core::defn :c::vcat [a <- (:wat::core::Vector :- [:wat::core::String])
+                            b <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length b)) a
+    (:c::vcat (:wat::core::conj a (:wat::core::nth b i)) b (:wat::core::+ i 1))))
+
+(:wat::core::defn :c::henum-all-ftys [variants <- (:wat::core::Vector :- [:wat::core::String])
+                                      tg <- :wat::core::i64 ei <- :wat::core::i64
+                                      arg <- :wat::core::String pg <- :c::Prog
+                                      acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= tg (:wat::core::length variants)) acc
+    (:wat::core::let
+      [arity (:c::variant-arity (:c::Prog/enums pg) ei tg pg)
+       ftys (:wat::core::if (:wat::core::= arity 0) (:wat::core::Vector :- [:wat::core::String])
+              (:c::filter-ptr
+                (:c::variant-ftys
+                  (:c::kidsof pg (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg))
+                  0 (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei)) arg pg
+                  (:wat::core::Vector :- [:wat::core::String]))
+                0 (:wat::core::Vector :- [:wat::core::String])))]
+      (:c::henum-all-ftys variants (:wat::core::+ tg 1) ei arg pg (:c::vcat acc ftys 0)))))
+
+(:wat::core::defn :c::henum-ptr-ftys [t <- :wat::core::String pg <- :c::Prog]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::let [ei (:c::ty-enum t pg) arg (:c::enum-arg t)]
+    (:c::henum-all-ftys (:c::Enum/variants (:wat::core::nth (:c::Prog/enums pg) ei)) 0 ei arg pg
+      (:wat::core::Vector :- [:wat::core::String]))))
+
+(:wat::core::defrecord :c::Census
+  [seen <- (:wat::core::Vector :- [:wat::core::String])
+   shapes <- (:wat::core::Vector :- [:wat::core::String])
+   vecs <- (:wat::core::Vector :- [:wat::core::String])])
+
+;; the transitive closure over `rec:`/`henum:` field and payload types, NOT through `vec:`/`fn:`
+;; (the trie argument, crawl S1): a `vec:X` is recorded once, by its element type, and `X` is
+;; still queued so ITS OWN fields (if `X` is a shape) are found too.
+(:wat::core::defn :c::census-walk [pg <- :c::Prog q <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 c <- :c::Census] -> :c::Census
+  (:wat::core::if (:wat::core::>= i (:wat::core::length q)) c
+    (:wat::core::let
+      [t (:wat::core::nth q i)
+       t2 (:c::glue-target-ty t pg)]
+      (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::Census/seen c) t2 0) 0)
+        (:c::census-walk pg q (:wat::core::+ i 1) c)
+        (:wat::core::let [seen2 (:wat::core::conj (:c::Census/seen c) t2)]
+          (:wat::core::cond
+            ((:wat::string::starts-with? t2 "rec:")
+              (:c::census-walk pg (:c::vcat q (:c::rec-ptr-ftys t2 pg) 0) (:wat::core::+ i 1)
+                (:c::Census :seen seen2 :shapes (:wat::core::conj (:c::Census/shapes c) t2)
+                            :vecs (:c::Census/vecs c))))
+            ((:wat::string::starts-with? t2 "henum:")
+              (:c::census-walk pg (:c::vcat q (:c::henum-ptr-ftys t2 pg) 0) (:wat::core::+ i 1)
+                (:c::Census :seen seen2 :shapes (:wat::core::conj (:c::Census/shapes c) t2)
+                            :vecs (:c::Census/vecs c))))
+            ((:wat::string::starts-with? t2 "vec:")
+              (:wat::core::let [elem (:c::elem-ty t2) ptr? (:c::ptr-ty? elem)]
+                (:c::census-walk pg
+                  (:wat::core::if ptr? (:wat::core::conj q elem) q) (:wat::core::+ i 1)
+                  (:c::Census :seen seen2 :shapes (:c::Census/shapes c)
+                    :vecs (:wat::core::if ptr? (:wat::core::conj (:c::Census/vecs c) t2)
+                            (:c::Census/vecs c))))))
+            (:else
+              (:c::census-walk pg q (:wat::core::+ i 1)
+                (:c::Census :seen seen2 :shapes (:c::Census/shapes c) :vecs (:c::Census/vecs c))))))))))
+
+(:wat::core::defn :c::seed-recs [rs <- :c::Recs i <- :wat::core::i64
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length rs)) acc
+    (:c::seed-recs rs (:wat::core::+ i 1)
+      (:wat::core::conj acc (:wat::string::concat "rec:" (:c::Rec/name (:wat::core::nth rs i)))))))
+
+;; a non-generic enum has exactly one instantiation (`arg=""`); a generic one is seeded only
+;; through an actual instantiated spelling found elsewhere (a field type, a signature)
+(:wat::core::defn :c::seed-enums [pg <- :c::Prog es <- :c::Enums i <- :wat::core::i64
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length es)) acc
+    (:wat::core::let
+      [e (:wat::core::nth es i)
+       eligible? (:wat::core::and (:c::Enum/heap e)
+                   (:wat::core::= (:wat::core::length (:c::Enum/params e)) 0))
+       tier3? (:wat::core::and eligible? (:wat::core::= (:c::enum-tier es i "" pg) 3))]
+      (:c::seed-enums pg es (:wat::core::+ i 1)
+        (:wat::core::if tier3? (:wat::core::conj acc (:wat::string::concat "henum:" (:c::Enum/name e)))
+          acc)))))
+
+(:wat::core::defn :c::seed-ptys [ptys <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64
+                                 acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ptys)) acc
+    (:c::seed-ptys ptys (:wat::core::+ i 1)
+      (:wat::core::if (:c::ptr-ty? (:wat::core::nth ptys i))
+        (:wat::core::conj acc (:wat::core::nth ptys i)) acc))))
+
+(:wat::core::defn :c::seed-fns [fs <- :c::FnV i <- :wat::core::i64
+                                acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length fs)) acc
+    (:wat::core::let
+      [f (:wat::core::nth fs i)
+       acc1 (:wat::core::if (:c::ptr-ty? (:c::Fn/ret f)) (:wat::core::conj acc (:c::Fn/ret f)) acc)
+       acc2 (:c::seed-ptys (:c::Fn/ptys f) 0 acc1)]
+      (:c::seed-fns fs (:wat::core::+ i 1) acc2))))
+
+(:wat::core::defn :c::census-seed [pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:c::seed-fns (:c::Prog/fns pg) 0
+    (:c::seed-enums pg (:c::Prog/enums pg) 0
+      (:c::seed-recs (:c::Prog/recs pg) 0 (:wat::core::Vector :- [:wat::core::String])))))
+
+(:wat::core::defn :c::census-run [pg <- :c::Prog] -> :c::Census
+  (:c::census-walk pg (:c::census-seed pg) 0
+    (:c::Census :seen (:wat::core::Vector :- [:wat::core::String])
+                :shapes (:wat::core::Vector :- [:wat::core::String])
+                :vecs (:wat::core::Vector :- [:wat::core::String]))))
+
+;; the CYCLE graph: `rec:`/`henum:` edges only (a `vec:`/`fn:` boxing never counts, crawl S1)
+(:wat::core::defn :c::shape-only [ts <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64
+                                  pg <- :c::Prog acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ts)) acc
+    (:wat::core::let [t2 (:c::glue-target-ty (:wat::core::nth ts i) pg)]
+      (:c::shape-only ts (:wat::core::+ i 1) pg
+        (:wat::core::if (:wat::core::or (:wat::string::starts-with? t2 "rec:")
+                          (:wat::string::starts-with? t2 "henum:"))
+          (:wat::core::conj acc t2) acc)))))
+
+(:wat::core::defn :c::shape-children [t <- :wat::core::String pg <- :c::Prog]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::cond
+    ((:wat::string::starts-with? t "rec:") (:c::shape-only (:c::rec-ptr-ftys t pg) 0 pg
+                                              (:wat::core::Vector :- [:wat::core::String])))
+    ((:wat::string::starts-with? t "henum:") (:c::shape-only (:c::henum-ptr-ftys t pg) 0 pg
+                                                (:wat::core::Vector :- [:wat::core::String])))
+    (:else (:wat::core::Vector :- [:wat::core::String]))))
+
+;; does a walk from `start`'s own children ever lead back to `start`?
+(:wat::core::defn :c::dfs-reaches [pg <- :c::Prog start <- :wat::core::String
+                                   frontier <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64
+                                   visited <- (:wat::core::Vector :- [:wat::core::String])]
+    -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length frontier)) false
+    (:wat::core::let [t (:wat::core::nth frontier i)]
+      (:wat::core::if (:wat::core::= t start) true
+        (:wat::core::if (:wat::core::>= (:c::index-of-str visited t 0) 0)
+          (:c::dfs-reaches pg start frontier (:wat::core::+ i 1) visited)
+          (:c::dfs-reaches pg start (:c::vcat frontier (:c::shape-children t pg) 0)
+            (:wat::core::+ i 1) (:wat::core::conj visited t)))))))
+
+(:wat::core::defn :c::cyclic? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:c::dfs-reaches pg t (:c::shape-children t pg) 0 (:wat::core::Vector :- [:wat::core::String])))
+
+(:wat::core::defn :c::shape-nonempty? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::cond
+    ((:wat::string::starts-with? t "rec:") (:wat::core::> (:wat::core::length (:c::rec-ptr-ftys t pg)) 0))
+    ((:wat::string::starts-with? t "henum:") (:wat::core::> (:wat::core::length (:c::henum-ptr-ftys t pg)) 0))
+    (:else false)))
+
+(:wat::core::defn :c::gtys-from-shapes [shapes <- (:wat::core::Vector :- [:wat::core::String])
+                                        i <- :wat::core::i64 pg <- :c::Prog
+                                        acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length shapes)) acc
+    (:wat::core::let [t (:wat::core::nth shapes i)]
+      (:c::gtys-from-shapes shapes (:wat::core::+ i 1) pg
+        (:wat::core::if (:wat::core::and (:wat::core::not (:c::cyclic? t pg)) (:c::shape-nonempty? t pg))
+          (:wat::core::conj acc t) acc)))))
+
+;; every `vec:X` needing glue is paired with its own trie-node helper, `node:X` -- never excluded
+;; by the cycle graph, because the trie's own recursion is bounded regardless of `X`
+(:wat::core::defn :c::gtys-from-vecs [vecs <- (:wat::core::Vector :- [:wat::core::String])
+                                      i <- :wat::core::i64
+                                      acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length vecs)) acc
+    (:wat::core::let
+      [v (:wat::core::nth vecs i)
+       nd (:wat::string::concat "node:" (:c::elem-ty v))
+       acc1 (:wat::core::conj acc v)
+       acc2 (:wat::core::if (:wat::core::>= (:c::index-of-str acc1 nd 0) 0) acc1
+              (:wat::core::conj acc1 nd))]
+      (:c::gtys-from-vecs vecs (:wat::core::+ i 1) acc2))))
+
+(:wat::core::defn :c::glue-census [pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::let [c (:c::census-run pg)]
+    (:c::gtys-from-vecs (:c::Census/vecs c) 0
+      (:c::gtys-from-shapes (:c::Census/shapes c) 0 pg (:wat::core::Vector :- [:wat::core::String])))))
+
+(:wat::core::defn :c::zvec [n <- :wat::core::i64 i <- :wat::core::i64
+                            acc <- (:wat::core::Vector :- [:wat::core::i64])]
+    -> (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::>= i n) acc (:c::zvec n (:wat::core::+ i 1) (:wat::core::conj acc 0))))
+
+;; ---------------------------------------------------------------- the glue bodies
+
+(:wat::core::defn :c::glue-out [base <- :wat::core::i64] -> :c::Out
+  (:c::Out :base base :code (:c::buf0) :tail (:c::buf0) :rax "" :sp 0 :fk 0 :fpr false
+           :shared (:wat::core::Vector :- [:wat::core::String])
+           :fnames (:wat::core::Vector :- [:wat::core::String])
+           :faddrs (:wat::core::Vector :- [:wat::core::i64])
+           :caps (:wat::core::Vector :- [:c::Cap])))
+
+;; `rec:R` -- rbx holds the dying record across every field's own drop, `rax` the field
+;; currently being decremented. Fields sit at `[rbx + 8 + 8*i]` (`:c::rec-pop`'s own offset).
+(:wat::core::defn :c::rec-glue-fields [ftys <- (:wat::core::Vector :- [:wat::core::String])
+                                       i <- :wat::core::i64 pg <- :c::Prog rt <- :c::Layout
+                                       o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ftys)) o
+    (:wat::core::let
+      [fty (:wat::core::nth ftys i)
+       o1 (:wat::core::if (:c::ptr-ty? fty)
+            (:c::emit-drop fty
+              (:c::emit o (:c::mov-rm (:c::rbx) (:wat::core::+ 8 (:wat::core::* 8 i)) (:c::rax))) pg rt)
+            o)]
+      (:c::rec-glue-fields ftys (:wat::core::+ i 1) pg rt o1))))
+
+(:wat::core::defn :c::rec-glue-body [t <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                     o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::reg-push (:c::rbx)))
+     o2 (:c::emit o1 (:c::mov-rr (:c::rax) (:c::rbx)))
+     o3 (:c::rec-glue-fields (:c::Rec/ftypes (:c::rec-of t pg)) 0 pg rt o2)
+     o4 (:c::emit o3 (:c::reg-pop (:c::rbx)))]
+    (:c::emit o4 (:c::ret))))
+
+;; `henum:E` -- the tag sits at `[rbx+8]` (the same slot a record's field 0 would occupy); each
+;; payload variant's fields start one slot later, `[rbx + 8 + 8*(j+1)]` (`:c::arm-binds`'s own
+;; offset). Every payload tag is tested explicitly -- no positional fallthrough -- so a wrong
+;; guess never reads another variant's fields as this one's.
+(:wat::core::defrecord :c::HG [o <- :c::Out jmps <- (:wat::core::Vector :- [:wat::core::i64])])
+
+(:wat::core::defn :c::henum-glue-drop-fields [ftys <- (:wat::core::Vector :- [:wat::core::String])
+                                              j <- :wat::core::i64 pg <- :c::Prog rt <- :c::Layout
+                                              o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::>= j (:wat::core::length ftys)) o
+    (:wat::core::let
+      [fty (:wat::core::nth ftys j)
+       o1 (:wat::core::if (:c::ptr-ty? fty)
+            (:c::emit-drop fty
+              (:c::emit o (:c::mov-rm (:c::rbx) (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ j 1)))
+                            (:c::rax)))
+              pg rt)
+            o)]
+      (:c::henum-glue-drop-fields ftys (:wat::core::+ j 1) pg rt o1))))
+
+(:wat::core::defn :c::henum-glue-tags [variants <- (:wat::core::Vector :- [:wat::core::String])
+                                       tg <- :wat::core::i64 ei <- :wat::core::i64
+                                       arg <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                       hg <- :c::HG] -> :c::HG
+  (:wat::core::if (:wat::core::>= tg (:wat::core::length variants)) hg
+    (:wat::core::let [arity (:c::variant-arity (:c::Prog/enums pg) ei tg pg)]
+      (:wat::core::if (:wat::core::= arity 0)
+        (:c::henum-glue-tags variants (:wat::core::+ tg 1) ei arg pg rt hg)
+        (:wat::core::let
+          [ftys (:c::variant-ftys
+                  (:c::kidsof pg (:wat::core::nth (:c::Enum/vfv (:wat::core::nth (:c::Prog/enums pg) ei)) tg))
+                  0 (:c::Enum/params (:wat::core::nth (:c::Prog/enums pg) ei)) arg pg
+                  (:wat::core::Vector :- [:wat::core::String]))
+           o (:c::HG/o hg)
+           o1 (:c::emit o (:c::cmp-ri (:c::rax) tg))
+           o2 (:c::emit o1 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+           jne-at (:wat::core::- (:c::codelen o2) 4)
+           o3 (:c::henum-glue-drop-fields ftys 0 pg rt o2)
+           o4 (:c::emit o3 (:c::jmp-unpatched))
+           jmp-at (:wat::core::- (:c::codelen o4) 4)
+           o5 (:c::patch o4 jne-at (:asm::le (:wat::core::- (:c::codelen o4) (:wat::core::+ jne-at 4)) 4))
+           hg2 (:c::HG :o o5 :jmps (:wat::core::conj (:c::HG/jmps hg) jmp-at))]
+          (:c::henum-glue-tags variants (:wat::core::+ tg 1) ei arg pg rt hg2))))))
+
+(:wat::core::defn :c::patch-jmps [jmps <- (:wat::core::Vector :- [:wat::core::i64]) i <- :wat::core::i64
+                                  o <- :c::Out] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length jmps)) o
+    (:wat::core::let [at (:wat::core::nth jmps i)]
+      (:c::patch-jmps jmps (:wat::core::+ i 1)
+        (:c::patch o at (:asm::le (:wat::core::- (:c::codelen o) (:wat::core::+ at 4)) 4))))))
+
+(:wat::core::defn :c::henum-glue-body [t <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                       o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [ei (:c::ty-enum t pg) arg (:c::enum-arg t)
+     o1 (:c::emit o (:c::reg-push (:c::rbx)))
+     o2 (:c::emit o1 (:c::mov-rr (:c::rax) (:c::rbx)))
+     o3 (:c::emit o2 (:c::mov-rm (:c::rbx) 8 (:c::rax)))
+     hg0 (:c::HG :o o3 :jmps (:wat::core::Vector :- [:wat::core::i64]))
+     hg1 (:c::henum-glue-tags (:c::Enum/variants (:wat::core::nth (:c::Prog/enums pg) ei)) 0 ei arg pg rt hg0)
+     o4 (:c::patch-jmps (:c::HG/jmps hg1) 0 (:c::HG/o hg1))
+     o5 (:c::emit o4 (:c::reg-pop (:c::rbx)))]
+    (:c::emit o5 (:c::ret))))
+
+;; `vec:T` -- a flat Vector's elements sit at `[rbx+8 .. rbx+8+8*(len-1)]`, `len` at `[rbx+0]`
+;; (`:c::rt-varr-new`); a trie Vector's shift is at `[rbx+8]` and its root at `[rbx+16]`
+;; (`:c::rt-tree-push`), and the discriminant one word before the shift, at `[rbx-16]`
+;; (`:c::vec-flat`/`:c::vec-tree`).
+(:wat::core::defn :c::vec-glue-body [t <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                     o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [elem (:c::elem-ty t)
+     dchk? (:c::Prog/dchk pg)
+     o1 (:c::emit o (:c::reg-push (:c::rbx)))
+     o2 (:c::emit o1 (:c::mov-rr (:c::rax) (:c::rbx)))
+     o3 (:c::emit o2 (:c::cmp-mi (:c::rbx) -16 (:c::vec-tree)))
+     o4 (:c::emit o3 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     jne-tree-at (:wat::core::- (:c::codelen o4) 4)
+     ;; tree: falls through here on EQUAL (discriminant is `:c::vec-tree`)
+     o5 (:c::emit o4 (:c::mov-rm (:c::rbx) 8 (:c::rdx)))
+     o6 (:c::emit o5 (:c::mov-rm (:c::rbx) 16 (:c::rax)))
+     ;; the root is a NODE with its OWN count -- `:c::rt-node-copy`'s children are shared,
+     ;; persistent structure, so another Vector version may still hold this exact root. Drop
+     ;; it once; walk its children only when that was the last reference, the same
+     ;; zero-check-then-recurse shape every other glue call already uses.
+     root-guard (:wat::core::if dchk?
+                  (:wat::core::let
+                    [chk (:c::cmp-mi (:c::rax) -8 1)
+                     jb-end (:wat::core::+ (:c::here o6) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
+                     rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+                    (:wat::string::concat chk
+                      (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+                  "")
+     o6a (:c::emit o6 root-guard)
+     o6b (:c::emit o6a (:c::dec-hex))
+     o6c (:c::emit o6b (:c::cmp-mi (:c::rax) -8 0))
+     o6d (:c::emit o6c (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     root-jne-at (:wat::core::- (:c::codelen o6d) 4)
+     o6e (:c::emit o6d (:c::push-rax))
+     o7a (:c::call o6e (:c::glue-addr (:wat::string::concat "node:" elem) pg))
+     o7b (:c::emit o7a (:c::pop-rax))
+     o7c (:wat::core::if dchk? (:c::emit o7b (:c::mov-mi (:c::rax) -8 (:c::poison-count))) o7b)
+     o7 (:c::patch o7c root-jne-at (:asm::le (:wat::core::- (:c::codelen o7c) (:wat::core::+ root-jne-at 4)) 4))
+     o8 (:c::emit o7 (:c::jmp-unpatched))
+     jmp-end-at (:wat::core::- (:c::codelen o8) 4)
+     ;; flat: the jne above lands here
+     o9 (:c::patch o8 jne-tree-at (:asm::le (:wat::core::- (:c::codelen o8) (:wat::core::+ jne-tree-at 4)) 4))
+     o10 (:c::emit o9 (:c::reg-push (:c::r12)))
+     o11 (:c::emit o10 (:c::xor-rr (:c::r12) (:c::r12)))
+     looptop (:c::here o11)
+     o12 (:c::emit o11 (:c::cmp-rm (:c::rbx) 0 (:c::r12)))
+     o13 (:c::emit o12 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below))) "00000000"))
+     exit-at (:wat::core::- (:c::codelen o13) 4)
+     o14 (:c::emit o13 (:c::rm "8b" (:c::rax) (:c::rbx) (:c::r12) 8 8))
+     o15 (:c::emit-drop elem o14 pg rt)
+     o16 (:c::emit o15 (:c::inc-r (:c::r12)))
+     backrel (:wat::core::- looptop (:wat::core::+ (:c::here o16) 5))
+     o17 (:c::emit o16 (:c::jmp-rel32 backrel))
+     ;; the exit test above lands here
+     o18 (:c::patch o17 exit-at (:asm::le (:wat::core::- (:c::codelen o17) (:wat::core::+ exit-at 4)) 4))
+     o19 (:c::emit o18 (:c::reg-pop (:c::r12)))
+     ;; the tree path's jump to the end lands here, after r12 is already popped
+     o20 (:c::patch o19 jmp-end-at (:asm::le (:wat::core::- (:c::codelen o19) (:wat::core::+ jmp-end-at 4)) 4))
+     o21 (:c::emit o20 (:c::reg-pop (:c::rbx)))]
+    (:c::emit o21 (:c::ret))))
+
+;; `node:X` -- self-recursive, bounded to 13 frames (64-bit index, 5 bits a level). INPUT:
+;; `rax` the node, `rdx` the shift remaining (0 means this node's 32 slots are `X` elements;
+;; otherwise they are child nodes, recursed into with `shift-5`). An unfilled slot is zero
+;; (`:c::rt-node-new` zeroes every slot) and is skipped, never dropped.
+(:wat::core::defn :c::node-glue-body [elem <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                      o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [dchk? (:c::Prog/dchk pg)
+     o1 (:c::emit o (:c::reg-push (:c::rbx)))
+     o2 (:c::emit o1 (:c::reg-push (:c::r12)))
+     o3 (:c::emit o2 (:c::reg-push (:c::r13)))
+     o4 (:c::emit o3 (:c::mov-rr (:c::rax) (:c::rbx)))
+     o5 (:c::emit o4 (:c::mov-rr (:c::rdx) (:c::r13)))
+     o6 (:c::emit o5 (:c::xor-rr (:c::r12) (:c::r12)))
+     looptop (:c::here o6)
+     o7 (:c::emit o6 (:c::cmp-ri (:c::r12) (:c::node-arity)))
+     o8 (:c::emit o7 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below))) "00000000"))
+     exit-at (:wat::core::- (:c::codelen o8) 4)
+     o9 (:c::emit o8 (:c::rm "8b" (:c::rax) (:c::rbx) (:c::r12) 8 8))
+     o10 (:c::emit o9 (:c::test-rr (:c::rax) (:c::rax)))
+     o11 (:c::emit o10 (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero)) "00000000"))
+     skip-at (:wat::core::- (:c::codelen o11) 4)
+     o12 (:c::emit o11 (:c::cmp-ri (:c::r13) 0))
+     o13 (:c::emit o12 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     interior-at (:wat::core::- (:c::codelen o13) 4)
+     ;; leaf: rax already holds the element -- drop it with T's own glue
+     o14 (:c::emit-drop elem o13 pg rt)
+     o15 (:c::emit o14 (:c::jmp-unpatched))
+     leaf-jmp-at (:wat::core::- (:c::codelen o15) 4)
+     ;; interior: the branch above lands here. `rax` is the CHILD node, which -- like the
+     ;; root -- has its own count (`:c::rt-node-copy` shares unchanged children across
+     ;; Vector versions), so it is dropped once here and its own children are walked only
+     ;; when that reaches zero, never unconditionally.
+     o16 (:c::patch o15 interior-at (:asm::le (:wat::core::- (:c::codelen o15) (:wat::core::+ interior-at 4)) 4))
+     child-guard (:wat::core::if dchk?
+                   (:wat::core::let
+                     [chk (:c::cmp-mi (:c::rax) -8 1)
+                      jb-end (:wat::core::+ (:c::here o16) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
+                      rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+                     (:wat::string::concat chk
+                       (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+                   "")
+     o16a (:c::emit o16 child-guard)
+     o16b (:c::emit o16a (:c::dec-hex))
+     o16c (:c::emit o16b (:c::cmp-mi (:c::rax) -8 0))
+     o16d (:c::emit o16c (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     child-jne-at (:wat::core::- (:c::codelen o16d) 4)
+     o16e (:c::emit o16d (:c::push-rax))
+     o17 (:c::emit o16e (:c::mov-rr (:c::r13) (:c::rdx)))
+     o18 (:c::emit o17 (:c::sub-ri (:c::rdx) 5))
+     o18a (:c::call o18 (:c::glue-addr (:wat::string::concat "node:" elem) pg))
+     o18b (:c::emit o18a (:c::pop-rax))
+     o18c (:wat::core::if dchk? (:c::emit o18b (:c::mov-mi (:c::rax) -8 (:c::poison-count))) o18b)
+     o19 (:c::patch o18c child-jne-at (:asm::le (:wat::core::- (:c::codelen o18c) (:wat::core::+ child-jne-at 4)) 4))
+     ;; cont: the leaf's jump and the null-slot skip both land here
+     o20 (:c::patch o19 leaf-jmp-at (:asm::le (:wat::core::- (:c::codelen o19) (:wat::core::+ leaf-jmp-at 4)) 4))
+     o21 (:c::patch o20 skip-at (:asm::le (:wat::core::- (:c::codelen o20) (:wat::core::+ skip-at 4)) 4))
+     o22 (:c::emit o21 (:c::inc-r (:c::r12)))
+     backrel (:wat::core::- looptop (:wat::core::+ (:c::here o22) 5))
+     o23 (:c::emit o22 (:c::jmp-rel32 backrel))
+     ;; the arity test above lands here
+     o24 (:c::patch o23 exit-at (:asm::le (:wat::core::- (:c::codelen o23) (:wat::core::+ exit-at 4)) 4))
+     o25 (:c::emit o24 (:c::reg-pop (:c::r13)))
+     o26 (:c::emit o25 (:c::reg-pop (:c::r12)))
+     o27 (:c::emit o26 (:c::reg-pop (:c::rbx)))]
+    (:c::emit o27 (:c::ret))))
+
+(:wat::core::defn :c::glue-body [t <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
+                                 o <- :c::Out] -> :c::Out
+  (:wat::core::cond
+    ((:wat::string::starts-with? t "rec:") (:c::rec-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "henum:") (:c::henum-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "vec:") (:c::vec-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "node:")
+      (:c::node-glue-body (:wat::string::subs t 5 (:wat::string::length t)) pg rt o))
+    (:else (:wat::kernel::assertion-failed!
+             :message (:wat::string::concat "compile: no glue shape for " t)))))
+
+;; ---------------------------------------------------------------- placing the glue section
+
+(:wat::core::defrecord :c::GPassR [lens <- (:wat::core::Vector :- [:wat::core::i64]) code <- :c::Buf])
+
+(:wat::core::defn :c::empty-gpass [] -> :c::GPassR
+  (:c::GPassR :lens (:wat::core::Vector :- [:wat::core::i64]) :code (:c::buf0)))
+
+(:wat::core::defn :c::glue-pass [gtys <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64
+                                 base <- :wat::core::i64 pg <- :c::Prog rt <- :c::Layout
+                                 acc <- :c::GPassR] -> :c::GPassR
+  (:wat::core::if (:wat::core::>= i (:wat::core::length gtys)) acc
+    (:wat::core::let
+      [o (:c::glue-body (:wat::core::nth gtys i) pg rt (:c::glue-out base))
+       len (:c::codelen o)]
+      (:c::glue-pass gtys (:wat::core::+ i 1) (:wat::core::+ base len) pg rt
+        (:c::GPassR :lens (:wat::core::conj (:c::GPassR/lens acc) len)
+                    :code (:c::buf-add (:c::GPassR/code acc) (:c::buf-str (:c::Out/code o))))))))
+
+;; the same shape as `:c::place`
+(:wat::core::defn :c::glue-place [lens <- (:wat::core::Vector :- [:wat::core::i64]) i <- :wat::core::i64
+                                  at <- :wat::core::i64 acc <- (:wat::core::Vector :- [:wat::core::i64])]
+    -> (:wat::core::Vector :- [:wat::core::i64])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length lens)) acc
+    (:c::glue-place lens (:wat::core::+ i 1) (:wat::core::+ at (:wat::core::nth lens i))
+      (:wat::core::conj acc at))))
 
 (:wat::core::defn :c::drop-loaded [name <- :wat::core::String ty <- :wat::core::String
                                    o <- :c::Out env <- :c::Env pg <- :c::Prog
@@ -4749,7 +5372,7 @@
                       (:wat::string::starts-with? t "enum:")))))
 
 (:wat::core::defn :c::read-out [t <- :wat::core::String rd <- :c::Read o <- :c::Out
-                                a <- :wat::core::i64 pg <- :c::Prog] -> :c::Out
+                                a <- :wat::core::i64 pg <- :c::Prog rt <- :c::Layout] -> :c::Out
   (:wat::core::let
     [lo (:wat::core::match rd
           [:c::Read.Elem {:tget tget}
@@ -4766,7 +5389,7 @@
           [:c::Read.AtReg {:r r :d d} (:c::emit o (:c::mov-rm r d (:c::rax)))]
           [:c::Read.Reg {:r r} (:c::emit o (:c::mov-rr r (:c::rax)))])]
     (:wat::core::cond
-      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t pg)))
+      ((:c::ptr-ty? t) (:c::emit lo (:c::count-hex t pg lo rt)))
       ((:c::word-ty? t) lo)
       (:else (:c::fail (:wat::string::concat "a read out of a container, of unknown type " t)
                a pg)))))
@@ -4809,7 +5432,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-elems ks (:wat::core::+ i 1)
       (:c::push (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) (:c::push-rax) 8)
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) rt) (:c::push-rax) 8)
       env pg rt tb slot)))
 
 ;; and popped back off into the slots, last first, because the last one is on top
@@ -4855,7 +5478,7 @@
             ;; register. writing it here would clobber the other arm of an `if`
             ;; that also passes the old field through.
             (:c::share (:wat::core::nth ks 3) env pg
-              (:c::expr (:wat::core::nth ks 3) o env pg rt tb slot (:c::no-tail)))
+              (:c::expr (:wat::core::nth ks 3) o env pg rt tb slot (:c::no-tail)) rt)
           (:wat::core::let
             [box (:wat::core::nth ks 1)
              sym? (:wat::core::= (:c::kindv box pg) (:rd::Kind.Symbol {}))
@@ -4864,18 +5487,17 @@
              rm? (:c::remat? box env pg)
              o1 (:wat::core::if rm?
                   (:wat::core::if (:wat::core::and sym? (:wat::core::not own?))
-                    (:c::emit
-                      (:c::emit o (:c::mov-rr (:c::reg-of box env pg) (:c::rax)))
-                      (:c::count-hex (:c::type-of box env pg) pg))
+                    (:wat::core::let [om (:c::emit o (:c::mov-rr (:c::reg-of box env pg) (:c::rax)))]
+                      (:c::emit om (:c::count-hex (:c::type-of box env pg) pg om rt)))
                     o)
                   (:c::push
                     (:wat::core::if (:wat::core::and sym? (:wat::core::not own?))
-                      (:c::emit (:c::expr box o env pg rt tb slot (:c::no-tail))
-                        (:c::count-hex (:c::type-of box env pg) pg))
+                      (:wat::core::let [ob (:c::expr box o env pg rt tb slot (:c::no-tail))]
+                        (:c::emit ob (:c::count-hex (:c::type-of box env pg) pg ob rt)))
                       (:c::expr box o env pg rt tb slot (:c::no-tail)))
                     (:c::push-rax) 8))
              o2 (:c::share (:wat::core::nth ks 3) env pg
-                  (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)))]
+                  (:c::expr (:wat::core::nth ks 3) o1 env pg rt tb slot (:c::no-tail)) rt)]
             ;; owning path only when the name is linear, same gate as `conj`
             (:wat::core::let
               [mask (:c::ptr-mask
@@ -5019,7 +5641,7 @@
                                  sd <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog a <- :wat::core::i64
                                  slot <- :wat::core::i64
-                                 tier <- :wat::core::i64] -> :c::BindR
+                                 tier <- :wat::core::i64 rt <- :c::Layout] -> :c::BindR
   (:wat::core::if (:wat::core::>= (:wat::core::+ j 1) (:wat::core::length mks))
     (:c::BindR :o o :env env :slot slot)
     (:wat::core::let
@@ -5049,12 +5671,12 @@
               (:c::emit
                 (:c::read-out (:wat::core::nth ftys fi)
                   (:c::Read.At {:d (:wat::core::+ 8 (:wat::core::* 8 (:wat::core::+ fi 1)))})
-                  (:c::emit o (:c::load (:c::fp o sd) (:c::Out/fpr o))) a pg)
+                  (:c::emit o (:c::load (:c::fp o sd) (:c::Out/fpr o))) a pg rt)
                 (:c::store (:c::fp o disp) (:c::Out/fpr o))))
             (:wat::core::conj env
               (:c::Bind :name nm :disp (:wat::core::if alias? sd disp) :reg -1
                         :ty (:wat::core::nth ftys fi)))
-            pg a (:wat::core::if alias? slot (:wat::core::+ slot 1)) tier)))))))
+            pg a (:wat::core::if alias? slot (:wat::core::+ slot 1)) tier rt)))))))
 
 (:wat::core::defn :c::match-arms [ks <- :c::Kids i <- :wat::core::i64 ei <- :wat::core::i64
                                   sd <- :wat::core::i64 slot <- :wat::core::i64 o <- :c::Out
@@ -5098,7 +5720,7 @@
        at2 (:wat::core::if (:wat::core::or unit? (:wat::core::not= tier 3)) -1
              (:wat::core::- (:c::codelen o3b) 4))
        br (:c::arm-binds (:c::kidsof pg (:wat::core::nth aks 1)) 0 fields ftys sd
-            o3b env pg a slot tier)
+            o3b env pg a slot tier rt)
        ;; the scrutinee dies once the arm has counted its fields out. Tier 1's
        ;; payload IS the subject, so the binding owns that reference instead.
        o3c (:wat::core::if (:wat::core::= tier 1)
@@ -5134,7 +5756,7 @@
              o1 (:wat::core::assoc
                   (:c::emit
                     (:c::share subj env pg
-                      (:c::expr subj o env pg rt tb slot (:c::no-tail)))
+                      (:c::expr subj o env pg rt tb slot (:c::no-tail)) rt)
                     (:c::store (:c::fp o sd) (:c::Out/fpr o))) :rax "")]
             ;; the arms start above whatever this form took for itself -- asked, not assumed
             (:c::match-arms ks 2 ei sd (:wat::core::+ slot (:c::self-slots pg a)) o1 env pg rt tb a
@@ -5150,7 +5772,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length mks)) o
     (:c::var-vals mks (:wat::core::+ i 2)
       (:c::push (:c::share (:wat::core::nth mks i) env pg
-                  (:c::expr (:wat::core::nth mks i) o env pg rt tb slot (:c::no-tail)))
+                  (:c::expr (:wat::core::nth mks i) o env pg rt tb slot (:c::no-tail)) rt)
                 (:c::push-rax) 8)
       env pg rt tb slot)))
 
@@ -5217,7 +5839,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::rec-vals ks (:wat::core::+ i 2)
       (:c::push (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) (:c::push-rax) 8)
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) rt) (:c::push-rax) 8)
       env pg rt tb slot)))
 
 ;; ---------------------------------------------------------------- cond, and, or
@@ -5382,7 +6004,8 @@
 
 (:wat::core::defn :c::keys-each [ks <- :c::Kids i <- :wat::core::i64 ag <- :c::Agg
                                  sd <- :wat::core::i64 o <- :c::Out env <- :c::Env
-                                 pg <- :c::Prog a <- :wat::core::i64 slot <- :wat::core::i64]
+                                 pg <- :c::Prog a <- :wat::core::i64 slot <- :wat::core::i64
+                                 rt <- :c::Layout]
     -> :c::BindR
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks))
     (:c::BindR :o o :env env :slot slot)
@@ -5399,11 +6022,11 @@
             (:wat::core::let
               [ld (:c::emit o (:c::load (:c::fp o sd) (:c::Out/fpr o)))
                rd (:c::read-out ty
-                    (:c::Read.At {:d (:c::field-disp (:c::Agg/tier ag) fi)}) ld a pg)]
+                    (:c::Read.At {:d (:c::field-disp (:c::Agg/tier ag) fi)}) ld a pg rt)]
               (:c::emit rd (:c::store (:c::fp rd disp) (:c::Out/fpr rd)))))]
       (:c::keys-each ks (:wat::core::+ i 1) ag sd o1
         (:wat::core::conj env (:c::Bind :name nm :disp disp :reg -1 :ty ty))
-        pg a (:wat::core::+ slot 1)))))
+        pg a (:wat::core::+ slot 1) rt))))
 
 (:wat::core::defn :c::bind-keys [pat <- :wat::core::i64 init <- :wat::core::i64 o <- :c::Out
                                  env <- :c::Env pg <- :c::Prog rt <- :c::Layout
@@ -5413,11 +6036,11 @@
     [ag (:c::agg-of init pat env pg)
      sd (:wat::core::* -8 (:wat::core::+ slot 1))
      o1 (:c::share init env pg
-          (:c::expr init o env pg rt tb slot (:c::no-tail)))
+          (:c::expr init o env pg rt tb slot (:c::no-tail)) rt)
      o2 (:wat::core::assoc
           (:c::emit o1 (:c::store (:c::fp o1 sd) (:c::Out/fpr o1))) :rax "")]
     (:c::keys-each (:c::kidsof pg (:c::keys-vec pat pg)) 0 ag sd o2 env pg a
-      (:wat::core::+ slot 1))))
+      (:wat::core::+ slot 1) rt)))
 
 (:wat::core::defn :c::bind-each [lt <- :wat::core::i64 bs <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                  pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
@@ -5445,7 +6068,7 @@
             ;; came from r8-r11. The frame slot keeps a copy a later drop can reload.
             (:wat::core::let
               [o1 (:c::share (:wat::core::nth bs (:wat::core::+ i 1)) env pg
-                    (:c::expr-to (:wat::core::nth bs (:wat::core::+ i 1)) r o env pg rt tb slot))]
+                    (:c::expr-to (:wat::core::nth bs (:wat::core::+ i 1)) r o env pg rt tb slot) rt)]
               (:wat::core::assoc
                 (:c::emit
                   (:c::emit o1 (:c::mov-rr r (:c::rax)))
@@ -5454,7 +6077,7 @@
             (:wat::core::assoc
               (:c::emit (:c::share (:wat::core::nth bs (:wat::core::+ i 1)) env pg
                           (:c::expr (:wat::core::nth bs (:wat::core::+ i 1)) o env pg rt tb slot
-                            (:c::no-tail)))
+                            (:c::no-tail)) rt)
                 (:c::store (:c::fp o disp) (:c::Out/fpr o)))
               :rax name))]
       (:c::bind-each lt bs (:wat::core::+ i 2) o2
@@ -5854,7 +6477,7 @@
                                 tb <- :wat::core::i64 slot <- :wat::core::i64] -> :c::Out
   (:wat::core::cond
     ((:c::arg-shares? a env pg o)
-      (:c::emit (:c::share a env pg (:c::expr a o env pg rt tb slot (:c::no-tail)))
+      (:c::emit (:c::share a env pg (:c::expr a o env pg rt tb slot (:c::no-tail)) rt)
                 (:c::reg-mov-from dst)))
     ;; a pointer name already marked: `:c::selv?` refuses it for being a pointer, but moving a
     ;; register to a register is the same instruction whatever it holds
@@ -5886,7 +6509,7 @@
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:c::push-args ks (:wat::core::+ i 1)
       (:c::push (:c::share (:wat::core::nth ks i)  env pg
-                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail))) (:c::push-rax) 8)
+                  (:c::expr (:wat::core::nth ks i) o env pg rt tb slot (:c::no-tail)) rt) (:c::push-rax) 8)
       env pg rt tb slot)))
 
 ;; **a self tail call does not need the stack when the assignment is safe in order.** The
@@ -6090,7 +6713,7 @@
       (:else
        (:wat::core::let
         [o1 (:c::tail-share (:wat::core::nth ks (:wat::core::+ j 1)) pv j env pg
-              (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)))
+              (:c::expr (:wat::core::nth ks (:wat::core::+ j 1)) o env pg rt tb slot (:c::no-tail)) rt)
          o2 (:c::emit o1
               (:wat::core::if (:wat::core::>= pr 0) (:c::reg-mov-from pr)
                 (:c::store (:c::fp o1 (:wat::core::+ 16
@@ -7304,7 +7927,7 @@
                   :target (:wat::core::+ base (:c::codelen o1)) :test "" :body 0))
      ;; when the head was peeled off, the body is the `if`'s ELSE arm and nothing else
      bound (:wat::core::if lifted?
-              (:c::bind-caps mine 0 (:c::spill-params pv 0 n o1 env pg) env pg)
+              (:c::bind-caps mine 0 (:c::spill-params pv 0 n o1 env pg) env pg rt)
               (:c::BindR :o (:c::spill-params pv 0 n o1 env pg) :env env :slot 0))
      ;; R16: when `wrap?` peeled the THEN arm off into `:c::wrap-head`, this compiles the
      ;; ELSE arm -- the function's ordinary return value, the same value position as any
@@ -8641,20 +9264,21 @@
         (:wat::core::if (:wat::core::= (:c::Cap/fn c) fn) (:wat::core::conj acc c) acc)))))
 
 (:wat::core::defn :c::bind-caps [cs <- (:wat::core::Vector :- [:c::Cap]) i <- :wat::core::i64
-                                 o <- :c::Out env <- :c::Env pg <- :c::Prog] -> :c::BindR
+                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
+                                 rt <- :c::Layout] -> :c::BindR
   (:wat::core::if (:wat::core::>= i (:wat::core::length cs))
     (:c::BindR :o o :env env :slot 0)
     (:wat::core::let [c (:wat::core::nth cs i)
                       disp (:wat::core::* -8 (:wat::core::+ i 2))
                       ld (:c::emit o (:c::load (:c::fp o -8) (:c::Out/fpr o)))
                       rd (:c::read-out (:c::Cap/ty c)
-                           (:c::Read.Cap {:d (:wat::core::* 8 (:wat::core::+ i 1))}) ld 0 pg)
+                           (:c::Read.Cap {:d (:wat::core::* 8 (:wat::core::+ i 1))}) ld 0 pg rt)
                       st (:wat::core::assoc
                            (:c::emit rd (:c::store (:c::fp rd disp) (:c::Out/fpr rd))) :rax "")]
       (:c::bind-caps cs (:wat::core::+ i 1) st
         (:wat::core::conj env
           (:c::Bind :name (:c::Cap/name c) :disp disp :reg -1 :ty (:c::Cap/ty c)))
-        pg))))
+        pg rt))))
 
 (:wat::core::defn :c::close-push [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                   pg <- :c::Prog rt <- :c::Layout tb <- :wat::core::i64
@@ -8673,7 +9297,7 @@
         (:wat::core::let [ty (:c::type-of sym env pg)
                           o1 (:c::push
                                (:c::share sym env pg
-                                 (:c::expr sym o env pg rt tb slot (:c::no-tail)))
+                                 (:c::expr sym o env pg rt tb slot (:c::no-tail)) rt)
                                (:c::push-rax) 8)]
           (:c::close-push ks (:wat::core::+ i 1)
             (:wat::core::assoc o1 :caps
@@ -8733,7 +9357,15 @@
      pg-i (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
      ;; ...and AFTER them, because inlining is what turns a body's last call into a `let` and
      ;; so decides whether it is `:c::callfree?` at all
-     pg0 (:c::argreg-fns pg-i)
+     pg0-bare (:c::argreg-fns pg-i)
+     ;; excursus 008 stone 3b-1 round 3 (G1): the census, once, purely from declarations --
+     ;; before either pass sees a node. `pg0`'s `:gaddrs` is a placeholder (every entry 0) until
+     ;; `:c::glue-place` runs below; pass one needs `:gtys` present so every drop site it measures
+     ;; already knows whether its type has glue, even though the address is not real yet -- a
+     ;; `call rel32` is five bytes regardless of the value it carries, so the placeholder cannot
+     ;; change any length pass two would disagree with.
+     gtys0 (:c::glue-census pg0-bare)
+     pg0 (:wat::core::assoc (:wat::core::assoc pg0-bare :gtys gtys0) :gaddrs (:c::zvec (:wat::core::length gtys0) 0 (:wat::core::Vector :- [:wat::core::i64])))
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one -- but every instruction
      ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0.
@@ -8742,11 +9374,21 @@
      lay0 (:c::layout 0)
      p1 (:c::pass pg0 0 lay0 0 (:c::empty-pass))
      code-total (:c::total (:c::PassR/lens p1) 0 0)
+     ;; the glue section's own pass one, at the same base-0 fiction, right after where the user
+     ;; code will end -- its own addresses do not need to be real either, for the same reason
+     gp1 (:c::glue-pass gtys0 0 0 pg0 lay0 (:c::empty-gpass))
+     glue-total (:c::total (:c::GPassR/lens gp1) 0 0)
 
      ;; now every address follows from the lengths
-     pg1 (:c::place pg0 (:c::PassR/lens p1) 0
+     pg1-fns (:c::place pg0 (:c::PassR/lens p1) 0
             (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) (:wat::core::Vector :- [:c::Fn]))
-     rt-addr (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+     ;; the glue section sits one after the user code and before the runtime block
+     gaddrs (:c::glue-place (:c::GPassR/lens gp1) 0
+              (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+              (:wat::core::Vector :- [:wat::core::i64]))
+     pg1 (:wat::core::assoc pg1-fns :gaddrs gaddrs)
+     rt-addr (:wat::core::+ (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+               glue-total)
      lvl (:c::rt-level pg0)
      ;; **once, here** -- every `(:c::at-X rt)` downstream is an index into this (F-137), and it
      ;; is the base-0 layout shifted rather than a second build of all thirty-three routines
@@ -8763,8 +9405,12 @@
      ;; twice)
      p2 (:c::pass (:wat::core::assoc (:wat::core::if exp? (:wat::core::assoc pg1 :exp true) pg1) :final true)
                   0 rt tail-base (:c::empty-pass))
+     gp2 (:c::glue-pass gtys0 0
+           (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+           pg1 rt (:c::empty-gpass))
+     glue-hex (:c::buf-str (:c::GPassR/code gp2))
      text (:wat::string::concat (:c::stub main-addr rt) (:c::buf-str (:c::PassR/code p2))
-            rt-hex)
+            (:wat::string::concat glue-hex rt-hex))
      written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)
@@ -8772,6 +9418,7 @@
       (:wat::core::if exp? (:c::fact-files pg1 0) nil)
       ;; the invariant the two-pass technique rests on
       (:c::same-lens (:c::PassR/lens p1) (:c::PassR/lens p2) 0)
+      (:c::same-lens (:c::GPassR/lens gp1) (:c::GPassR/lens gp2) 0)
       (:wat::test::assert-eq (:c::buf-len (:c::PassR/tail p1))
                              (:c::buf-len (:c::PassR/tail p2)))
       (:wat::kernel::println

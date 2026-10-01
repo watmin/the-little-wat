@@ -105,3 +105,22 @@ As `3b-1` above: one CALLED glue routine per non-recursive pointer type, from a 
 reached zero); the recursive types listed and left without glue. With G5 in place, every dead object the glue
 walks is poisoned under the check, so the chain under `WAT_DROP_CHECK=1` is the proof that the glue's drops are
 right. Then both verifies.
+
+---
+
+# 3b-1 landed (2026-09-30)
+
+**On my own runs:** `tools/verify.sh` → `verify: ok` (406,041 bytes); `WAT_DROP_CHECK=1 tools/verify.sh` → `verify: ok`
+(506,342 bytes, the compiler and the whole corpus under the poison, zero stops); `drop-3b-*`, `drop-concat-box`,
+`drop-ifval` agree both ways. **R2 was already done** when round 3 resumed: my grep counted a comment that still
+names `needs-share?`; the executor read the tree over my message, rightly.
+
+**G1:** a glue address table built once from declarations (`:c::glue-census`), placed between user code and the
+runtime like functions (`:c::glue-place`); bodies per kind — record by mask, payload enum by tag, Vector flat or
+trie, trie node by level; one call site, `:c::dropchk-hex`, on the count reaching zero. Two roots found with the
+watchpoint: a glue call clobbering `rax` before the poison write; and glue walking into a trie node without
+decrementing it — a node shared between Vector versions (`rt-node-copy`) was drained once per version.
+`:user::L` (the list fixture) is recursive and has no glue until 3b-3. Nothing is freed yet (3b-2).
+
+**Known, late not early:** a Vector grown in place carries `arm-own` (`0x1_00000001`); its last drop leaves
+`0x1_00000000`, not zero, so its glue never runs — a leak for 3b-2 to settle with the size question.
