@@ -124,3 +124,32 @@ decrementing it — a node shared between Vector versions (`rt-node-copy`) was d
 
 **Known, late not early:** a Vector grown in place carries `arm-own` (`0x1_00000001`); its last drop leaves
 `0x1_00000000`, not zero, so its glue never runs — a leak for 3b-2 to settle with the size question.
+
+---
+
+# After 3b-1 — the "13 levels" comment hid a wrong argument (2026-09-30)
+
+The builder asked why a magic 13 governs the trie glue. In the CODE nothing does: `:c::node-glue-body` follows the
+trie's own `shift` to the leaves. 13 is a derived bound in two comments (`elf/compile.wat:4574`, `:4976`) — 32-way
+nodes, 5 bits a level, a 63-bit length: at most ⌈63/5⌉ = 13 levels, log₃₂ of the length in practice. A bound
+written as a bare number is R19's class; the comments must carry the derivation from `:c::node-arity`.
+
+Writing that derivation out exposed a real defect in the first comment's ARGUMENT: "a `vec:T` field never counts
+as a cycle edge, because a Vector's own recursion is bounded by the trie … regardless of what `T` is". The trie
+bounds the Vector's internal levels; it bounds nothing about recursion through the ELEMENTS. `:c::shape-children`
+gives a `vec:` type no children, so a type recursive THROUGH a Vector (`:user::Val`'s `:Vec`; a tree of nodes
+with a Vector of children) passes `:c::cyclic?` as non-recursive and gets glue that calls itself once per level
+of the user's data — unbounded native recursion, against the ruling that drops are iterative.
+
+**Why no fixture shows it today:** `elf/probe/drop-vec-cycle.wat` builds a tree 2,000,000 deep through one-element
+Vectors and drops it whole; it agrees, and runs with a 256 KB stack. The glue chain stops at the first Vector,
+most likely because a Vector grown in place carries `arm-own` (`0x1_00000001`): its last drop leaves
+`0x1_00000000`, not zero (the leak named at 3b-1's landing). **So the moment 3b-2 settles `arm-own`, this
+recursion becomes live** — the fixture is the gate that will show it.
+
+**Into 3b-2:** (1) `vec:T` is an edge to `T` in `:c::cyclic?` / `:c::shape-children` — such a type gets no glue
+until 3b-3's worklist; (2) the two comments carry the derivation, not 13; (3) `arm-own`'s count settled with the
+freeing sizes; (4) `drop-vec-cycle.wat` must still agree with a 256 KB stack AFTER (3).
+
+Also found: **F-209** — an enum whose single payload variant is a Vector of itself crashes the compiler
+(older than 3b-1; `elf/probe/f209-tier1-self-vec.wat`).

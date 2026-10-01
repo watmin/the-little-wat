@@ -15635,3 +15635,15 @@ safe. A drop asks the opposite question: an omission there is not "decline", it 
 same walk, reused for a new question, turned from safe to unsafe without a line changing. The fix is one
 definition of evaluation order (every child, the head included, in the order the code generator emits),
 consulted by the generator and every analysis, and each consumer stating its safe direction.
+
+### F-209: an enum whose one payload variant holds a Vector of itself crashes the compiler
+
+**Open.** Found 2026-09-30 writing stone 3b's cycle probe. `elf/probe/f209-tier1-self-vec.wat` declares
+`:user::T` with `:Leaf []` and `:Node [kids <- (:wat::core::Vector :- [:user::T])]`, and a `main` that prints
+`1`. The compiler, run by the interpreter (`tools/probe.sh`), dies with SIGSEGV — a stack overflow in the
+interpreter — before it emits anything; the tree before stone 3b-1 (`c4a54ff`) dies the same way, so it is
+older than drop glue. `elf/src/matchval.wat`'s `:user::Val` has the same self-reference through a Vector and
+compiles: it has several payload variants, so it is tier 3, where `T` has ONE and is tier 1 — "the value IS
+its payload" (`:c::enum-tier`). The candidate: deciding `T`'s representation asks for its payload's, which is
+a Vector of `T`, which asks for `T`'s. A valid program the compiler cannot compile, and a crash where a
+refusal or a representation belongs. Not traced.
