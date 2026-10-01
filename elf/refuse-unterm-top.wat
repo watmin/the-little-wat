@@ -4492,71 +4492,161 @@
     (:wat::core::if (:wat::core::< n 0) true
       (:c::live-after pg n a name))))
 
-;; the DROP question. True only when `a` is the last occurrence of `name` in
-;; EVALUATION order (`:c::eval-seq`). Missing a later use would free the value
-;; while that use still runs, so a doubt leaves this false and the drop is not
-;; placed. In-place mutation asks the opposite and uses `:c::live-after`, where
-;; an extra successor only declines the mutation.
-(:wat::core::defn :c::last-ix [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64]
-    -> :wat::core::i64
-  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/lasts pg))) -1
-    (:wat::core::if (:wat::core::= (:c::text pg (:wat::core::nth (:c::Prog/lasts pg) i)) name) i
-      (:c::last-ix pg name (:wat::core::+ i 1)))))
+;; the set of names live at a point in the backward walk below, and the growing SET of
+;; last-use nodes (F-210: a name can die on more than one PATH, so there is no longer one
+;; node per name).
+(:wat::core::defrecord :c::LastW [live <- (:wat::core::Vector :- [:wat::core::String])
+                                   lasts <- (:wat::core::Vector :- [:wat::core::i64])])
 
+(:wat::core::defn :c::index-of-i64 [v <- (:wat::core::Vector :- [:wat::core::i64])
+                                     q <- :wat::core::i64 i <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::>= i (:wat::core::length v)) -1)
+    ((:wat::core::= (:wat::core::nth v i) q) i)
+    (:else (:c::index-of-i64 v q (:wat::core::+ i 1)))))
+
+;; the DROP question. True only when `a` is a MEMBER of `:c::Prog/lasts` -- the SET of last
+;; uses, one backward walk per function (`:c::last-walk`, below). Missing a later use on some
+;; path would free the value while that use still runs, so a doubt leaves this false and the
+;; drop is not placed. In-place mutation asks the opposite and uses `:c::live-after`, where an
+;; extra successor only declines the mutation. `name` is no longer needed to answer this --
+;; `a` is one node, and node ids do not collide -- but the signature stays so every caller is
+;; unchanged.
 (:wat::core::defn :c::last-use? [a <- :wat::core::i64 name <- :wat::core::String pg <- :c::Prog]
     -> :wat::core::bool
-  (:wat::core::let [i (:c::last-ix pg name 0)]
-    (:wat::core::and (:wat::core::>= i 0)
-      (:wat::core::= (:wat::core::nth (:c::Prog/lasts pg) i) a))))
+  (:wat::core::>= (:c::index-of-i64 (:c::Prog/lasts pg) a 0) 0))
 
-(:wat::core::defn :c::last-node [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::i64
-  (:wat::core::let [i (:c::last-ix pg name 0)]
-    (:wat::core::if (:wat::core::< i 0) -1 (:wat::core::nth (:c::Prog/lasts pg) i))))
+;; `:c::last-node` -- the one-node answer -- is gone with it. Its two callers
+;; (`:c::arm-dead?`, `:c::drop-arm`) asked whether the (single, global) last mention of `name`
+;; fell inside the whole `if`; with the SET, the sharper and still path-correct question is
+;; asked directly: does `sub` hold one of `name`'s OWN last-use nodes? `occ other name > 0`
+;; (checked by both callers before this) already established an occurrence exists in `other`;
+;; a last-use node among them there means nothing after it, on that arm's path -- which
+;; includes everything after the whole `if` too, since the arm's own walk started from what is
+;; live there -- reads `name` again.
+(:wat::core::defn :c::last-in-sub? [pg <- :c::Prog lasts <- (:wat::core::Vector :- [:wat::core::i64])
+                                     i <- :wat::core::i64 name <- :wat::core::String
+                                     sub <- :wat::core::i64] -> :wat::core::bool
+  (:wat::core::if (:wat::core::>= i (:wat::core::length lasts)) false
+    (:wat::core::if (:wat::core::and (:wat::core::= (:c::text pg (:wat::core::nth lasts i)) name)
+                       (:c::holds? pg sub (:wat::core::nth lasts i)))
+      true
+      (:c::last-in-sub? pg lasts (:wat::core::+ i 1) name sub))))
 
-(:wat::core::defn :c::last-put [acc <- (:wat::core::Vector :- [:wat::core::i64])
-                                i <- :wat::core::i64 a <- :wat::core::i64
-                                j <- :wat::core::i64
-                                out <- (:wat::core::Vector :- [:wat::core::i64])]
-    -> (:wat::core::Vector :- [:wat::core::i64])
-  (:wat::core::if (:wat::core::>= j (:wat::core::length acc))
-    (:wat::core::if (:wat::core::< i 0) (:wat::core::conj out a) out)
-    (:c::last-put acc i a (:wat::core::+ j 1)
-      (:wat::core::conj out
-        (:wat::core::if (:wat::core::= j i) a (:wat::core::nth acc j))))))
+(:wat::core::defn :c::last-dies-in? [pg <- :c::Prog name <- :wat::core::String sub <- :wat::core::i64]
+    -> :wat::core::bool
+  (:c::last-in-sub? pg (:c::Prog/lasts pg) 0 name sub))
 
-(:wat::core::defn :c::last-note [pg <- :c::Prog a <- :wat::core::i64
-                                 acc <- (:wat::core::Vector :- [:wat::core::i64])]
-    -> (:wat::core::Vector :- [:wat::core::i64])
-  (:c::last-put acc (:c::last-ix-acc acc (:c::text pg a) 0 pg) a 0
-    (:wat::core::Vector :- [:wat::core::i64])))
+;; the JOIN at a branch: every name live on EITHER arm, with no duplicate entries -- `:c::vcat`
+;; is the wrong tool here (found the hard way: a self-tail loop called with a literal count
+;; unrolls into one nested `if` per iteration, and `:c::vcat`'s bare concatenation DOUBLES the
+;; live set at every level it passes through unchanged, since both arms already carry most of
+;; the same names forward -- 2^depth for a loop unrolled to depth `i`, which is "heap exhausted"
+;; or an hours-long hang for anything past a few dozen iterations, measured on `elf/src/select.wat`:
+;; live climbed 18 -> 20 -> 40 -> 42 -> 84 -> ... one join at a time). `live` is a SET -- only
+;; membership is ever asked of it (`:c::last-leaf`) -- so the fix is to dedupe at the join.
+(:wat::core::defn :c::live-union [a <- (:wat::core::Vector :- [:wat::core::String])
+                                  b <- (:wat::core::Vector :- [:wat::core::String])
+                                  i <- :wat::core::i64] -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length b)) a
+    (:c::live-union
+      (:wat::core::if (:wat::core::>= (:c::index-of-str a (:wat::core::nth b i) 0) 0) a
+        (:wat::core::conj a (:wat::core::nth b i)))
+      b (:wat::core::+ i 1))))
 
-;; same search as `:c::last-ix`, over the vector being built rather than `:c::Prog/lasts`
-(:wat::core::defn :c::last-ix-acc [acc <- (:wat::core::Vector :- [:wat::core::i64])
-                                   name <- :wat::core::String i <- :wat::core::i64
-                                   pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::if (:wat::core::>= i (:wat::core::length acc)) -1
-    (:wat::core::if (:wat::core::= (:c::text pg (:wat::core::nth acc i)) name) i
-      (:c::last-ix-acc acc name (:wat::core::+ i 1) pg))))
+;; ---------------------------------------------------------------- the one backward walk (F-210)
+;;
+;; A Symbol is a last use exactly when its name is not already in `live`: the first encounter
+;; walking BACKWARD is the last occurrence walking forward. An `if`/`cond`/`match` walks each
+;; arm from the SAME incoming `live` -- arms are alternatives, not sequential, so one arm's
+;; reads do not make another arm's reads non-last -- and threads `lasts` from one arm into the
+;; next so nothing already found is lost. What the form exports to whatever runs before it (the
+;; condition, a `cond` clause's test, the subject) is every arm's `live` JOINED: live if live on
+;; ANY arm, the same rule `:c::live-after` already applies to an `if`.
+(:wat::core::defn :c::last-leaf [pg <- :c::Prog a <- :wat::core::i64 w <- :c::LastW] -> :c::LastW
+  (:wat::core::let [name (:c::text pg a)]
+    (:wat::core::if (:wat::core::>= (:c::index-of-str (:c::LastW/live w) name 0) 0) w
+      (:c::LastW :live (:wat::core::conj (:c::LastW/live w) name)
+                 :lasts (:wat::core::conj (:c::LastW/lasts w) a)))))
 
-(:wat::core::defn :c::last-walk [pg <- :c::Prog a <- :wat::core::i64
-                                 acc <- (:wat::core::Vector :- [:wat::core::i64])]
-    -> (:wat::core::Vector :- [:wat::core::i64])
+(:wat::core::defn :c::last-walk [pg <- :c::Prog a <- :wat::core::i64 w <- :c::LastW] -> :c::LastW
   (:wat::core::cond
-    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:c::last-note pg a acc))
-    ;; a list is walked in the order it RUNS, which for an indirect call is
-    ;; arguments then head. A vector or a map is already that order.
+    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {})) (:c::last-leaf pg a w))
     ((:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
-      (:c::last-kids pg (:c::eval-seq pg a) 0 acc))
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) w
+          (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
+            (:wat::core::cond
+              ((:wat::core::and (:wat::core::>= (:wat::core::length ks) 4) (:c::if? h))
+                (:c::last-if pg ks w))
+              ((:c::cond? h) (:c::last-cond pg ks 1 w))
+              ((:c::match? h) (:c::last-match pg ks w))
+              ;; a list is walked in the order it RUNS, which for an indirect call is
+              ;; arguments then head -- `:c::eval-seq`, reversed.
+              (:else
+                (:wat::core::let [eks (:c::eval-seq pg a)]
+                  (:c::last-kids pg eks (:wat::core::- (:wat::core::length eks) 1) 0 w))))))))
+    ;; a vector or a map is already evaluation order; no branch can occur inside one.
     ((:wat::core::or (:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {}))
                      (:wat::core::= (:c::kindv a pg) (:rd::Kind.Map {})))
-      (:c::last-kids pg (:c::kidsof pg a) 0 acc))
-    (:else acc)))
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:c::last-kids pg ks (:wat::core::- (:wat::core::length ks) 1) 0 w)))
+    (:else w)))
 
+;; `ks[floor..i]`, right to left -- `:c::eval-seq`'s order, reversed.
 (:wat::core::defn :c::last-kids [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
-                                 acc <- (:wat::core::Vector :- [:wat::core::i64])]
-    -> (:wat::core::Vector :- [:wat::core::i64])
+                                 floor <- :wat::core::i64 w <- :c::LastW] -> :c::LastW
+  (:wat::core::if (:wat::core::< i floor) w
+    (:c::last-kids pg ks (:wat::core::- i 1) floor (:c::last-walk pg (:wat::core::nth ks i) w))))
+
+;; `(if cond then else)`: the arms share the incoming `live`, not each other's; the condition
+;; -- the one part that always runs -- sees the join.
+(:wat::core::defn :c::last-if [pg <- :c::Prog ks <- :c::Kids w <- :c::LastW] -> :c::LastW
+  (:wat::core::let
+    [wt (:c::last-walk pg (:wat::core::nth ks 2) w)
+     we (:c::last-walk pg (:wat::core::nth ks 3)
+          (:c::LastW :live (:c::LastW/live w) :lasts (:c::LastW/lasts wt)))
+     joined (:c::LastW :live (:c::live-union (:c::LastW/live wt) (:c::LastW/live we) 0)
+                        :lasts (:c::LastW/lasts we))]
+    (:c::last-walk pg (:wat::core::nth ks 1) joined)))
+
+;; `cond`'s clauses are the SAME shape as a chain of `if`s -- clause `i` is "test this body,
+;; else try clause i+1" -- so this recurses exactly the way `:c::last-if` branches, one clause
+;; at a time. `:else` ends the chain: its body is not an arm with a sibling to join against, it
+;; is where the recursion bottoms out. `cks[0]` is the test (or the `:else` marker, not an
+;; expression); the body is `cks[1..]`.
+(:wat::core::defn :c::last-cond [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                 w <- :c::LastW] -> :c::LastW
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) w
+    (:wat::core::let [cks (:c::kidsof pg (:wat::core::nth ks i))]
+      (:wat::core::if (:wat::core::= (:c::text pg (:wat::core::nth cks 0)) ":else")
+        (:c::last-kids pg cks (:wat::core::- (:wat::core::length cks) 1) 1 w)
+        (:wat::core::let
+          [wbody (:c::last-kids pg cks (:wat::core::- (:wat::core::length cks) 1) 1 w)
+           welse (:c::last-cond pg ks (:wat::core::+ i 1)
+                   (:c::LastW :live (:c::LastW/live w) :lasts (:c::LastW/lasts wbody)))
+           joined (:c::LastW :live (:c::live-union (:c::LastW/live wbody) (:c::LastW/live welse) 0)
+                              :lasts (:c::LastW/lasts welse))]
+          (:c::last-walk pg (:wat::core::nth cks 0) joined))))))
+
+;; `match`'s arms are mutually exclusive, every one reached directly from the dispatch on the
+;; subject -- not a chain, so every arm starts over from the SAME incoming `live`, not the
+;; previous arm's. `aks[0]` is the arm's pattern keyword and `aks[1]` its bindings -- a BINDING
+;; of a new name, not a read of anything in the enclosing scope -- so the body is `aks[2..]`.
+(:wat::core::defn :c::last-match [pg <- :c::Prog ks <- :c::Kids w <- :c::LastW] -> :c::LastW
+  (:wat::core::let [joined (:c::last-match-arms pg ks 2 w w)]
+    (:c::last-walk pg (:wat::core::nth ks 1) joined)))
+
+(:wat::core::defn :c::last-match-arms [pg <- :c::Prog ks <- :c::Kids i <- :wat::core::i64
+                                       w <- :c::LastW acc <- :c::LastW] -> :c::LastW
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) acc
-    (:c::last-kids pg ks (:wat::core::+ i 1) (:c::last-walk pg (:wat::core::nth ks i) acc))))
+    (:wat::core::let
+      [aks (:c::kidsof pg (:wat::core::nth ks i))
+       warm (:c::last-kids pg aks (:wat::core::- (:wat::core::length aks) 1) 2
+              (:c::LastW :live (:c::LastW/live w) :lasts (:c::LastW/lasts acc)))]
+      (:c::last-match-arms pg ks (:wat::core::+ i 1) w
+        (:c::LastW :live (:c::live-union (:c::LastW/live acc) (:c::LastW/live warm) 0)
+                   :lasts (:c::LastW/lasts warm))))))
 
 ;; mentions of `name` in the current function's body, not its parameter list
 (:wat::core::defn :c::fn-body-occ [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::i64
@@ -5344,7 +5434,7 @@
                         (:wat::core::and (:wat::core::< (:c::scalar-field pg name 0) 0)
                           (:wat::core::and (:wat::core::= (:c::occ arm name pg) 0)
                             (:wat::core::and (:wat::core::> (:c::occ other name pg) 0)
-                              (:wat::core::and (:c::holds? pg iff (:c::last-node pg name))
+                              (:wat::core::and (:c::last-dies-in? pg name other)
                                 (:wat::core::or (:wat::core::not (:c::ronly? pg name 0))
                                                 (:c::leads-self? other pg)))))))
         true
@@ -5361,7 +5451,7 @@
                           (:wat::core::and (:wat::core::< (:c::scalar-field pg name 0) 0)
                             (:wat::core::and (:wat::core::= (:c::occ arm name pg) 0)
                               (:wat::core::and (:wat::core::> (:c::occ other name pg) 0)
-                                (:wat::core::and (:c::holds? pg iff (:c::last-node pg name))
+                                (:wat::core::and (:c::last-dies-in? pg name other)
                                   (:wat::core::or (:wat::core::not (:c::ronly? pg name 0))
                                                   (:c::leads-self? other pg)))))))
           (:c::drop-kept name o env pg rt)
@@ -7990,7 +8080,10 @@
                         :nlr nlr)
                       :regbase nr)
                     :slots slots)
-                  :lasts (:c::last-walk pg node (:wat::core::Vector :- [:wat::core::i64])))
+                  :lasts (:c::LastW/lasts
+                           (:c::last-walk pg node
+                             (:c::LastW :live (:wat::core::Vector :- [:wat::core::String])
+                                        :lasts (:wat::core::Vector :- [:wat::core::i64])))))
                 :scalar (:c::Sc/names sc))
               :sfield (:c::Sc/fields sc))
             :linear (:c::linear-of pv 0 ks start

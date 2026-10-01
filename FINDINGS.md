@@ -15653,7 +15653,12 @@ refusal or a representation belongs. Not traced.
 
 ### F-210: "last use" is one node per name per function -- a value returned from one arm of an `if` is counted, and leaks
 
-**Open.** Found 2026-09-30 by the strike that fixed F-209: `elf/probe/drop-vec-cycle.wat`'s tree, built by a
+**Fixed 2026-10-01** (`SCORE-F-210-last-use-per-path.md`): `:c::Prog/lasts` is the SET of last uses from one
+backward walk over `:c::eval-seq`'s order, arms as alternatives, joined by a deduplicating `:c::live-union` (a bare
+concatenation there doubled the live set at every unrolled `if` -- exponential, found by the native chain). The
+loop-returned tree reaches its drop with count 1; with F3 reverted it now overflows a 256 KB stack.
+
+**Was open.** Found 2026-09-30 by the strike that fixed F-209: `elf/probe/drop-vec-cycle.wat`'s tree, built by a
 self-tail-recursive `user/nest` and dropped whole, reaches its drop with count **2** (gdb, `[rax-8]`), so its glue
 never runs. `user/nest` is `(if (= i 0) acc (user/nest (- i 1) (... acc ...)))`. `:c::last-use?`
 (`elf/compile.wat:4499`) asks whether a node is THE last occurrence of its name in the function (`:c::Prog/lasts`,
