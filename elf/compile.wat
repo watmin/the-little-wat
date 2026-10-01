@@ -985,9 +985,32 @@
           (:wat::core::if (:wat::core::= (:wat::core::length ftys) 1)
             (:wat::core::nth ftys 0) ""))))))
 
+;; the KIND of a type NODE -- a pointer, and whether it could also be a unit tag -- without
+;; resolving a nested type ARGUMENT (`:c::ty-node-kind`, below). F-209: a `(Vector :- [T])`
+;; field's kind is "vec:" -- a pointer, never a possible unit tag -- whatever `T` is, so
+;; `:c::enum-tier` must not ask for the fully SPELLED element type to learn that.
+;;
+;; that variant's single field's KIND, mirroring `:c::sole-payload-ty` -- "" when the shape
+;; does not qualify, and the instantiation argument itself (already a resolved type string,
+;; so safe) when the field is a bare type parameter.
+(:wat::core::defn :c::sole-payload-kind [es <- :c::Enums ei <- :wat::core::i64 arg <- :wat::core::String
+                                         pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::not= (:c::payload-count es ei 0 0 pg) 1) ""
+    (:wat::core::let [t (:c::sole-payload-tag es ei 0 pg)]
+      (:wat::core::if (:wat::core::not= (:c::variant-arity es ei t pg) 1) ""
+        (:wat::core::let
+          [fks (:c::arm-fks pg ei t)
+           tn (:wat::core::nth fks 2)
+           raw (:c::text pg tn)
+           tt (:wat::core::if (:wat::string::starts-with? raw ":")
+                (:wat::string::subs raw 1 (:wat::string::length raw)) raw)
+           params (:c::Enum/params (:wat::core::nth es ei))]
+          (:wat::core::if (:wat::core::>= (:c::index-of-str params tt 0) 0) arg
+            (:c::ty-node-kind tn pg)))))))
+
 (:wat::core::defn :c::enum-tier [es <- :c::Enums ei <- :wat::core::i64 arg <- :wat::core::String
                                  pg <- :c::Prog] -> :wat::core::i64
-  (:wat::core::let [p (:c::sole-payload-ty es ei arg pg)]
+  (:wat::core::let [p (:c::sole-payload-kind es ei arg pg)]
     (:wat::core::cond
       ((:wat::core::not (:c::Enum/heap (:wat::core::nth es ei))) 0)
       ;; a pointer that can itself be a unit tag is not tier 1 (F-200): `Some(None)` and
@@ -1434,6 +1457,29 @@
           (:else
             (:wat::kernel::assertion-failed!
               :message (:wat::string::concat "compile: unknown type: " src)))))))))
+
+;; the KIND of a type node -- enough to answer `:c::ptr-ty?` / `:c::maybe-unit?` -- without
+;; resolving a nested type ARGUMENT the way `:c::ty-node` does. A `[Args :-> Ret]` function
+;; type, a `(Vector :- [X])` type and a bare record name are a pointer and never a possible
+;; unit tag whatever `X` (or the function's own argument and return types) is, so the node's
+;; own shape decides the kind with no recursion into it at all. Only a bare or parametric
+;; enum/variant reference's kind depends on what it names (its own tier), and that still asks
+;; `:c::ty-node` -- bounded, because naming an enum as its own UNWRAPPED, un-indirected
+;; payload would be an infinite-size value and cannot be declared. F-209: `:c::enum-tier`
+;; asking `:c::ty-node` for a `(Vector :- [T])` payload's FULL spelling recursed through `T`'s
+;; own tier to decide `T`'s tier -- forever, when `T` is the enum being decided. The kind
+;; "vec:" does not need `T`'s spelling at all.
+(:wat::core::defn :c::ty-node-kind [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::String
+  (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) "fn:"
+    (:wat::core::if (:wat::core::= (:c::kindv a pg) (:rd::Kind.List {}))
+      (:wat::core::let [ks (:c::kidsof pg a)]
+        (:wat::core::if (:wat::core::and (:wat::core::>= (:wat::core::length ks) 3)
+                                          (:c::vector? (:c::text pg (:wat::core::nth ks 0))))
+          "vec:"
+          (:c::ty-node a pg 8)))
+      (:wat::core::let [src (:c::text pg a)]
+        (:wat::core::if (:wat::core::>= (:c::rec-index (:c::Prog/recs pg) src 0) 0) "rec:"
+          (:c::ty-node a pg 8))))))
 
 ;; ---------------------------------------------------------------- function types
 ;;
@@ -4568,11 +4614,19 @@
 ;; the drop site's fast path (a bare `dec`) is unchanged, exactly as it was before this round.
 ;; A `penum:` value never gets its OWN routine: tier 1's payload IS the pointer, so dropping it
 ;; is dropping the SOLE PAYLOAD TYPE directly (`:c::glue-target-ty`). A type that reaches ITSELF
-;; through its `rec:`/`henum:` fields (a cycle, `:c::cyclic?`) gets no routine either: its
-;; references leak, late, never early, exactly as the WEIGH's ruling asks -- a `vec:T`/`fn:...`
-;; field never counts as a cycle edge, because a Vector's own recursion is bounded by the trie
-;; (13 levels, `:c::node-arity`) regardless of what `T` is, and a closure's captures are a
-;; separate strike (G2).
+;; through its `rec:`/`henum:`/`vec:` fields (a cycle, `:c::cyclic?`) gets no routine either: its
+;; references leak, late, never early, exactly as the WEIGH's ruling asks.
+;;
+;; **A `vec:T` field IS a cycle edge to `T`** (excursus 008 F3) -- `:c::shape-children` says so
+;; and `:c::cyclic?` walks it. The trie bounds only a Vector's OWN internal levels, never
+;; recursion through its ELEMENTS: nodes are 32-way (`:c::node-arity`), each consuming 5 bits of
+;; a 63-bit (non-negative `i64`) index, so a trie is at most ⌈63/5⌉ = 13 levels deep regardless
+;; of `T` (`:c::node-glue-body`, bounded self-recursion) -- log₃₂ of the Vector's own LENGTH in
+;; practice. That bounds nothing about a type recursive THROUGH a Vector, such as a tree of
+;; nodes with a Vector of children (`:user::Val`'s `:Vec` in `matchval.wat`): without this edge,
+;; `:c::cyclic?` missed it and glue for such a type would call itself once per level of the
+;; user's DATA, unbounded, against the ruling that drops are iterative (F-209's sibling defect).
+;; `fn:...` fields are not walked either way (a closure's captures are a separate strike, G2).
 ;;
 ;; The census is computed ONCE, purely from declarations, before either compiler pass runs, and
 ;; handed to both passes on `:c::Prog` (`:gtys`/`:gaddrs`, parallel). Every glue routine is built
@@ -4737,7 +4791,11 @@
                 :shapes (:wat::core::Vector :- [:wat::core::String])
                 :vecs (:wat::core::Vector :- [:wat::core::String]))))
 
-;; the CYCLE graph: `rec:`/`henum:` edges only (a `vec:`/`fn:` boxing never counts, crawl S1)
+;; the CYCLE graph's nodes: `rec:`/`henum:` edges, AND `vec:` (excursus 008 F3 -- a `vec:T`
+;; field is an edge to `T`, found through the Vector by `:c::shape-children`'s own `vec:` arm;
+;; keeping it OUT of this list is what cut the edge before that arm ever ran). `fn:` still never
+;; counts here -- a closure's captures are reached from the creation site, not the type, and are
+;; a separate strike (G2).
 (:wat::core::defn :c::shape-only [ts <- (:wat::core::Vector :- [:wat::core::String]) i <- :wat::core::i64
                                   pg <- :c::Prog acc <- (:wat::core::Vector :- [:wat::core::String])]
     -> (:wat::core::Vector :- [:wat::core::String])
@@ -4745,7 +4803,8 @@
     (:wat::core::let [t2 (:c::glue-target-ty (:wat::core::nth ts i) pg)]
       (:c::shape-only ts (:wat::core::+ i 1) pg
         (:wat::core::if (:wat::core::or (:wat::string::starts-with? t2 "rec:")
-                          (:wat::string::starts-with? t2 "henum:"))
+                          (:wat::core::or (:wat::string::starts-with? t2 "henum:")
+                                          (:wat::string::starts-with? t2 "vec:")))
           (:wat::core::conj acc t2) acc)))))
 
 (:wat::core::defn :c::shape-children [t <- :wat::core::String pg <- :c::Prog]
@@ -4755,6 +4814,16 @@
                                               (:wat::core::Vector :- [:wat::core::String])))
     ((:wat::string::starts-with? t "henum:") (:c::shape-only (:c::henum-ptr-ftys t pg) 0 pg
                                                 (:wat::core::Vector :- [:wat::core::String])))
+    ;; **excursus 008 F3: `vec:T` is an edge to `T`.** The trie bounds a Vector's OWN levels
+    ;; (`:c::node-arity`, `:c::node-glue-body`), not recursion through its ELEMENTS: a type
+    ;; recursive through a Vector field (`:user::Val`'s `:Vec` here; a tree of nodes with a
+    ;; Vector of children) is recursive, the same as through a record or a payload enum field,
+    ;; and must get no glue until 3b-3's worklist -- its own glue would otherwise call itself
+    ;; once per level of the user's DATA, unbounded, against the ruling that drops are
+    ;; iterative. This used to fall to the `:else` below (no children at all), which is why
+    ;; `:c::cyclic?` missed it.
+    ((:wat::string::starts-with? t "vec:")
+      (:wat::core::conj (:wat::core::Vector :- [:wat::core::String]) (:c::elem-ty t)))
     (:else (:wat::core::Vector :- [:wat::core::String]))))
 
 ;; does a walk from `start`'s own children ever lead back to `start`?
@@ -4973,10 +5042,14 @@
      o21 (:c::emit o20 (:c::reg-pop (:c::rbx)))]
     (:c::emit o21 (:c::ret))))
 
-;; `node:X` -- self-recursive, bounded to 13 frames (64-bit index, 5 bits a level). INPUT:
-;; `rax` the node, `rdx` the shift remaining (0 means this node's 32 slots are `X` elements;
-;; otherwise they are child nodes, recursed into with `shift-5`). An unfilled slot is zero
-;; (`:c::rt-node-new` zeroes every slot) and is skipped, never dropped.
+;; `node:X` -- self-recursive, bounded to ⌈63/5⌉ = 13 frames: nodes are 32-way
+;; (`:c::node-arity`), each level consuming 5 bits of a 63-bit (non-negative `i64`) index, so a
+;; trie is at most 13 levels deep -- log₃₂ of the Vector's own length in practice, not a bound
+;; on what `X` is (excursus 008 F3: recursion THROUGH `X` is a separate question,
+;; `:c::shape-children`'s `vec:` edge). INPUT: `rax` the node, `rdx` the shift remaining (0
+;; means this node's 32 slots are `X` elements; otherwise they are child nodes, recursed into
+;; with `shift-5`). An unfilled slot is zero (`:c::rt-node-new` zeroes every slot) and is
+;; skipped, never dropped.
 (:wat::core::defn :c::node-glue-body [elem <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
                                       o <- :c::Out] -> :c::Out
   (:wat::core::let
@@ -5377,10 +5450,13 @@
     [lo (:wat::core::match rd
           [:c::Read.Elem {:tget tget}
             ;; the branch predicts because a vector stays in one arm for its whole life
+            ;; **asks `:c::vec-tree`, not `:c::vec-flat`** -- a flat-but-owned block
+            ;; (`:c::vec-flat-own`) must take the array arm too, not be mistaken for a trie
+            ;; and handed to `tget` reading its elements as `shift`/`root` (excursus 008 F2).
             (:c::call
               (:c::emit o (:wat::string::concat
-                "488378f000"                  ;; cmp qword [rax-16], 0   -- which arm?
-                "0f8507000000"                ;; jne +7                  -- the tree
+                "488378f001"                  ;; cmp qword [rax-16], 1   -- which arm?
+                "0f8407000000"                ;; je +7                   -- the tree
                 "488b44c808"                  ;; mov rax,[rax+rcx*8+8]   -- the array
                 "eb05"))                      ;; jmp +5                  -- over the call
               tget)]

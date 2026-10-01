@@ -15638,7 +15638,10 @@ consulted by the generator and every analysis, and each consumer stating its saf
 
 ### F-209: an enum whose one payload variant holds a Vector of itself crashes the compiler
 
-**Open.** Found 2026-09-30 writing stone 3b's cycle probe. `elf/probe/f209-tier1-self-vec.wat` declares
+**Fixed 2026-09-30** (`SCORE-stone-3b-fix-the-discovered.md`): the tier is decided from the payload's KIND
+(`:c::sole-payload-kind`), never its full spelling.
+
+**Was open.** Found 2026-09-30 writing stone 3b's cycle probe. `elf/probe/f209-tier1-self-vec.wat` declares
 `:user::T` with `:Leaf []` and `:Node [kids <- (:wat::core::Vector :- [:user::T])]`, and a `main` that prints
 `1`. The compiler, run by the interpreter (`tools/probe.sh`), dies with SIGSEGV — a stack overflow in the
 interpreter — before it emits anything; the tree before stone 3b-1 (`c4a54ff`) dies the same way, so it is

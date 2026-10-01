@@ -617,11 +617,15 @@
 ;; **Four paths, and only the last one copies.** In order of how much they save:
 ;;
 ;;   * the Vector is a TRIE, not a flat array -> hand off to the copying `vec_conj`;
-;;   * it carries `:c::arm-own` AND the new element fits the power-of-two block it was given
-;;     -> write the element in place and bump the length. Nothing is allocated at all;
-;;   * it carries `:c::heap-arm` and its last element ENDS EXACTLY AT THE HEAP TOP -> it was the
-;;     most recent allocation, so the heap can simply be extended by one word over it;
-;;   * otherwise -> copy, and mark the copy `:c::arm-own` so the next `conj` can take path two.
+;;   * its TAG is `:c::vec-flat-own`, AND its count is exactly one (nobody else shares the
+;;     block), AND the new element fits the power-of-two block it was given -> write the
+;;     element in place and bump the length. Nothing is allocated at all;
+;;   * its count is `:c::heap-arm` (one) and its last element ENDS EXACTLY AT THE HEAP TOP ->
+;;     it was the most recent allocation, so the heap can simply be extended by one word over it;
+;;   * otherwise -> copy, and tag the copy `:c::vec-flat-own` so the next `conj` can take path
+;;     two -- the COUNT word is left holding a real count, one, same as any other allocation
+;;     (excursus 008 F2: `:c::arm-own` used to be written there instead, so the ordinary
+;;     increment/decrement every type's refcounting uses could never bring it back to zero).
 ;;
 ;; That third test is the whole trick: `lea 0x8(%rax,%r8,8)` is the address just past the last
 ;; element, and comparing it to r15 asks "is this vector the youngest thing on the heap?"
@@ -637,12 +641,16 @@
                 (:c::lea-at (:c::r8) 1 (:c::rdx))
                 (:c::mov-mr (:c::rdx) (:c::rax) 0)
                 (:c::ret))
-     ;; path 3: the vector is the youngest allocation, so grow the heap over it
-     extend (:wat::string::concat
-              (:c::rt-bump (:wat::core::+ P 56) lay (:c::add-ri (:c::r11) w) (:c::r11))
-              (:c::mov-mr (:c::rcx) (:c::r15) 0)
-              (:c::mov-rr (:c::r11) (:c::r15))
-              bump-len)
+     ;; path 3: the vector is the youngest allocation, so grow the heap over it. `:c::rt-bump`'s
+     ;; emitted length never depends on the VALUE of its address argument (every encoding here
+     ;; is fixed-width), only on its own shape -- so this placeholder (address 0) measures the
+     ;; real `extend`'s length before that address is known, to size `fallback`'s skip below.
+     extend-grow (:c::add-ri (:c::r11) w)
+     extend-tail (:wat::string::concat
+                   (:c::mov-mr (:c::rcx) (:c::r15) 0)
+                   (:c::mov-rr (:c::r11) (:c::r15))
+                   bump-len)
+     extend-at0 (:wat::string::concat (:c::rt-bump 0 lay extend-grow (:c::r11)) extend-tail)
      ;; path 2: it has room inside the block it was already given
      grown-test (:wat::string::concat
                   (:c::mov-rm (:c::rax) 0 (:c::r8))
@@ -659,7 +667,50 @@
      grown (:wat::string::concat grown-test
              (:c::br-len (:c::jcc-rel8 (:c::cc-above)) (:c::hexlen grown-tail))
              grown-tail)
-     ;; path 4: copy, and mark the copy so the next conj can take path two
+     ;; **the tag is `:c::vec-tree` or not** -- never "is it `:c::vec-flat`": a flat-but-owned
+     ;; block (`:c::vec-flat-own`) must take this SAME fall-through, not the trie hand-off
+     ;; (excursus 008 F2).
+     head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-tree))
+     ;; count word only, now that the owned mark lives in the tag: "is this the one and only
+     ;; reference" -- `:c::heap-arm` is the literal 1, the count every fresh allocation starts
+     ;; at and the only count path 2 or path 3 may act on.
+     flat-test (:c::cmp-mi (:c::rax) (:wat::core::- 0 w) (:c::heap-arm))
+     ;; path 2's test is now two conditions, AND'd: the tag says the block has spare capacity
+     ;; (`:c::vec-flat-own`), and the count says nobody else shares it (reusing `flat-test`'s
+     ;; exact bytes for the second half -- same comparison, same meaning). A tag mismatch skips
+     ;; the count check entirely and leaves ZF as the tag check left it (not equal), so the far
+     ;; jump below to `grown` is not taken either way.
+     own-test (:wat::string::concat
+                (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat-own))
+                (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) (:c::hexlen flat-test))
+                flat-test)
+     tail-test (:wat::string::concat
+                 (:c::mov-rm (:c::rax) 0 (:c::r8))
+                 (:c::rm "8d" (:c::rdx) (:c::rax) (:c::r8) w (:c::vec-data))
+                 (:c::cmp-rr (:c::r15) (:c::rdx)))
+     fallback (:wat::string::concat
+                (:c::mov-rr (:c::rcx) (:c::r9))
+                (:c::br-len "eb" (:wat::core::+ (:c::hexlen extend-at0) (:c::hexlen grown))))
+     a-j1 (:wat::core::+ P (:c::hexlen head))
+     a-j2 (:wat::core::+ a-j1
+            (:wat::core::+ (:c::rel32-size)
+              (:wat::core::+ (:c::hexlen own-test)
+                (:wat::core::+ (:c::rel8-size) (:c::hexlen flat-test)))))
+     ;; the address `extend` begins at, as a sum of the pieces that precede it -- not a
+     ;; remembered number: own-test's length changed under F2, and a literal here (as it used
+     ;; to be, "56") would have gone stale silently instead of moving with it.
+     pre-extend (:wat::core::+ (:wat::core::- a-j2 P)
+                  (:wat::core::+ (:c::rel32-size)
+                    (:wat::core::+ (:c::hexlen tail-test)
+                      (:wat::core::+ (:c::rel8-size) (:c::hexlen fallback)))))
+     extend (:wat::string::concat
+              (:c::rt-bump (:wat::core::+ P pre-extend) lay extend-grow (:c::r11))
+              extend-tail)
+     ;; the address `copy` begins at -- `extend`'s real length equals `extend-at0`'s by
+     ;; construction (same fixed-width encoding, a different address plugged in), so this is
+     ;; exact, not an approximation.
+     pre-copy (:wat::core::+ pre-extend (:wat::core::+ (:c::hexlen extend) (:c::hexlen grown)))
+     ;; path 4: copy, and tag the copy so the next conj can take path two
      copy-pre (:wat::string::concat
                 (:c::mov-rm (:c::rax) 0 (:c::r8))
                 (:c::lea (:c::no-reg) (:c::r8) w fresh (:c::rdx))
@@ -668,11 +719,10 @@
                 (:c::shl-cl (:c::rdx)))
      copy (:wat::string::concat
             copy-pre
-            (:c::rt-bump (:wat::core::+ P (:wat::core::+ 142 (:c::hexlen copy-pre))) lay
+            (:c::rt-bump (:wat::core::+ P (:wat::core::+ pre-copy (:c::hexlen copy-pre))) lay
               (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11))
-            (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
-            (:c::movabs (:c::rdx) (:c::arm-own))
-            (:c::mov-mr (:c::rdx) (:c::r15) w)
+            (:c::mov-mi (:c::r15) 0 (:c::vec-flat-own))
+            (:c::mov-mi (:c::r15) w 1)
             ;; r10 is still the caller's flag; the next lea spends the register
             (:c::reg-push (:c::rbx))
             (:c::mov-rr (:c::r10) (:c::rbx))
@@ -688,27 +738,10 @@
             (:c::mov-mr (:c::r9) (:c::rdi) 0)
             (:c::mov-rr (:c::r11) (:c::r15))
             (:c::mov-rr (:c::r10) (:c::rax))
-            (:c::ret))
-     head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat))
-     own-test (:wat::string::concat
-                (:c::movabs (:c::r9) (:c::arm-own))
-                (:c::cmp-mr (:c::r9) (:c::rax) (:wat::core::- 0 w)))
-     flat-test (:c::cmp-mi (:c::rax) (:wat::core::- 0 w) (:c::heap-arm))
-     tail-test (:wat::string::concat
-                 (:c::mov-rm (:c::rax) 0 (:c::r8))
-                 (:c::rm "8d" (:c::rdx) (:c::rax) (:c::r8) w (:c::vec-data))
-                 (:c::cmp-rr (:c::r15) (:c::rdx)))
-     fallback (:wat::string::concat
-                (:c::mov-rr (:c::rcx) (:c::r9))
-                (:c::br-len "eb" (:wat::core::+ (:c::hexlen extend) (:c::hexlen grown))))
-     a-j1 (:wat::core::+ P (:c::hexlen head))
-     a-j2 (:wat::core::+ a-j1
-            (:wat::core::+ (:c::rel32-size)
-              (:wat::core::+ (:c::hexlen own-test)
-                (:wat::core::+ (:c::rel8-size) (:c::hexlen flat-test)))))]
+            (:c::ret))]
     (:wat::string::concat
       head
-      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-vconj lay)
+      (:c::rt-branch (:c::cc-zero) (:c::at-vconj lay)
         (:wat::core::+ a-j1 (:c::rel32-size)))
       own-test
       (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
@@ -1043,15 +1076,19 @@
 ;; then goes to `tree_push`; a flat one with room is copied with the new element appended.
 (:wat::core::defn :c::rt-vec-conj [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
-    [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat))
-     at-jne (:wat::core::+ (:c::at-vconj lay) (:c::hexlen head))
-     ;; not flat: it is the trie already
-     to-push (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-tpush lay)
-               (:wat::core::+ at-jne (:c::rel32-size)))
+    [;; **the tag is `:c::vec-tree` or not** -- never "is it `:c::vec-flat`": a flat-but-owned
+     ;; block (`:c::vec-flat-own`) must fall through here too, not be mistaken for a trie
+     ;; already and handed to `tree_push`, which would read its elements as `shift`/`root`
+     ;; (excursus 008 F2).
+     head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-tree))
+     at-je (:wat::core::+ (:c::at-vconj lay) (:c::hexlen head))
+     ;; a trie already: jump on EQUAL (the discriminant is `:c::vec-tree`)
+     to-push (:c::rt-branch (:c::cc-zero) (:c::at-tpush lay)
+               (:wat::core::+ at-je (:c::rel32-size)))
      test (:wat::string::concat
             (:c::mov-rm (:c::rax) 0 (:c::r8))
             (:c::cmp-ri (:c::r8) (:c::arr-max)))
-     at-promote (:wat::core::+ at-jne
+     at-promote (:wat::core::+ at-je
                   (:wat::core::+ (:c::rel32-size)
                     (:wat::core::+ (:c::hexlen test) (:c::rel8-size))))
      ;; full: promote to a tree, then push into it
@@ -1910,17 +1947,12 @@
 ;; the word every allocation writes at its start, one word BEFORE the pointer it hands out.
 ;; `str_cat_own` tests it to tell an owned String from a borrowed one.
 (:wat::core::defn :c::heap-arm [] -> :wat::core::i64 1)
-;; **the arm `vec_conj_own` writes, and only it.** One in each of two 32-bit halves, distinct
-;; from `:c::heap-arm` so that a Vector built by the COPYING `vec_conj` can never be mistaken
-;; for one this routine made and may extend in place again.
-(:wat::core::defn :c::arm-own [] -> :wat::core::i64 4294967297)
 ;; excursus 008 stone 3b-1 (G5): what a dead object's count word becomes, under
 ;; `WAT_DROP_CHECK=1`, the moment a decrement takes it to zero. Not 0 -- a literal's count is
-;; already 0, and a poisoned object must never read as one. Not `:c::arm-own` -- that word sits
-;; one slot further from the pointer for a Vector and never overlaps this one. `-1` sign-extends
-;; through `:c::mov-mi`'s 32-bit immediate to fill the whole 64-bit word, and no live count is
-;; ever negative, so one comparison tells a poisoned object from a live one. Nothing is freed
-;; this strike -- the bytes stay exactly where they were, only unusable.
+;; already 0, and a poisoned object must never read as one. `-1` sign-extends through
+;; `:c::mov-mi`'s 32-bit immediate to fill the whole 64-bit word, and no live count is ever
+;; negative, so one comparison tells a poisoned object from a live one. Nothing is freed this
+;; strike -- the bytes stay exactly where they were, only unusable.
 (:wat::core::defn :c::poison-count [] -> :wat::core::i64 -1)
 ;; a tree node: one header word, then a fixed fan-out of child slots
 (:wat::core::defn :c::node-data [] -> :wat::core::i64 8)
@@ -1942,8 +1974,17 @@
 ;; **a Vector is FLAT until it is not.** The word two before the pointer says which: a small
 ;; vector is a plain array and `conj` copies it; past `:c::arr-max` elements it is promoted to
 ;; the 32-way trie and `conj` goes through `tree_push` instead. `vec_conj` tests exactly this.
+;; Every reader must ask "is it `:c::vec-tree`", never "is it `:c::vec-flat`": a third value
+;; (`:c::vec-flat-own`) is ALSO flat (excursus 008 F2).
 (:wat::core::defn :c::vec-flat [] -> :wat::core::i64 0)
 (:wat::core::defn :c::vec-tree [] -> :wat::core::i64 1)
+;; **flat, in an owned power-of-two block** (excursus 008 F2) -- `vec_conj_own`'s path 4 marks
+;; its fresh copy with this instead of plain `:c::vec-flat`, because the block has spare
+;; capacity past `len` that path 2 may fill in place. This used to be `:c::arm-own`, written
+;; into the COUNT word; a count word must hold only a count (it is read and written by the
+;; same generic increment/decrement every other type uses), so the mark moves here and path 2
+;; now asks two things: this tag, AND a count of exactly one (nobody else shares the block).
+(:wat::core::defn :c::vec-flat-own [] -> :wat::core::i64 2)
 (:wat::core::defn :c::arr-max [] -> :wat::core::i64 8)
 (:wat::core::defn :c::varr-ptr [] -> :wat::core::i64 16)
 (:wat::core::defn :c::varr-hdr [] -> :wat::core::i64 24)
