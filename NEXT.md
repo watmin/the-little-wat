@@ -7,35 +7,35 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-09-28, HEAD 586907a)
+## elf/ — the live queue (2026-10-01, HEAD 956b4bb)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`586907a`** (008 stone 3a landed). `git log --oneline -1` must show it
-(or a later commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
+**Freshness probe:** written against **`956b4bb`** (F-210 fixed). `git log --oneline -1` must show it (or a later
+commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
 
-### NEXT STRIKE — excursus 008 stone 3b (drop glue per type + freeing), CRAWL FIRST
+### NEXT STRIKE — excursus 008 stone 3b-2 (freeing to the bump), DRAW IT from `WEIGH-stone-3b-rescoped.md`
 
-**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md` (the items, the
-builder's rulings), `CRAWL-M1-the-count-comes-down.md`, `NOTE-stone-3a-landed.md` (what 3a is and the six
-roots it took), `BRIEF-stone-3-the-drop.md` (D1 drop glue with a worklist, D4 freeing to the bump when
-youngest), `BENCH-baseline.md`.
+**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md`, `CRAWL-stone-3b-drop-glue-and-freeing.md`,
+`WEIGH-stone-3b-rescoped.md` (3b split into three; 3b-1 landed; "After 3b-1"), `SCORE-stone-3b-fix-the-discovered.md`,
+`SCORE-F-210-last-use-per-path.md`.
 
-**On waking:** closures DONE (003). Excursus 008, MEMORY FIRST — the builder: memory "very close to what rust
-feels like", no Java/Go GC pauses; one discipline (the count); arguments OWNED; `poke` typed; drops
-synchronous + iterative. LANDED: stone 1 (the heap grows to demand), stone 2 (every reference counted), the
-bench baseline, **stone 3a (every drop placed, one emission, the check build `WAT_DROP_CHECK=1`: the compiler and
-the whole corpus run under it with zero underflows)**. NOTHING IS FREED YET: 3b is drop glue per type and freeing;
-then the bench against the baseline and the compiler's cost against stones 1 and 2. The region release
-(C-120) and 001 stone 1 retire LAST.
+**On waking:** excursus 008, MEMORY FIRST — the builder: memory "very close to what rust feels like", no GC pauses; drops
+synchronous and ITERATIVE; *"i'm not finding it acceptable that we have these issues"* (2026-09-30) — discovered defects are
+fixed before building on them. LANDED: stones 1, 2, the bench baseline, 3a (every drop placed), 3b-1 (glue per type;
+`WAT_DROP_CHECK=1` poisons a dead object and any reuse stops), the discovered-defects strike (F-209; the count word is a
+count; recursion through a Vector is recursion), F-210 (a last use is per path). **NOTHING IS FREED YET.** Next: 3b-2
+(free to the bump when youngest, sizes from the allocators' own functions; `drop-3b-recs` / `-closure` peak RSS falls),
+then 3b-3 (closure glue; the intrusive worklist — `drop-3b-list` drops flat; `drop-vec-cycle` under `ulimit -s 256`),
+then the bench against `BENCH-baseline.md`.
 
-**Executors:** Grok is out of credits for some days (builder, 2026-09-27): strike with a Claude Sonnet agent
-(Agent tool, `model: sonnet`, background) — the WEIGH round is its brief; it commits nothing; weigh on your OWN
-runs. **Every gate is `tools/verify.sh` AND `WAT_DROP_CHECK=1 tools/verify.sh`.** To measure an instrumented
-compiler, go two native hops (a `--fast` seed decides stage 1's code) — `probe-3a-twohop-step.sh`; to find who
-takes a count to zero, a gdb hardware watchpoint on its `[p-8]`.
+**Executors:** Claude Sonnet agents (Agent tool, `model: sonnet`, background) while Grok is out — they get cut off
+mid-run: briefs say "write the SCORE AS YOU GO", and resume a cut-off executor with SendMessage (context kept). Weigh
+on your OWN runs: **`tools/verify.sh` AND `WAT_DROP_CHECK=1 tools/verify.sh`** (~30 min each, in sequence). A change
+to what is EMITTED needs a native chain of three hops (seed → s1 → s2 → s3), not a `--fast` bootstrap. Who takes a
+count to zero: a gdb hardware watchpoint on `[p-8]` (ASLR off).
 
 **VERIFY WITH `tools/verify.sh`**: a full bootstrap, then `SKIP_BUILD=1 tools/elf-run.sh` on the
 binaries it proved — one interpreted compile (~15-25 min; ~30 min for the whole verify). A stamp of every
