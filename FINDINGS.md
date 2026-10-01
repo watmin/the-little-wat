@@ -15647,3 +15647,19 @@ compiles: it has several payload variants, so it is tier 3, where `T` has ONE an
 its payload" (`:c::enum-tier`). The candidate: deciding `T`'s representation asks for its payload's, which is
 a Vector of `T`, which asks for `T`'s. A valid program the compiler cannot compile, and a crash where a
 refusal or a representation belongs. Not traced.
+
+### F-210: "last use" is one node per name per function -- a value returned from one arm of an `if` is counted, and leaks
+
+**Open.** Found 2026-09-30 by the strike that fixed F-209: `elf/probe/drop-vec-cycle.wat`'s tree, built by a
+self-tail-recursive `user/nest` and dropped whole, reaches its drop with count **2** (gdb, `[rax-8]`), so its glue
+never runs. `user/nest` is `(if (= i 0) acc (user/nest (- i 1) (... acc ...)))`. `:c::last-use?`
+(`elf/compile.wat:4499`) asks whether a node is THE last occurrence of its name in the function (`:c::Prog/lasts`,
+one node per name, from `:c::last-walk`). `acc`'s last occurrence in evaluation order is in the ELSE arm's tail
+call, so the THEN arm's `acc` — the value the loop returns, its own last use on that path — is "not last", and
+`:c::expr-val` increments it. Every value a loop builds and returns comes out with one count too many: over-counted,
+so never early — but never freed either, which defeats freeing (stone 3b-2) for exactly the values loops build.
+
+The class: liveness is path-INsensitive. A use is the last when no read of the name can FOLLOW it on any path;
+the two arms of an `if` do not follow each other. The fix is a backward liveness walk over the one evaluation
+order (`:c::eval-seq`), with an `if`'s / `cond`'s / `match`'s arms as alternatives — the set of last uses, not one
+node — computed once per function as `:c::Prog/lasts` is today.
