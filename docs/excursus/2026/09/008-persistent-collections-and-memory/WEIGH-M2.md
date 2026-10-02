@@ -63,3 +63,37 @@ bytes from that site. At exit, report the top sites by bytes still live, with th
 top five, say what each is: data the compiler legitimately keeps until exit (its program, its output), or a value
 whose count never comes down (a counting defect, F-210's class) — with a minimal shape for each defect. Rename the
 mislabelled counter. Measure nothing else this round.
+
+---
+
+## R2, weighed (2026-10-01)
+
+**Credited.** The site word names real functions (`strings.elf`: three sites summing exactly to its live bytes); the
+self-compile's site sums close to the routine sums within the extend bytes; nothing unmapped. Five compiler
+functions hold 353,998,600 of the 554,353,864 bytes never freed, and none of it is output the compiler keeps: each
+`:c::compile` returns nil. The mislabelled counter is now `reached.<cat>.count`.
+
+**Confirmed on the page:** `:c::drop-if-last` (13 call sites) drops an operand ONLY when it is a Symbol. A fresh
+temporary handed to a reading built-in — `(= (subs s i (+ i 1)) c)` in `:asm::scan` — is never dropped. 3a's
+placement table promised *"a temporary operand of a READING built-in: right after the read"*; only `length` got it.
+And `:c::cat-fold`'s later operands are COPIED by `str_cat` (read, never consumed — its own comment), so a temporary
+there (`:asm::u8`'s low nibble; `:c::patch`'s tail `subs`) is never dropped either.
+
+## R3 — every temporary a built-in reads is dropped after the read
+
+The rule is uniform now, and it lives in ONE place: since F-188 (a read out of a container is counted) and R16
+(`:c::expr-val`), every pointer-typed expression that is NOT a Symbol hands its consumer an OWNED reference — a call's
+result, a counted read, an `if` / `let` / `do` whose value flows on. So a reading built-in drops a non-Symbol pointer
+operand right after the read; a count-0 literal is skipped by the literal guard. Put that in `:c::drop-if-last` (the
+Symbol case stays as it is), and give `:c::cat-fold`'s read operands the same treatment. Say why no reading built-in
+can miss it.
+
+**Evidence:** minimal fixtures for the three shapes — `(= (subs s i (+ i 1)) c)`, `(concat (nibble hi) (nibble lo))`,
+`(concat (subs code 0 at) hex (subs code from (length code)))` — each agreeing both ways, and each showing its
+site's live bytes go to zero in the census. Then the self-compile census again: the five sites' live bytes, the total
+live, the high water, and the compiler's peak RSS (`maxrss`, census OFF) against main's ~446 MB. `:c::buf-add` and
+`rd/add` (retained Vector versions, the reader's arena) are NOT this round — say only whether they moved.
+
+**Gates:** every `elf/probe/drop-*.wat` (except `drop-cons.wat`), `f209-*`, `m2-region-collision` agree via
+`tools/probe.sh` and `WAT_DROP_CHECK=1 tools/probe.sh` — the check build is the gate for a drop placed too early;
+native chains plain and check to a fixpoint; `tools/verify.sh`, then `WAT_DROP_CHECK=1 tools/verify.sh`.
