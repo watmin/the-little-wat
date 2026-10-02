@@ -34,3 +34,32 @@ class and the block. Then find who FREED that block, and with what size versus t
 Fix the size function at the root (the brief: each kind's size from the SAME function its allocator uses, and an
 ambiguous block listed under the SMALLEST it could be). Then the plain chain to a fixpoint, the measurements, and
 both verifies.
+
+---
+
+## The census, weighed (2026-10-01)
+
+**Credited, on my own run** (`/tmp/orch-census`: Grok's census-off compiler, one hop with `WAT_HEAP_CENSUS=1`, then the
+census compiler compiling the corpus): 12,493,357 allocations, 749,453,600 bytes; 189,396,688 reused from lists;
+3,492,848 frees, 208,541,128 bytes; 540,912,472 live at exit; high water 545,653,856 — Grok's figures to 0.1%. The
+26 fixtures agree with the census on; `tools/verify.sh` (off) `verify: ok` on Grok's run.
+
+**What the numbers say — more than the SCORE's sentence:**
+1. **Fragmentation is not it:** 41,600 bytes sit on the lists at exit. Reuse works (189 MB).
+2. **Every count that reaches zero is freed.** The counter named "zero-reached with no free" is placed AFTER the free
+   call and counts every zero-reach: 2,180,225 + 862,581 + 431,154 = 3,473,960 ≈ the 3,492,848 frees. Rename it.
+3. **About 9 million of the 12.5 million objects never reach zero** — 72% of the bytes allocated are never freed.
+4. **Main, with NO frees, peaked at 446 MB**; its region release returned more than our counts do (850 MB rewound over
+   the run on 3b-2). So most of what a statement allocates never reaches zero: over-counted, or held somewhere.
+
+The SCORE's sentence (the retired region release carries the rise) is true and is not the lever: the lever is (3).
+
+## R2 — who holds the never-freed bytes
+
+Attribute what never reaches zero to the compiler FUNCTION that allocated it. In the census build only: each block gets
+one extra header word holding its allocating site — the user function that called the runtime routine (from the
+return address, mapped to a function index through the compiler's own function table); a free subtracts the block's
+bytes from that site. At exit, report the top sites by bytes still live, with their function names. Then, for the
+top five, say what each is: data the compiler legitimately keeps until exit (its program, its output), or a value
+whose count never comes down (a counting defect, F-210's class) — with a minimal shape for each defect. Rename the
+mislabelled counter. Measure nothing else this round.
