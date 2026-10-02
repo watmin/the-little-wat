@@ -7,31 +7,31 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-10-01, HEAD 956b4bb)
+## elf/ — the live queue (2026-10-02, HEAD ad001c4)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`956b4bb`** (F-210 fixed). `git log --oneline -1` must show it (or a later
-commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
+**Freshness probe:** written against **`ad001c4`** (freeing + reuse landed on main). `git log --oneline -1` must show it
+(or a later commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
 
-### NEXT STRIKE — excursus 008 stone 3b-2 (freeing to the bump), DRAW IT from `WEIGH-stone-3b-rescoped.md`
+### NEXT STRIKE — excursus 008: the two retention sites (`:c::buf-add`, `rd/add`), with Grok via pulsare
 
-**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `SCOPE.md`, `CRAWL-stone-3b-drop-glue-and-freeing.md`,
-`WEIGH-stone-3b-rescoped.md` (3b split into three; 3b-1 landed; "After 3b-1"), `SCORE-stone-3b-fix-the-discovered.md`,
-`SCORE-F-210-last-use-per-path.md`.
+**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `NOTE-M2-landed.md` (what landed, the
+measurement, what is still never freed), `WEIGH-M2.md` (the census rounds), `SCORE-M2-census.md` (R2's attribution
+table; R3), `SCOPE.md`.
 
-**On waking:** excursus 008, MEMORY FIRST — the builder: memory "very close to what rust feels like", no GC pauses; drops
-synchronous and ITERATIVE; *"i'm not finding it acceptable that we have these issues"* (2026-09-30) — discovered defects are
-fixed before building on them. LANDED: stones 1, 2, the bench baseline, 3a (every drop placed), 3b-1 (glue per type;
-`WAT_DROP_CHECK=1` poisons a dead object and any reuse stops), the discovered-defects strike (F-209; the count word is a
-count; recursion through a Vector is recursion), F-210 (a last use is per path). **NOTHING IS FREED YET.** Next: 3b-2
-(free to the bump when youngest, sizes from the allocators' own functions; `drop-3b-recs` / `-closure` peak RSS falls),
-then 3b-3 (closure glue; the intrusive worklist — `drop-3b-list` drops flat; `drop-vec-cycle` under `ulimit -s 256`),
-then the bench against `BENCH-baseline.md`.
+**On waking:** excursus 008, MEMORY FIRST. LANDED: grow to demand (stone 1); every count true and placed (2, 3a,
+F-208/F-210); glue per type and the poison check (3b-1); freeing to the bump and to size-class free lists, one
+allocation door, the region release retired (3b-2, M2); `WAT_HEAP_CENSUS=1`; R3 (temporaries a built-in reads are
+dropped). The compiler's peak RSS is a third below the old main's, for +19% cycles (the builder accepts it: "we are
+doing more stuff"). **Order (the builder's):** the retention sites `buf-add` (~115 MB) and `rd/add` (~76 MB) → 3b-3
+(closure glue; the worklist for recursive types) → M4 (pages back to the OS) → a performance stone. Rulings: memory
+"very close to what rust feels like", no GC pauses; discovered defects are fixed before building on them; measure a
+memory claim before designing on it.
 
-**Executors:** Claude Sonnet agents (Agent tool, `model: sonnet`, background) while Grok is out — they get cut off
+**Executors:** Grok via pulsare (`holon:grok.1`); Claude Sonnet agents (Agent tool, `model: sonnet`, background) when Grok is out — they get cut off
 mid-run: briefs say "write the SCORE AS YOU GO", and resume a cut-off executor with SendMessage (context kept). Weigh
 on your OWN runs: **`tools/verify.sh` AND `WAT_DROP_CHECK=1 tools/verify.sh`** (~30 min each, in sequence). A change
 to what is EMITTED needs a native chain of three hops (seed → s1 → s2 → s3), not a `--fast` bootstrap. Who takes a
