@@ -60,6 +60,18 @@ ALLOW=(
   '(:c::mov-rm (:c::rax) 0 (:c::r8))|2|:c::freerec-glue-body and :c::freevec-glue-body: a record/payload-enum'"'"'s or a flat Vector'"'"'s length, read to size `len*8+16`/`len*8+24`'
   '(:c::mov-rm (:c::rax) 0 (:c::r9))|1|:c::closize-glue-body: a closure'"'"'s code address (its length word, overwritten) -- not a field value, the lookup key for its own creation site'"'"'s capture count'
   '(:c::mov-rm (:c::r11) 0 (:c::r8))|1|:c::free-tail-emit: a free list'"'"'s head, read from the allocator'"'"'s own table (reached from r14) to link a dead block onto it -- not a read out of a container'
+  # excursus 008 M2 census: the exit report reads its own counters out of the allocator
+  # header at r14. Those words are i64s the program stored about itself, not a reference
+  # taken out of a Vector, a record, or a payload variant.
+  '(:c::mov-rm (:c::r14) disp (:c::rax))|1|:c::census-line: one census counter from the allocator header, an i64, not a container field'
+  # excursus 008 M2 census R2: the site table is the allocator header too. Each load is an
+  # i64 the program stored about itself (a function address, a byte count, a name length).
+  '(:c::mov-rm (:c::r9) src-disp (:c::r10))|1|:c::census-copy-word: one word of the site blob, an i64, into the allocator header'
+  '(:c::mov-rm (:c::r11) 0 (:c::r11))|1|:c::census-load-r11: a site address or a live-byte count, an i64'
+  '(:c::mov-rm (:c::r14) (:c::census-site-n) (:c::r10))|1|:c::census-load-n: how many functions the site table holds, an i64'
+  '(:c::mov-rm (:c::r10) -8 (:c::r8))|1|:c::free-tail-emit: the allocating function index stored ahead of a dead block, an i64'
+  '(:c::mov-rm (:c::r9) 0 (:c::rbx))|1|:c::census-sites: the byte length of a function name in the site blob, an i64'
+  '(:c::mov-rm (:c::r14) (:c::census-unmapped-live) (:c::r13))|1|:c::census-sites: bytes still charged to an unnamed caller, an i64'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do

@@ -94,11 +94,13 @@
 ;; allocations -- the word before its pointer is the arm -- and the result must still fit the
 ;; power-of-two block that was allocated for it. Either failing, it falls through to the copying
 ;; `str_cat`, which is the routine immediately before this one.
-(:wat::core::defn :c::rt-str-cat-own [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-str-cat-own [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [head (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::vec-ptr)) (:c::heap-arm))
-     ;; the copying concat, which both failures hand off to
-     to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat lay)))
+     ;; the copying concat, which both failures hand off to -- `census?` only to keep this
+     ;; function's own length measurement (a fall-through, never a real call) in step with
+     ;; `:c::rt-str-cat`'s actual length; this function allocates nothing itself.
+     to-cat (:wat::core::- (:c::at-cat-own lay) (:c::hexlen (:c::rt-str-cat lay census?)))
      ;; **`rep movsb` is a string instruction being asked to copy one byte.** F-147 measured
      ;; its startup against a plain byte store in an identical loop: 18.58 cycles an iteration
      ;; against 12.96, so 5.6 cycles of the 6.5 we were behind C on `strbuild` were this one
@@ -144,7 +146,7 @@
 
 ;; `str_cat(rax = a, rcx = b) -> rax` -- the copying concat. Both source pointers are taken
 ;; BEFORE the allocation, because allocating writes rcx and rdx.
-(:wat::core::defn :c::rt-str-cat [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-str-cat [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::mov-rm (:c::rax) 0 (:c::r8))
@@ -156,9 +158,10 @@
            (:c::rt-cap (:c::rax) (:c::rdx) (:c::rdx)))]
     (:wat::string::concat
       pre
-      ;; rcx carries the new top here, not r11 -- r10 and r11 are holding the two sources
+      ;; rcx carries the new top here, not r11 -- r10 and r11 are holding the two sources.
+      ;; excursus 008 M2 census: rid 0.
       (:c::rt-bump (:wat::core::+ (:c::at-cat lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::rdx) (:c::rcx)) (:c::rcx) (:c::r15) true)
+        (:c::add-rr (:c::rdx) (:c::rcx)) (:c::rcx) (:c::r15) true census? 0)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::rdx))
       (:c::mov-mr (:c::rax) (:c::rdx) 0)
@@ -372,7 +375,7 @@
 ;; `buf_put(rsi = bytes, rdx = length)` -- append to the output buffer, flushing first if this
 ;; put would cross the high-water mark. **A put larger than the buffer goes straight to the
 ;; kernel**: after the flush there is nothing to append to, so it is written where it stands.
-(:wat::core::defn :c::rt-buf-put [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-buf-put [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [direct (:wat::string::concat
               (:c::mov-ri (:c::rdi) (:c::fd-stdout))
@@ -399,7 +402,7 @@
       head
       (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) spill)
       spill
-      (:c::lea-at (:c::r14) (:c::hdr-buf) (:c::rdi))
+      (:c::lea-at (:c::r14) (:c::hdr-buf census?) (:c::rdi))
       (:c::add-rr (:c::rax) (:c::rdi))
       (:c::add-mr (:c::rdx) (:c::r14) (:c::hdr-pending))
       (:c::mov-rr (:c::rdx) (:c::rcx))
@@ -410,10 +413,10 @@
 ;; `fork` and before `clone`, and at the end of the entry stub -- see each for why.
 ;; `flush()` -- write whatever is waiting and reset the count. **The branch over the whole body
 ;; is what makes this cheap to call**: flushing nothing is a load, a test, and a return.
-(:wat::core::defn :c::rt-flush [] -> :wat::core::String
+(:wat::core::defn :c::rt-flush [census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [body (:wat::string::concat
-            (:c::lea-at (:c::r14) (:c::hdr-buf) (:c::rsi))
+            (:c::lea-at (:c::r14) (:c::hdr-buf census?) (:c::rsi))
             (:c::mov-ri (:c::rdi) (:c::fd-stdout))
             (:c::mov-ri (:c::rax) (:c::sys-write))
             (:c::syscall)
@@ -520,6 +523,121 @@
     (:c::mov-ri out 2)
     (:c::shl-cl out)))
 
+;; excursus 008 M2 census R2. One step of the return-address scan: load `[rsp+40+8i]` into r9
+;; (40 skips the saved size and the four registers this bump pushed) and jump to the binary
+;; search on the first address inside `[r12, r13)`. `after` is every later step; `plen` is the
+;; miss prelude that sits between the scan and the search.
+(:wat::core::defn :c::census-scan-one [i <- :wat::core::i64 after <- :wat::core::String
+                                       plen <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [mov (:c::mov-rm (:c::rsp) (:wat::core::+ 40 (:wat::core::* i 8)) (:c::r9))
+     cmp-lo (:c::cmp-rr (:c::r12) (:c::r9))
+     cmp-hi (:c::cmp-rr (:c::r13) (:c::r9))
+     jae (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-below))) 5)
+     jmp (:c::jmp-rel32 (:wat::core::+ (:c::hexlen after) plen))
+     skip (:wat::core::+ (:c::hexlen cmp-hi) (:wat::core::+ (:c::hexlen jae) 5))
+     jb (:c::br-len (:c::jcc-rel8 (:c::cc-below)) skip)]
+    (:wat::string::concat mov cmp-lo jb cmp-hi jae jmp)))
+
+(:wat::core::defn :c::census-scan-steps [i <- :wat::core::i64 after <- :wat::core::String
+                                         plen <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::< i 0) after
+    (:c::census-scan-steps (:wat::core::- i 1)
+      (:wat::string::concat (:c::census-scan-one i after plen) after) plen)))
+
+;; Lowest function address that is still <= the return address. r9 is that address on entry
+;; and the function index on exit; a miss leaves `:c::census-unmapped`.
+(:wat::core::defn :c::census-bsearch [] -> :wat::core::String
+  (:wat::core::let
+    [enter (:wat::string::concat
+             (:c::mov-rr (:c::r9) (:c::r13))
+             (:c::xor-rr (:c::r9) (:c::r9))
+             (:c::mov-rm (:c::r14) (:c::census-site-n) (:c::r10)))
+     cmp-lh (:c::cmp-rr (:c::r10) (:c::r9))
+     mid (:wat::string::concat
+           (:c::mov-rr (:c::r9) (:c::r12))
+           (:c::add-rr (:c::r10) (:c::r12))
+           (:c::shr-ri (:c::r12) 1)
+           (:c::mov-mr (:c::r12) (:c::r14) (:c::census-site-idx))
+           (:c::lea (:c::r14) (:c::r12) 8 (:c::census-site-atbl) (:c::r12))
+           (:c::mov-rm (:c::r12) 0 (:c::r12))
+           (:c::cmp-rr (:c::r12) (:c::r13)))
+     arm-lo (:wat::string::concat
+              (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r9))
+              (:c::add-ri (:c::r9) 1))
+     arm-hi (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r10))
+     to-hi (:wat::string::concat (:c::jcc-rel32 (:c::cc-below))
+             (:asm::le (:wat::core::+ (:c::hexlen arm-lo) 5) 4))
+     back-lo (:c::jmp-rel32
+               (:wat::core::- 0
+                 (:wat::core::+ (:c::hexlen cmp-lh)
+                   (:wat::core::+ 6
+                     (:wat::core::+ (:c::hexlen mid)
+                       (:wat::core::+ 6
+                         (:wat::core::+ (:c::hexlen arm-lo) 5)))))))
+     back-hi (:c::jmp-rel32
+               (:wat::core::- 0
+                 (:wat::core::+ (:c::hexlen cmp-lh)
+                   (:wat::core::+ 6
+                     (:wat::core::+ (:c::hexlen mid)
+                       (:wat::core::+ 6
+                         (:wat::core::+ (:c::hexlen arm-lo)
+                           (:wat::core::+ 5
+                             (:wat::core::+ (:c::hexlen arm-hi) 5)))))))))
+     jae (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below)))
+           (:asm::le
+             (:wat::core::+ (:c::hexlen mid)
+               (:wat::core::+ 6
+                 (:wat::core::+ (:c::hexlen arm-lo)
+                   (:wat::core::+ 5
+                     (:wat::core::+ (:c::hexlen arm-hi) 5)))))
+             4))
+     set-un (:c::mov-ri (:c::r9) (:c::census-unmapped))
+     done (:wat::string::concat
+            (:c::sub-ri (:c::r9) 1)
+            (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-sign))) set-un)
+            set-un)]
+    (:wat::string::concat enter cmp-lh jae mid to-hi arm-lo back-lo arm-hi back-hi done)))
+
+;; r9 holds the block size. Push it, name the user caller, store that index, pop the size.
+(:wat::core::defn :c::census-resolve [] -> :wat::core::String
+  (:wat::core::let
+    [bsearch (:c::census-bsearch)
+     prelude (:wat::string::concat
+               (:c::mov-ri (:c::r9) (:c::census-unmapped))
+               (:c::jmp-rel32 (:c::hexlen bsearch)))
+     scan (:c::census-scan-steps 63 "" (:c::hexlen prelude))
+     store (:c::mov-mr (:c::r9) (:c::r14) (:c::census-site-idx))]
+    (:wat::string::concat
+      (:c::reg-push (:c::r9))
+      (:c::mov-rm (:c::r14) (:c::census-site-lo) (:c::r12))
+      (:c::mov-rm (:c::r14) (:c::census-site-hi) (:c::r13))
+      scan prelude bsearch store
+      (:c::reg-pop (:c::r9)))))
+
+;; A fresh block's site word sits 8 bytes before the count word, so the payload end -- what
+;; the youngest test and the extend compare against r15 -- does not move relative to the block.
+(:wat::core::defn :c::census-fresh-slide [base <- :wat::core::i64 top <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::add-ri base 8)
+    (:c::add-ri top 8)
+    (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r10))
+    (:c::mov-mr (:c::r10) base -8)))
+
+;; Path 3 of `vec_conj_own`: the youngest vector grew by `top-base` and rax still addresses it.
+;; The site word is 24 bytes before that pointer (varr-ptr + the site). r13 is the caller's.
+(:wat::core::defn :c::census-extend-credit [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::reg-push (:c::r9))
+    (:c::reg-push (:c::r10))
+    (:c::mov-rr (:c::r11) (:c::r9))
+    (:c::sub-rr (:c::r15) (:c::r9))
+    (:c::mov-rm (:c::rax) -24 (:c::r10))
+    (:c::lea (:c::r14) (:c::r10) 8 (:c::census-site-live) (:c::r10))
+    (:c::add-mr (:c::r9) (:c::r10) 0)
+    (:c::reg-pop (:c::r10))
+    (:c::reg-pop (:c::r9))))
+
 ;; `grow` is how `top` reaches the new top: `add %rcx,top` when the size was computed into rcx,
 ;; or `add $imm,top` when it is a constant. That is the ONLY difference between the allocators
 ;; that bump at all, and it was the reason each carried its own copy of the check.
@@ -547,24 +665,51 @@
 (:wat::core::defn :c::rt-bump [here <- :wat::core::i64 lay <- :c::Layout
                                grow <- :wat::core::String
                                top <- :wat::core::i64 base <- :wat::core::i64
-                               reuse? <- :wat::core::bool] -> :wat::core::String
+                               reuse? <- :wat::core::bool
+                               census? <- :wat::core::bool rid <- :wat::core::i64] -> :wat::core::String
   (:wat::core::if (:wat::core::not reuse?)
     (:wat::core::let
-      [chk (:wat::string::concat
+      [credit (:wat::core::if census? (:c::census-extend-credit) "")
+       chk (:wat::string::concat
              (:c::mov-rr base top)
              grow
+             credit
              (:c::cmp-rm (:c::r14) (:c::hdr-limit) top))
        at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
        to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
       (:wat::string::concat chk (:c::jbe-over to-oom) to-oom))
     (:wat::core::let
       [head (:wat::string::concat (:c::mov-rr base top) grow)
+       ;; excursus 008 M2 census: `r13` joins the self-contained push/pop set ONLY when
+       ;; `census?` is true -- it holds `size`, saved past `read-head`'s clobber of `r9`, so the
+       ;; FOUND exit can still credit the reuse counters after the class decision has used `r9`
+       ;; for its own purposes. OFF, `pushes`/`pops` are byte-identical to before this census.
        pushes (:wat::string::concat
-                (:c::reg-push (:c::r9)) (:c::reg-push (:c::r10)) (:c::reg-push (:c::r12)))
+                (:c::reg-push (:c::r9)) (:c::reg-push (:c::r10)) (:c::reg-push (:c::r12))
+                (:wat::core::if census? (:c::reg-push (:c::r13)) ""))
        pops (:wat::string::concat
+              (:wat::core::if census? (:c::reg-pop (:c::r13)) "")
               (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::r10)) (:c::reg-pop (:c::r9)))
        ;; r9 := size (top - base; `base` is still the original value, `grow` never touches it)
        size-calc (:wat::string::concat (:c::mov-rr top (:c::r9)) (:c::sub-rr base (:c::r9)))
+       ;; The size stays in r9 across the scan: resolve pushes it and pops it back.
+       resolve (:wat::core::if census? (:c::census-resolve) "")
+       ;; excursus 008 M2 census: the TOTAL per-routine count/bytes, credited HERE,
+       ;; unconditionally, before the class decision below ever touches `r9` -- this covers
+       ;; both the FOUND and the bump-fresh paths in one place, because `size` (still in `r9`)
+       ;; is the same number either way. Harmless on the path that goes on to OOM: that path
+       ;; aborts before any dump ever reads these counters. `r9` is read-only here (the source
+       ;; of two memory adds), so it is still `size` afterward. `r13` is this routine's own
+       ;; saved copy, read again at the FOUND exit below, after `read-head` has overwritten `r9`.
+       census-total (:wat::core::if census?
+                      (:wat::string::concat
+                        (:c::add-mi (:c::r14) (:c::census-alloc-count rid) 1)
+                        (:c::add-mr (:c::r9) (:c::r14) (:c::census-alloc-bytes rid))
+                        (:c::mov-rr (:c::r9) (:c::r13))
+                        (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r10))
+                        (:c::lea (:c::r14) (:c::r10) 8 (:c::census-site-live) (:c::r10))
+                        (:c::add-mr (:c::r13) (:c::r10) 0))
+                      "")
        cmp-small (:c::cmp-ri (:c::r9) (:c::small-max))
        ;; SMALL class address -> r10, index (size>>3)-1, an EXACT match (0..63 for 8..512)
        small-calc (:wat::string::concat
@@ -594,31 +739,49 @@
        ;; allocation (base := r9), restore the real top (top := the UNCHANGED original base
        ;; value -- no bump happened, so the caller's own trailing `mov-rr top base-register`
        ;; must be a no-op), then skip the bump/oom tail entirely.
+       ;; excursus 008 M2 census: the REUSE share -- `r13` still holds `size` from right after
+       ;; `size-calc`, untouched by anything between there and here. Credited before `pops`
+       ;; restores `r13` to whatever the caller had in it.
+       census-reuse (:wat::core::if census?
+                      (:wat::string::concat
+                        (:c::add-mi (:c::r14) (:c::census-reuse-count rid) 1)
+                        (:c::add-mr (:c::r13) (:c::r14) (:c::census-reuse-bytes rid)))
+                      "")
        found-body (:wat::string::concat
                     (:c::mov-rm (:c::r9) 0 (:c::r12))
                     (:c::mov-mr (:c::r12) (:c::r10) 0)
                     (:c::mov-rr base top)
                     (:c::mov-rr (:c::r9) base)
+                    (:wat::core::if census?
+                      (:wat::string::concat
+                        (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r12))
+                        (:c::mov-mr (:c::r12) base -8))
+                      "")
+                    census-reuse
                     pops)
        ;; the tail every path that gives up on reuse still runs: byte-identical to the
        ;; non-reuse branch's own check, computed from `here` plus everything emitted before it
        tail-chk (:c::cmp-rm (:c::r14) (:c::hdr-limit) top)
+       fresh-slide (:wat::core::if census? (:c::census-fresh-slide base top) "")
        pre-call-len (:wat::core::+ (:c::hexlen head)
                       (:wat::core::+ (:c::hexlen pushes)
                         (:wat::core::+ (:c::hexlen size-calc)
-                          (:wat::core::+ (:c::hexlen cmp-small)
-                            (:wat::core::+ (:c::rel8-size)
-                              (:wat::core::+ (:c::hexlen small-calc)
-                                (:wat::core::+ (:c::rel8-size)
-                                  (:wat::core::+ (:c::hexlen large-test)
-                                    (:wat::core::+ (:c::rel8-size)
-                                      (:wat::core::+ (:c::hexlen large-calc)
-                                        (:wat::core::+ (:c::hexlen read-head)
-                                          (:wat::core::+ (:c::rel8-size)
-                                            (:wat::core::+ (:c::hexlen found-body)
-                                              (:wat::core::+ (:c::rel8-size)
+                          (:wat::core::+ (:c::hexlen resolve)
+                          (:wat::core::+ (:c::hexlen census-total)
+                            (:wat::core::+ (:c::hexlen cmp-small)
+                              (:wat::core::+ (:c::rel8-size)
+                                (:wat::core::+ (:c::hexlen small-calc)
+                                  (:wat::core::+ (:c::rel8-size)
+                                    (:wat::core::+ (:c::hexlen large-test)
+                                      (:wat::core::+ (:c::rel8-size)
+                                        (:wat::core::+ (:c::hexlen large-calc)
+                                          (:wat::core::+ (:c::hexlen read-head)
+                                            (:wat::core::+ (:c::rel8-size)
+                                              (:wat::core::+ (:c::hexlen found-body)
+                                                (:wat::core::+ (:c::rel8-size)
+                                                  (:wat::core::+ (:c::hexlen fresh-slide)
                                                 (:wat::core::+ (:c::hexlen pops)
-                                                  (:c::hexlen tail-chk))))))))))))))))
+                                                    (:c::hexlen tail-chk)))))))))))))))))))
        at-call (:wat::core::+ here (:wat::core::+ pre-call-len (:c::rel8-size)))
        to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))
        tail (:wat::string::concat tail-chk (:c::jbe-over to-oom) to-oom)
@@ -626,7 +789,7 @@
        ;; (its OWN pops already ran inside `found-body`; this second `pops` is the OTHER two
        ;; paths' -- empty list, abandoned class -- and `found-exit` must clear both it and
        ;; `tail` to reach the true end, not just `tail` alone)
-       pop-then-tail (:wat::string::concat pops tail)
+       pop-then-tail (:wat::string::concat fresh-slide pops tail)
        found-exit (:wat::string::concat found-body (:c::jmp-over pop-then-tail))
        have-slot (:wat::string::concat read-head
                    (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) found-exit) found-exit)
@@ -642,20 +805,21 @@
        large-decide (:wat::string::concat large-only have-slot)
        small-section (:wat::string::concat small-calc (:c::jmp-over large-only))]
       (:wat::string::concat
-        head pushes size-calc cmp-small
+        head pushes size-calc resolve census-total cmp-small
         (:c::br-over (:c::jcc-rel8 (:c::cc-greater)) small-section)
         small-section large-decide pop-then-tail))))
 
 ;; `vec_new(rax = len) -> rax` -- a record, whose arm word says which one. The size is
 ;; `hdr + len*8` and `lea` computes it without touching a flag: scale 8, no base at all, which
 ;; is the SIB form whose base field means "none".
-(:wat::core::defn :c::rt-vec-new [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-vec-new [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [size (:c::lea (:c::no-reg) (:c::rax) (:c::word) (:c::vec-hdr) (:c::rcx))]
     (:wat::string::concat
       size
+      ;; excursus 008 M2 census: rid 1.
       (:c::rt-bump (:wat::core::+ (:c::at-vnew lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true)
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true census? 1)
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::rax) (:c::r10) 0)
@@ -740,7 +904,7 @@
 ;;
 ;; That third test is the whole trick: `lea 0x8(%rax,%r8,8)` is the address just past the last
 ;; element, and comparing it to r15 asks "is this vector the youngest thing on the heap?"
-(:wat::core::defn :c::rt-vec-conj-own [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-vec-conj-own [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [P (:c::at-vconj-own lay)
      w (:c::word)
@@ -764,7 +928,7 @@
      ;; path 3 is an EXTEND, not a new allocation (M2: `reuse?` false) -- the youngest object's
      ;; block is grown by one word over the heap top, so a free-list hole must never be offered.
      extend-at0 (:wat::string::concat
-                  (:c::rt-bump 0 lay extend-grow (:c::r11) (:c::r15) false) extend-tail)
+                  (:c::rt-bump 0 lay extend-grow (:c::r11) (:c::r15) false census? 0) extend-tail)
      ;; path 2: it has room inside the block it was already given
      grown-test (:wat::string::concat
                   (:c::mov-rm (:c::rax) 0 (:c::r8))
@@ -818,7 +982,8 @@
                     (:wat::core::+ (:c::hexlen tail-test)
                       (:wat::core::+ (:c::rel8-size) (:c::hexlen fallback)))))
      extend (:wat::string::concat
-              (:c::rt-bump (:wat::core::+ P pre-extend) lay extend-grow (:c::r11) (:c::r15) false)
+              (:c::rt-bump (:wat::core::+ P pre-extend) lay extend-grow (:c::r11) (:c::r15) false
+                census? 0)
               extend-tail)
      ;; the address `copy` begins at -- `extend`'s real length equals `extend-at0`'s by
      ;; construction (same fixed-width encoding, a different address plugged in), so this is
@@ -831,10 +996,11 @@
                 (:c::bsr-rr (:c::rdx) (:c::rcx))
                 (:c::mov-ri (:c::rdx) 2)
                 (:c::shl-cl (:c::rdx)))
+     ;; excursus 008 M2 census: rid 2.
      copy (:wat::string::concat
             copy-pre
             (:c::rt-bump (:wat::core::+ P (:wat::core::+ pre-copy (:c::hexlen copy-pre))) lay
-              (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true)
+              (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true census? 2)
             (:c::mov-mi (:c::r15) 0 (:c::vec-flat-own))
             (:c::mov-mi (:c::r15) w 1)
             ;; r10 is still the caller's flag; the next lea spends the register
@@ -873,13 +1039,14 @@
 
 ;; `varr_new(rax = len) -> rax` -- a Vector's leaf array, which carries one more header word
 ;; than a record does and is otherwise the same allocation
-(:wat::core::defn :c::rt-varr-new [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-varr-new [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [size (:c::lea (:c::no-reg) (:c::rax) (:c::word) (:c::varr-hdr) (:c::rcx))]
     (:wat::string::concat
       size
+      ;; excursus 008 M2 census: rid 3.
       (:c::rt-bump (:wat::core::+ (:c::at-varr lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true)
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true census? 3)
       (:c::mov-mi (:c::r15) 0 0)
       (:c::mov-mi (:c::r15) (:c::word) 1)
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
@@ -891,11 +1058,13 @@
 ;; `node_new() -> rax` -- a fresh 32-way tree node, every child slot zeroed. The allocation is a
 ;; constant size, which is the one thing that differs from `vec_new`: the bump adds an immediate
 ;; instead of rcx.
-(:wat::core::defn :c::rt-node-new [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-node-new [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [slots (:wat::core::* (:c::node-arity) (:c::word))
+     ;; excursus 008 M2 census: rid 4.
      bump (:c::rt-bump (:c::at-nnew lay) lay
-            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)) (:c::r11) (:c::r15) true)]
+            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)) (:c::r11) (:c::r15) true
+            census? 4)]
     (:wat::string::concat
       bump
       (:c::mov-mi (:c::r15) 0 1)
@@ -996,7 +1165,7 @@
 ;; leaf and a new Vector object is allocated to carry the new count, shift and root.
 ;;
 ;; `shift` is pushed across the descent because the loop consumes it and the new object needs it.
-(:wat::core::defn :c::rt-tree-push [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-tree-push [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [bits 5
      mask (:wat::core::- (:c::node-arity) 1)
@@ -1114,7 +1283,8 @@
       pre
       (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) grow)
       grow mid loop leaf
-      (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true)
+      ;; excursus 008 M2 census: rid 5.
+      (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true census? 5)
       (:c::mov-mi (:c::r15) 0 (:c::vec-tree))
       (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::rax))
@@ -1131,7 +1301,7 @@
 ;; `tree_from_arr(rax = flat array) -> rax` -- promote a flat Vector to the 32-way trie, by
 ;; making an empty tree and pushing every element into it. Called once, when a vector outgrows
 ;; `:c::arr-max`; after that `vec_conj` goes straight to `tree_push`.
-(:wat::core::defn :c::rt-tree-from-arr [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-tree-from-arr [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            ;; the caller's element-kind flag (r10) has to survive node_new and the bump,
@@ -1169,8 +1339,9 @@
              (:c::mov-rm (:c::rsp) 24 (:c::r10)))
 ]
     (:wat::core::let
+      ;; excursus 008 M2 census: rid 6.
       [bump (:c::rt-bump (:wat::core::+ at-nn (:c::hexlen mk)) lay
-              (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true)
+              (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true census? 6)
        top (:wat::core::+ at-nn
              (:wat::core::+ (:c::hexlen mk)
                (:wat::core::+ (:c::hexlen bump) (:c::hexlen alloc))))
@@ -1188,7 +1359,7 @@
 ;; `vec_conj(rax = vec, rcx = value) -> rax`. Three paths, and the first two are handoffs:
 ;; a vector already a TREE goes to `tree_push`; a flat one at `:c::arr-max` is promoted first and
 ;; then goes to `tree_push`; a flat one with room is copied with the new element appended.
-(:wat::core::defn :c::rt-vec-conj [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-vec-conj [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [;; **the tag is `:c::vec-tree` or not** -- never "is it `:c::vec-flat`": a flat-but-owned
      ;; block (`:c::vec-flat-own`) must fall through here too, not be mistaken for a trie
@@ -1228,7 +1399,8 @@
       head to-push test
       (:c::br-over (:c::jcc-rel8 (:c::cc-below)) spill)
       spill pre
-      (:c::rt-bump at-bump lay (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true)
+      ;; excursus 008 M2 census: rid 7.
+      (:c::rt-bump at-bump lay (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true census? 7)
       (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
       (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r9))
@@ -1280,7 +1452,7 @@
 ;; one slot changed, which is what an immutable `assoc` on a leaf costs. The allocation is
 ;; `vec_new`'s, so it is `:c::rt-bump` again; the size is computed into rdx between the two
 ;; halves of the check, which is why `grow` is a string rather than a register.
-(:wat::core::defn :c::rt-slot-set [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-slot-set [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::reg-push (:c::rbx))
@@ -1295,7 +1467,9 @@
             (:c::add-rr (:c::rdx) (:c::r11)))]
     (:wat::string::concat
       pre
-      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow (:c::r11) (:c::r15) true)
+      ;; excursus 008 M2 census: rid 8.
+      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow (:c::r11) (:c::r15)
+        true census? 8)
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r9))
       (:c::mov-mr (:c::r8) (:c::r9) 0)
@@ -1330,7 +1504,7 @@
 
 ;; `str_subs(rax = s, rcx = from, rdx = to) -> rax` -- a new String of the bytes in `[from, to)`.
 ;; The source pointer is computed BEFORE the allocation, because allocating clobbers rcx.
-(:wat::core::defn :c::rt-str-subs [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-str-subs [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::mov-rr (:c::rdx) (:c::r8))
@@ -1339,8 +1513,9 @@
            (:c::rt-cap (:c::r8) (:c::rdx) (:c::r9)))]
     (:wat::string::concat
       pre
+      ;; excursus 008 M2 census: rid 9.
       (:c::rt-bump (:wat::core::+ (:c::at-subs lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::r9) (:c::r11)) (:c::r11) (:c::r15) true)
+        (:c::add-rr (:c::r9) (:c::r11)) (:c::r11) (:c::r15) true census? 9)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::r8) (:c::r10) 0)
@@ -1438,7 +1613,7 @@
 
 ;; `i64_to_str(rax = n) -> rax` -- the same digits, landing in the heap instead of the output
 ;; buffer. rsi starts AT rbp here rather than one below it, because there is no newline to plant.
-(:wat::core::defn :c::rt-i64-to-str [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-i64-to-str [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
@@ -1451,8 +1626,9 @@
            (:c::rt-cap (:c::r9) (:c::r10) (:c::r10)))]
     (:wat::string::concat
       pre
+      ;; excursus 008 M2 census: rid 10.
       (:c::rt-bump (:wat::core::+ (:c::at-tostr lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::r10) (:c::r11)) (:c::r11) (:c::r15) true)
+        (:c::add-rr (:c::r10) (:c::r11)) (:c::r11) (:c::r15) true census? 10)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::r9) (:c::r10) 0)
@@ -1561,6 +1737,64 @@
       (:c::mov-ri (:c::rdi) (:c::exit-fail))
       (:c::mov-ri (:c::rax) (:c::sys-exit))
       (:c::syscall))))
+
+;; excursus 008 M2 census (BRIEF-M2-census-where-the-heap-goes.md): two small, generic
+;; stderr writers, reused by `:c::census-dump` (elf/compile.wat) at every one of its lines.
+;; Neither is placed in the runtime BLOB (`:c::rt-nth`'s own dispatch) -- the dump is emitted
+;; once, inline, at the very end of the entry stub, never called more than once per program
+;; run, so a shared Layout entry would only add risk (the exact index-shifting hazard M2's own
+;; design note warns about) for no benefit. These are ordinary byte-generator functions,
+;; called directly from `elf/compile.wat`, the same way `:c::rt-cap` already is.
+;;
+;; `:c::rt-say-stderr(msg)` -- an arbitrary short literal, packed onto the stack the same way
+;; `:c::rt-abort`'s message is (`:c::abort-chunks`, already generic despite its name: it packs
+;; ANY string into `[rsp+i..]` by STORES, so the binary needs no .rodata or relocation), then
+;; written to stderr directly. Unlike `:c::rt-abort`, this returns: the stack is restored and
+;; nothing exits.
+(:wat::core::defn :c::rt-say-stderr [msg <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let [n (:wat::string::byte-length msg)]
+    (:wat::string::concat
+      (:c::sub-rsp n)
+      (:c::abort-chunks n msg 0 "")
+      (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+      (:c::mov-rr (:c::rsp) (:c::rsi))
+      (:c::mov-ri (:c::rdx) n)
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::syscall)
+      (:c::add-rsp n))))
+
+;; `:c::rt-say-int-stderr()` -- `rax` in, a decimal line out, to stderr, unbuffered. Exactly
+;; `:c::rt-print-i64`'s own body (same `:c::rt-digits` backward walk into a stack scratch), with
+;; its one call through the buffered `:c::at-put` replaced by a direct `write(2, ...)` -- this
+;; is why it needs no `lay` at all, unlike the routine it is a twin of.
+;;
+;; **`leave`, never `ret`.** `:c::rt-print-i64` ends `leave;ret` because it is a real Layout
+;; routine, reached by a `call` that pushed a return address `ret` pops. This one is INLINED
+;; straight into the stub's byte stream (no call, by design -- see the comment above
+;; `:c::rt-say-stderr`), so a bare `ret` here pops whatever garbage sits on top of the stack and
+;; jumps to it -- confirmed the hard way, a `probe-census.sh` run on `drop-at1.wat` printed
+;; exactly one correct line then SIGSEGV'd at `rip=0`. `leave` alone (`mov rsp,rbp; pop rbp`,
+;; no control transfer) undoes the frame and falls straight through to whatever comes next.
+(:wat::core::defn :c::rt-say-int-stderr [] -> :wat::core::String
+  (:wat::core::let
+    [top -1
+     tail (:wat::string::concat
+            (:c::lea-at (:c::rbp) top (:c::rdx))
+            (:c::sub-rr (:c::rsi) (:c::rdx))
+            (:c::inc-r (:c::rdx)))
+     head (:wat::string::concat
+            (:c::reg-push (:c::rbp)) (:c::mov-rr (:c::rsp) (:c::rbp))
+            (:c::sub-ri (:c::rsp) (:c::scratch-frame))
+            (:c::lea-at (:c::rbp) top (:c::rsi))
+            (:c::mov-mi8 (:c::rsi) 0 (:c::nl))
+            (:c::rt-digits)
+            tail)]
+    (:wat::string::concat
+      head
+      (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+      (:c::mov-ri (:c::rax) (:c::sys-write))
+      (:c::syscall)
+      (:c::leave))))
 
 ;; **The last mile: a file, as bytes.** Five routines.
 ;;
@@ -1707,7 +1941,7 @@
 ;; `top`=rsi. `:c::rt-cap`'s OUT moves to r9 (scratch stays rcx -- `:c::rt-cap` hardcodes rcx as
 ;; `bsr-rr`'s/`shl-cl`'s own shift-count register internally, so `out` may never BE rcx) so
 ;; `grow` is a plain register add, the shape `:c::rt-bump` already expects.
-(:wat::core::defn :c::rt-prim-read-hex [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-prim-read-hex [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::rt-slurp)
@@ -1719,8 +1953,9 @@
            ;; behind) -- scratch stays rcx (transient, read then immediately overwritten by
            ;; `bsr-rr` itself), out moves to r9.
            (:c::rt-cap (:c::rax) (:c::rcx) (:c::r9)))
+     ;; excursus 008 M2 census: rid 11.
      bump (:c::rt-bump (:wat::core::+ (:c::at-rdhex lay) (:c::hexlen pre)) lay
-            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true)
+            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true census? 11)
      head (:wat::string::concat
             pre bump
             (:c::mov-rr (:c::rsi) (:c::r15))
@@ -1819,13 +2054,14 @@
 ;; `:c::rt-cap`'s scratch stays rcx (its own `bsr-rr`/`shl-cl` hardcode rcx as the shift count,
 ;; so `out` may never be rcx -- F1 of this strike's own first attempt, which put OUT there and
 ;; diverged on a real file); OUT moves to r9 (not an output `:c::rt-slurp` documents, so free).
-(:wat::core::defn :c::rt-io-read-file [lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-io-read-file [lay <- :c::Layout census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::rt-slurp)
            (:c::rt-cap (:c::rdx) (:c::rcx) (:c::r9)))
+     ;; excursus 008 M2 census: rid 12.
      bump (:c::rt-bump (:wat::core::+ (:c::at-rdfile lay) (:c::hexlen pre)) lay
-            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true)]
+            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true census? 12)]
     (:wat::string::concat
       pre bump
       ;; the bytes are already in place; the allocation only has to reach past them
@@ -1873,11 +2109,12 @@
 ;; `rt-at lvl N` table inside `:c::runtime`, and the recursion in the `at-*` chain. The other two
 ;; are derived from this one now, so a routine cannot be inserted in one order and addressed in
 ;; another. `lay` is the layout SO FAR -- see `:c::lay` below for why that is the whole trick.
-(:wat::core::defn :c::rt-nth [i <- :wat::core::i64 lay <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::rt-nth [i <- :wat::core::i64 lay <- :c::Layout
+                              census? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::cond
-    ((:wat::core::= i 0) (:c::rt-flush))
+    ((:wat::core::= i 0) (:c::rt-flush census?))
     ((:wat::core::= i 1) (:c::rt-ovf lay))
-    ((:wat::core::= i 2) (:c::rt-buf-put lay))
+    ((:wat::core::= i 2) (:c::rt-buf-put lay census?))
     ((:wat::core::= i 3) (:c::rt-print-i64 lay))
     ((:wat::core::= i 4) (:c::rt-print-bool lay))
     ((:wat::core::= i 5) (:c::rt-oom lay))
@@ -1886,39 +2123,41 @@
     ((:wat::core::= i 8) (:c::rt-i64-quot lay))
     ((:wat::core::= i 9) (:c::rt-i64-rem lay))
     ((:wat::core::= i 10) (:c::rt-print-str lay))
-    ((:wat::core::= i 11) (:c::rt-str-cat lay))
-    ((:wat::core::= i 12) (:c::rt-str-cat-own lay))
-    ((:wat::core::= i 13) (:c::rt-str-subs lay))
-    ((:wat::core::= i 14) (:c::rt-i64-to-str lay))
+    ((:wat::core::= i 11) (:c::rt-str-cat lay census?))
+    ((:wat::core::= i 12) (:c::rt-str-cat-own lay census?))
+    ((:wat::core::= i 13) (:c::rt-str-subs lay census?))
+    ((:wat::core::= i 14) (:c::rt-i64-to-str lay census?))
     ((:wat::core::= i 15) (:c::rt-str-starts))
     ((:wat::core::= i 16) (:c::rt-str-contains))
     ((:wat::core::= i 17) (:c::rt-str-eq))
-    ((:wat::core::= i 18) (:c::rt-vec-new lay))
-    ((:wat::core::= i 19) (:c::rt-varr-new lay))
-    ((:wat::core::= i 20) (:c::rt-node-new lay))
+    ((:wat::core::= i 18) (:c::rt-vec-new lay census?))
+    ((:wat::core::= i 19) (:c::rt-varr-new lay census?))
+    ((:wat::core::= i 20) (:c::rt-node-new lay census?))
     ((:wat::core::= i 21) (:c::rt-node-copy lay))
     ((:wat::core::= i 22) (:c::rt-tree-get))
-    ((:wat::core::= i 23) (:c::rt-tree-push lay))
-    ((:wat::core::= i 24) (:c::rt-tree-from-arr lay))
-    ((:wat::core::= i 25) (:c::rt-vec-conj lay))
-    ((:wat::core::= i 26) (:c::rt-vec-conj-own lay))
-    ((:wat::core::= i 27) (:c::rt-slot-set lay))
+    ((:wat::core::= i 23) (:c::rt-tree-push lay census?))
+    ((:wat::core::= i 24) (:c::rt-tree-from-arr lay census?))
+    ((:wat::core::= i 25) (:c::rt-vec-conj lay census?))
+    ((:wat::core::= i 26) (:c::rt-vec-conj-own lay census?))
+    ((:wat::core::= i 27) (:c::rt-slot-set lay census?))
     ((:wat::core::= i 28) (:c::rt-slot-set-own lay))
     ((:wat::core::= i 29) (:c::rt-hexval))
     ((:wat::core::= i 30) (:c::rt-hexchar))
     ((:wat::core::= i 31) (:c::rt-prim-write-hex lay))
-    ((:wat::core::= i 32) (:c::rt-prim-read-hex lay))
-    ((:wat::core::= i 33) (:c::rt-io-read-file lay))
+    ((:wat::core::= i 32) (:c::rt-prim-read-hex lay census?))
+    ((:wat::core::= i 33) (:c::rt-io-read-file lay census?))
     (:else (:c::rt-uflow lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
+                              census? <- :wat::core::bool
                               acc <- :wat::core::String] -> :wat::core::String
   (:wat::core::if (:wat::core::>= i (:c::rt-count)) acc
-    (:c::rt-cat lvl (:wat::core::+ i 1) lay
-      (:wat::string::concat acc (:c::rt-at lvl i (:c::rt-nth i lay))))))
+    (:c::rt-cat lvl (:wat::core::+ i 1) lay census?
+      (:wat::string::concat acc (:c::rt-at lvl i (:c::rt-nth i lay census?))))))
 
-(:wat::core::defn :c::runtime [lvl <- :wat::core::i64 lay <- :c::Layout] -> :wat::core::String
-  (:c::rt-cat lvl 0 lay ""))
+(:wat::core::defn :c::runtime [lvl <- :wat::core::i64 lay <- :c::Layout
+                               census? <- :wat::core::bool] -> :wat::core::String
+  (:c::rt-cat lvl 0 lay census? ""))
 
 ;; hex is two characters a byte
 (:wat::core::defn :c::hexlen [h <- :wat::core::String] -> :wat::core::i64
@@ -1942,17 +2181,20 @@
 ;; `i` is built the vector holds exactly `0..i` -- a reference to a routine defined after it has
 ;; no value to read. A convention became a shape.
 (:wat::core::defn :c::lay [lay <- :c::Layout at <- :wat::core::i64
-                           i <- :wat::core::i64] -> :c::Layout
+                           i <- :wat::core::i64
+                           census? <- :wat::core::bool] -> :c::Layout
   (:wat::core::if (:wat::core::>= i (:c::rt-count)) lay
     ;; the routine's OWN address goes in before it is built -- `i64_quot` measures its jumps
-    ;; from where it starts, so it has to be able to ask
+    ;; from where it starts, so it has to be able to ask. `census?` has to be THIS pass's own
+    ;; argument too, not just the final emission's: a routine's LENGTH already differs with the
+    ;; switch on (excursus 008 M2 census), and this is the pass that measures lengths.
     (:wat::core::let [lay1 (:wat::core::conj lay at)]
       (:c::lay lay1
-        (:wat::core::+ at (:c::hexlen (:c::rt-nth i lay1)))
-        (:wat::core::+ i 1)))))
+        (:wat::core::+ at (:c::hexlen (:c::rt-nth i lay1 census?)))
+        (:wat::core::+ i 1) census?))))
 
-(:wat::core::defn :c::layout [rt <- :wat::core::i64] -> :c::Layout
-  (:c::lay (:wat::core::Vector :- [:wat::core::i64]) rt 0))
+(:wat::core::defn :c::layout [rt <- :wat::core::i64 census? <- :wat::core::bool] -> :c::Layout
+  (:c::lay (:wat::core::Vector :- [:wat::core::i64]) rt 0 census?))
 
 ;; **the block does not move, so it is built ONCE and the offsets are shifted.**
 ;;
@@ -2062,7 +2304,81 @@
 (:wat::core::defn :c::small-max [] -> :wat::core::i64 512)
 (:wat::core::defn :c::hdr-small [] -> :wat::core::i64 16)
 (:wat::core::defn :c::hdr-large [] -> :wat::core::i64 (:wat::core::+ 16 512))
-(:wat::core::defn :c::hdr-buf [] -> :wat::core::i64 (:wat::core::+ 16 (:wat::core::+ 512 512)))
+
+;; excursus 008 M2 census (BRIEF-M2-census-where-the-heap-goes.md): three more fixed tables,
+;; present ONLY when `WAT_HEAP_CENSUS=1` widens the header -- byte-identical to today when it does
+;; not, the same technique M2 used for the small/large tables above. `:c::hdr-census-alloc` is
+;; where the small/large tables END, i.e. today's `hdr-buf` value (1040) -- so the OFF case is
+;; exactly today's layout, unchanged.
+;;
+;; `:c::census-nroutines` allocating routines (every `:c::rt-bump` call site with `reuse?=true` --
+;; the brief's "each `:c::rt-bump` call site is one routine"), 4 words each: count, bytes,
+;; reuse-count, reuse-bytes (how many/how much of the above were TAKEN from a free list).
+(:wat::core::defn :c::census-nroutines [] -> :wat::core::i64 13)
+(:wat::core::defn :c::hdr-census-alloc [] -> :wat::core::i64 (:wat::core::+ 16 (:wat::core::+ 512 512)))
+(:wat::core::defn :c::census-alloc-size [] -> :wat::core::i64 (:wat::core::* (:c::census-nroutines) 32))
+(:wat::core::defn :c::census-alloc-count [rid <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-alloc) (:wat::core::* rid 32)))
+(:wat::core::defn :c::census-alloc-bytes [rid <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::census-alloc-count rid) 8))
+(:wat::core::defn :c::census-reuse-count [rid <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::census-alloc-count rid) 16))
+(:wat::core::defn :c::census-reuse-bytes [rid <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::census-alloc-count rid) 24))
+
+;; `:c::census-nkinds` free kinds (String, record-or-payload-enum, closure, flat Vector,
+;; owned-flat Vector, trie Vector, trie node -- the brief's own list, and exactly the branch
+;; structure `:c::freevec-glue-body` already has), each x 3 paths (youngest/pushed/given-up) x
+;; 2 words (count, bytes).
+(:wat::core::defn :c::census-nkinds [] -> :wat::core::i64 7)
+(:wat::core::defn :c::hdr-census-free [] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-alloc) (:c::census-alloc-size)))
+(:wat::core::defn :c::census-free-size [] -> :wat::core::i64 (:wat::core::* (:c::census-nkinds) 48))
+(:wat::core::defn :c::census-free-count [kind <- :wat::core::i64 path <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-free) (:wat::core::+ (:wat::core::* kind 48) (:wat::core::* path 16))))
+(:wat::core::defn :c::census-free-bytes [kind <- :wat::core::i64 path <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::census-free-count kind path) 8))
+
+;; `:c::census-ncats` categories a drop's count can reach zero under (str/rec-or-henum/vec/fn --
+;; coarser than the 7 free kinds above, because a Vector's flat/owned/trie split is a RUNTIME tag
+;; check inside the glue body, not resolvable statically at the drop site), 1 word each: a count
+;; reaching zero. The free already ran; this count is every zero-reach, by category.
+(:wat::core::defn :c::census-ncats [] -> :wat::core::i64 4)
+(:wat::core::defn :c::hdr-census-zero [] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-free) (:c::census-free-size)))
+(:wat::core::defn :c::census-zero-size [] -> :wat::core::i64 (:wat::core::* (:c::census-ncats) 8))
+(:wat::core::defn :c::census-zero-count [cat <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-zero) (:wat::core::* cat 8)))
+
+;; excursus 008 M2 census R2: one live-byte counter per user function, plus one slot for a
+;; return address the function table cannot name. 4095 is that slot, so a program with more
+;; functions than 4095 refuses to compile rather than aliasing a real function onto it.
+(:wat::core::defn :c::census-nsites-max [] -> :wat::core::i64 4096)
+(:wat::core::defn :c::census-unmapped [] -> :wat::core::i64 4095)
+(:wat::core::defn :c::hdr-census-meta [] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-zero) (:c::census-zero-size)))
+(:wat::core::defn :c::census-site-lo [] -> :wat::core::i64 (:c::hdr-census-meta))
+(:wat::core::defn :c::census-site-hi [] -> :wat::core::i64 (:wat::core::+ (:c::census-site-lo) 8))
+(:wat::core::defn :c::census-site-n [] -> :wat::core::i64 (:wat::core::+ (:c::census-site-lo) 16))
+(:wat::core::defn :c::census-site-idx [] -> :wat::core::i64 (:wat::core::+ (:c::census-site-lo) 24))
+(:wat::core::defn :c::census-site-atbl [] -> :wat::core::i64 (:wat::core::+ (:c::census-site-lo) 32))
+(:wat::core::defn :c::census-site-live [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-site-atbl) (:wat::core::* (:c::census-nsites-max) 8)))
+(:wat::core::defn :c::census-unmapped-live [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-site-live) (:wat::core::* (:c::census-unmapped) 8)))
+(:wat::core::defn :c::census-sites-size [] -> :wat::core::i64
+  (:wat::core::+ 32 (:wat::core::* (:c::census-nsites-max) 16)))
+
+(:wat::core::defn :c::census-size [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-alloc-size)
+    (:wat::core::+ (:c::census-free-size)
+      (:wat::core::+ (:c::census-zero-size) (:c::census-sites-size)))))
+
+;; `:c::hdr-buf` now takes the switch: OFF, this is `:c::hdr-census-alloc` -- today's value,
+;; unchanged. ON, the three census tables sit between the large table and the buffer.
+(:wat::core::defn :c::hdr-buf [census? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::if census? (:wat::core::+ (:c::hdr-census-alloc) (:c::census-size))
+    (:c::hdr-census-alloc)))
 ;; the pending count at which the buffer is written out. The allocation (`:c::buf-bytes`) is
 ;; larger, so a single put that crosses this still has somewhere to land before the flush.
 (:wat::core::defn :c::buf-hiwater [] -> :wat::core::i64 4096)

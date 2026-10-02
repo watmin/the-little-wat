@@ -1235,6 +1235,9 @@
    ;; `:c::empty-prog` builds this record -- not on every drop. `:c::drop-hex` reads this
    ;; field instead of calling `:c::drop-check?` itself.
    dchk <- :wat::core::bool
+   ;; excursus 008 M2 census: `WAT_HEAP_CENSUS=1`, read ONCE here, exactly like `dchk` above --
+   ;; see `:c::heap-census?`. Every census site reads THIS field, never the environment again.
+   census <- :wat::core::bool
    ;; one node per name: the textually last symbol occurrence in the function being
    ;; compiled. Built once. Asking `:c::live-after` at every share did not finish
    ;; stage 0. A drop at that node is late on any path that stopped earlier.
@@ -1308,6 +1311,7 @@
             :nscr (:c::nscratch)
             :slots 0
             :dchk (:c::drop-check?)
+            :census (:c::heap-census?)
             :lasts (:wat::core::Vector :- [:wat::core::i64])
             :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
@@ -2687,18 +2691,21 @@
               (:wat::core::let
                 [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
                  o2 (:c::push (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
-                 o3 (:c::expr (:wat::core::nth ks 3) o2 env pg rt tb slot (:c::no-tail))]
+                 o3 (:c::expr (:wat::core::nth ks 3) o2 env pg rt tb slot (:c::no-tail))
+                 o4 (:c::popn o3 (:wat::string::concat "4889c2" (:c::pop-rcx) (:c::pop-rax)) 16)
+                 o5 (:c::save-rax (:wat::core::nth ks 1) o4 env pg)]
                 (:c::drop-if-last (:wat::core::nth ks 1)
-                  (:c::call (:c::popn o3 (:wat::string::concat "4889c2" (:c::pop-rcx) (:c::pop-rax)) 16) (:c::at-subs rt))
+                  (:c::call o5 (:c::at-subs rt))
                   env pg rt))))
           ((:wat::core::or (:c::starts? head) (:c::contains? head))
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "string test arity" a pg)
               (:wat::core::let
                 [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
-                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
-                (:c::drop-if-last (:wat::core::nth ks 2)
-                  (:c::drop-if-last (:wat::core::nth ks 1)
-                    (:c::call (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
+                 o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
+                 held (:c::hold-pair (:wat::core::nth ks 1) (:wat::core::nth ks 2) o2 env pg)]
+                (:c::drop-if-last (:wat::core::nth ks 1)
+                  (:c::drop-if-last (:wat::core::nth ks 2)
+                    (:c::call held
                       (:wat::core::if (:c::starts? head) (:c::at-starts rt) (:c::at-contains rt)))
                     env pg rt)
                   env pg rt))))
@@ -2715,11 +2722,12 @@
                       (:c::emit o (:c::movzb-sib sr ir)) env pg rt)
                     (:wat::core::let
                       [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
-                       o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))]
+                       o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
+                       o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
+                       o4 (:c::save-rax (:wat::core::nth ks 1) o3 env pg)]
                       ;; rcx = the index, rax = the String; the byte is one header past the base
                       (:c::drop-if-last (:wat::core::nth ks 1)
-                        (:c::emit (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
-                                  "480fb6440808")
+                        (:c::emit o4 "480fb6440808")
                         env pg rt)))))))
           ((:c::tostr? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 2) (:c::fail "to-string arity" a pg)
@@ -2767,10 +2775,11 @@
               (:wat::core::let
                 [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
                  o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-                 o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)]
+                 o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
+                 o4 (:c::save-rax (:wat::core::nth ks 1) o3 env pg)]
                 (:c::drop-if-last (:wat::core::nth ks 1)
                   (:c::read-out (:c::elem-ty (:c::type-of (:wat::core::nth ks 1) env pg))
-                    (:c::Read.Elem {:tget (:c::at-tget rt)}) o3 a pg rt)
+                    (:c::Read.Elem {:tget (:c::at-tget rt)}) o4 a pg rt)
                   env pg rt))))
           ((:c::conj? head)
             (:wat::core::if (:wat::core::not= (:wat::core::length ks) 3) (:c::fail "conj arity" a pg)
@@ -2853,7 +2862,9 @@
                   (:else
                     (:c::drop-if-last opnd
                       (:c::read-out (:c::acc-ty pg head) (:c::Read.At {:d d})
-                        (:c::expr opnd o env pg rt tb slot (:c::no-tail)) a pg rt)
+                        (:c::save-rax opnd
+                          (:c::expr opnd o env pg rt tb slot (:c::no-tail)) env pg)
+                        a pg rt)
                       env pg rt))))))
           ((:c::let? head) (:c::let-form ks a o env pg rt tb slot tc))
           ((:c::println? head) (:c::print-form ks a o env pg rt tb slot))
@@ -2867,12 +2878,13 @@
             (:wat::core::let
               [o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
                o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-               o3 (:c::call (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8) (:c::at-streq rt))
+               held (:c::hold-pair (:wat::core::nth ks 1) (:wat::core::nth ks 2) o2 env pg)
+               o3 (:c::call held (:c::at-streq rt))
                o4 (:wat::core::if (:wat::core::= op "not=")
                     (:c::emit o3 "4883f001")
                     o3)]
-              (:c::drop-if-last (:wat::core::nth ks 2)
-                (:c::drop-if-last (:wat::core::nth ks 1) o4 env pg rt)
+              (:c::drop-if-last (:wat::core::nth ks 1)
+                (:c::drop-if-last (:wat::core::nth ks 2) o4 env pg rt)
                 env pg rt)))
           ((:wat::core::not (:wat::core::= op ""))
             ;; **a String or a Vector is an ADDRESS, and adding to one is not arithmetic.** The
@@ -3489,12 +3501,12 @@
 ;; excursus 008 stone 3b-1 (round 3): round 2 added a `needs-share?` increment here, reasoning
 ;; that a folded operand (`ks[i]`, i >= 2) read again later needed one. Refuted: `str_cat` /
 ;; `str_cat_own` (`elf/lib/runtime.wat`) COPY their right operand (rcx) and consume only the
-;; left, the accumulator -- a folded operand is READ, exactly like an `nth` argument, and
-;; nothing downstream drops it after this call returns. The share was therefore an increment
-;; nothing gives back: a leak on every `concat` of a live name. The real defect this round 2
-;; chased was `:c::eval-seq`'s write-head deferral (fixed at `elf/compile.wat:3831`); the
-;; SCORE's own ablation already showed this share was not what made the crash go away. Back to
-;; handing the operand to `:c::expr` bare, with no share.
+;; left, the accumulator -- a folded operand is READ, exactly like an `nth` argument. An
+;; increment here was an extra count nothing gave back (a leak on every `concat` of a live
+;; name). The operand is still handed to `:c::expr` bare. R3 drops it AFTER the copy when it
+;; is a temporary (`:c::drop-if-last`); a name is unchanged, last use only. The real defect
+;; round 2 chased was `:c::eval-seq`'s write-head deferral (fixed at `elf/compile.wat:3831`);
+;; the SCORE's own ablation already showed this share was not what made the crash go away.
 (:wat::core::defn :c::cat-fold [ks <- :c::Kids i <- :wat::core::i64
                                 o <- :c::Out env <- :c::Env pg <- :c::Prog
                                 rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64
@@ -3508,10 +3520,15 @@
             (:c::expr arg o1 env pg rt tb slot (:c::no-tail)))
        o3 (:wat::core::if direct? o2 (:c::emit o2 "4889c1"))  ;; mov rcx, rax
        o4 (:wat::core::if direct? o3 (:c::popn o3 (:c::pop-rax) 8))     ;; pop rax
-       o5 (:c::call o4 (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))]
+       ;; rax is the accumulator, rcx the right-hand operand. str_cat copies that
+       ;; operand and does not take it. A temporary is pushed here and dropped
+       ;; after the call; a name still drops only on its last use.
+       o4s (:c::save-rcx arg o4 env pg)
+       o5 (:c::call o4s (:wat::core::if own? (:c::at-cat-own rt) (:c::at-cat rt)))
+       o6 (:c::drop-if-last arg o5 env pg rt)]
       ;; after the first step the accumulator is a temporary this expression made, so nothing
       ;; else can be holding it and every later step may extend in place
-      (:c::cat-fold ks (:wat::core::+ i 1) o5 env pg rt tb slot true))))
+      (:c::cat-fold ks (:wat::core::+ i 1) o6 env pg rt tb slot true))))
 
 ;; ---------------------------------------------------------------- if
 
@@ -4392,6 +4409,15 @@
 (:wat::core::defn :c::drop-check? [] -> :wat::core::bool
   (:c::envvar-set? (:wat::io::read-file "/proc/self/environ") "WAT_DROP_CHECK=1" 0 0))
 
+;; excursus 008 M2 census (BRIEF-M2-census-where-the-heap-goes.md): the SAME switch shape as
+;; `:c::drop-check?` above -- `WAT_HEAP_CENSUS=1`, a whole entry of `/proc/self/environ`, read
+;; ONCE into `:c::Prog/census` by `:c::empty-prog`. MEASURES ONLY: with it unset, every site this
+;; strike touches emits nothing it did not emit before (`tools/emitted.sh check` must show 0
+;; moved); with it set, the compiler counts allocation, free and reuse at the one door
+;; (`:c::rt-bump`) and the one free point (`:c::free-tail-emit`), and reports to stderr at exit.
+(:wat::core::defn :c::heap-census? [] -> :wat::core::bool
+  (:c::envvar-set? (:wat::io::read-file "/proc/self/environ") "WAT_HEAP_CENSUS=1" 0 0))
+
 ;; `dec qword [rax-8]`. The one decrement. Callers emit nothing else that lowers a count.
 (:wat::core::defn :c::dec-hex [] -> :wat::core::String "48ff48f8")
 
@@ -4495,7 +4521,17 @@
                 (:wat::string::concat "e8"
                   (:asm::le (:wat::core::- (:c::free-target t pg) (:wat::core::+ free-pos 5)) 4)))
      poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
-     body (:wat::string::concat call-hex (:wat::string::concat free-hex poison))
+     ;; excursus 008 M2 census: every count that reaches zero, by category. The free above
+     ;; has already run; the old "no free" name was the position of this add, not its meaning.
+     ;; Placed LAST, not first: `call-pos`/`free-pos` above are
+     ;; computed from `body-pos` assuming `call-hex` is the FIRST thing `body` emits (`call-pos
+     ;; = body-pos + 1`, the one `push-rax` byte) -- putting anything before it would be silently
+     ;; wrong. Appending after `poison` touches none of that arithmetic, since nothing downstream
+     ;; depends on where `body` ENDS (`zskip`'s own skip-length is `hexlen(body)`, read generically).
+     zero-hex (:wat::core::if (:c::Prog/census pg)
+                (:c::add-mi (:c::r14) (:c::census-zero-count (:c::census-cat-of (:c::glue-target-ty t pg))) 1)
+                "")
+     body (:wat::string::concat call-hex (:wat::string::concat free-hex (:wat::string::concat poison zero-hex)))
      zskip (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)]
     (:wat::string::concat guard
       (:wat::string::concat dec
@@ -5062,18 +5098,40 @@
 ;; `rax` instead of `r10` is exactly the bug a real run caught (F1 of this strike's SECOND
 ;; mistake: the popped value came back 8 bytes short of the block for a String too, since
 ;; `:c::rt-bump`'s found path always treats what it pops as a block start).
+;; excursus 008 M2 census: `census?`/`kind` add nothing when `census?` is false -- every new
+;; `:c::emit` below carries an EMPTY string in that case, so the OFF build is the untouched M2
+;; bytes. `sizereg` is never clobbered anywhere in this function (only read, by the SMALL/LARGE
+;; decision and by the three `add-rr`/`cmp-rr` above it), so it is still the exact block size at
+;; all three exits -- no extra scratch needed on the free side at all, unlike the allocate side.
 (:wat::core::defn :c::free-tail-emit [o <- :c::Out startdisp <- :wat::core::i64
-                                      sizereg <- :wat::core::i64] -> :c::Out
+                                      sizereg <- :wat::core::i64
+                                      census? <- :wat::core::bool kind <- :wat::core::i64] -> :c::Out
   (:wat::core::let
     [o1 (:c::emit o (:c::lea-at (:c::rax) startdisp (:c::r10)))
-     o2 (:c::emit o1 (:c::mov-rr (:c::r10) (:c::r11)))
+     ;; The site index lives one word before the count. r8 and r11 are free until o2.
+     o1s (:c::emit o1
+           (:wat::core::if census?
+             (:wat::string::concat
+               (:c::mov-rm (:c::r10) -8 (:c::r8))
+               (:c::lea (:c::r14) (:c::r8) 8 (:c::census-site-live) (:c::r11))
+               (:c::sub-mr sizereg (:c::r11) 0))
+             ""))
+     o2 (:c::emit o1s (:c::mov-rr (:c::r10) (:c::r11)))
      o3 (:c::emit o2 (:c::add-rr sizereg (:c::r11)))
      o4 (:c::emit o3 (:c::cmp-rr (:c::r15) (:c::r11)))
      o5 (:c::emit o4 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
      skip-at (:wat::core::- (:c::codelen o5) 4)
-     ;; YOUNGEST: commit the rewind, return -- byte-identical to before M2
+     ;; YOUNGEST (path 0): commit the rewind, count it, return -- byte-identical to before M2
+     ;; census when the switch is off.
      o6 (:c::emit o5 (:c::mov-rr (:c::r10) (:c::r15)))
-     o7 (:c::emit o6 (:c::ret))
+     o6a (:c::emit o6
+           (:wat::core::if census?
+             (:wat::string::concat
+               (:c::sub-ri (:c::r15) 8)
+               (:c::add-mi (:c::r14) (:c::census-free-count kind 0) 1)
+               (:c::add-mr sizereg (:c::r14) (:c::census-free-bytes kind 0)))
+             ""))
+     o7 (:c::emit o6a (:c::ret))
      o8 (:c::patch o7 skip-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ skip-at 4)) 4))
      ;; NOT YOUNGEST (M2-2 starts here): decide SMALL or LARGE from `sizereg`. `r10` is left
      ;; completely alone from here to the push -- it still holds the block START from `o1`.
@@ -5098,15 +5156,29 @@
      o22 (:c::emit o21 (:c::bsr-rr sizereg (:c::r11)))
      o23 (:c::emit o22 (:c::lea (:c::r14) (:c::r11) 8 (:c::hdr-large) (:c::r11)))
      o24 (:c::patch o23 have-slot-at (:asm::le (:wat::core::- (:c::codelen o23) (:wat::core::+ have-slot-at 4)) 4))
-     ;; HAVE_SLOT (reached from SMALL's unconditional jump, or LARGE's own fallthrough):
-     ;; r11 is the table SLOT address, r10 is STILL the block start -- unlink-and-push by r10
+     ;; HAVE_SLOT (path 1, "pushed" -- reached from SMALL's unconditional jump, or LARGE's own
+     ;; fallthrough): r11 is the table SLOT address, r10 is STILL the block start -- unlink-and-
+     ;; push by r10, count it before the ret.
      o25 (:c::emit o24 (:c::mov-rm (:c::r11) 0 (:c::r8)))
      o26 (:c::emit o25 (:c::mov-mr (:c::r8) (:c::r10) 0))
      o27 (:c::emit o26 (:c::mov-mr (:c::r10) (:c::r11) 0))
-     o28 (:c::emit o27 (:c::ret))
-     o29 (:c::patch o28 giveup-at (:asm::le (:wat::core::- (:c::codelen o28) (:wat::core::+ giveup-at 4)) 4))]
-    ;; GIVE UP (a large, non-power-of-two shape): stay dead, exactly as before M2
-    (:c::emit o29 (:c::ret))))
+     o27a (:c::emit o27
+            (:wat::core::if census?
+              (:wat::string::concat
+                (:c::add-mi (:c::r14) (:c::census-free-count kind 1) 1)
+                (:c::add-mr sizereg (:c::r14) (:c::census-free-bytes kind 1)))
+              ""))
+     o28 (:c::emit o27a (:c::ret))
+     o29 (:c::patch o28 giveup-at (:asm::le (:wat::core::- (:c::codelen o28) (:wat::core::+ giveup-at 4)) 4))
+     ;; GIVE UP (path 2, "given_up" -- a large, non-power-of-two shape): stay dead, exactly as
+     ;; before M2, but counted.
+     o30 (:c::emit o29
+           (:wat::core::if census?
+             (:wat::string::concat
+               (:c::add-mi (:c::r14) (:c::census-free-count kind 2) 1)
+               (:c::add-mr sizereg (:c::r14) (:c::census-free-bytes kind 2)))
+             ""))]
+    (:c::emit o30 (:c::ret))))
 
 ;; `freestr(rax = String) -> `, free to the bump. The size is `:c::rt-cap(len)` -- the SAME
 ;; function `rt-str-cat`/`rt-str-subs`/`rt-i64-to-str` call to size the allocation, read
@@ -5115,7 +5187,8 @@
   (:wat::core::let
     [o1 (:c::emit o (:c::mov-rm (:c::rax) 0 (:c::rdx)))
      o2 (:c::emit o1 (:c::rt-cap (:c::rdx) (:c::r8) (:c::r9)))]
-    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+    ;; excursus 008 M2 census: kind 0 (String).
+    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9) (:c::Prog/census pg) 0)))
 
 ;; `freerec(rax = record or payload enum) -> `. Both allocate through `:c::rt-vec-new`'s
 ;; own `len*8+16` shape; a tier-3 enum's tag occupies field 0, which is exactly why its size
@@ -5124,7 +5197,8 @@
   (:wat::core::let
     [o1 (:c::emit o (:c::mov-rm (:c::rax) 0 (:c::r8)))
      o2 (:c::emit o1 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::vec-hdr) (:c::r9)))]
-    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+    ;; excursus 008 M2 census: kind 1 (record-or-payload-enum).
+    (:c::free-tail-emit o2 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9) (:c::Prog/census pg) 1)))
 
 ;; `freevec(rax = Vector) -> `. The one exception the CONTRACT names: a Vector's block can
 ;; be any of three sizes, told apart by its own tag word, and the owned-flat case has no
@@ -5140,7 +5214,8 @@
      jne-tree-at (:wat::core::- (:c::codelen o2) 4)
      ;; tree: fixed size (varr-hdr + shift + root)
      o3 (:c::emit o2 (:c::mov-ri (:c::r9) (:wat::core::+ (:c::varr-hdr) (:wat::core::* 2 (:c::word)))))
-     o4 (:c::free-tail-emit o3 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))
+     ;; excursus 008 M2 census: kind 5 (trie Vector header).
+     o4 (:c::free-tail-emit o3 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9) (:c::Prog/census pg) 5)
      ;; flat or owned: the jne above lands here
      o5 (:c::patch o4 jne-tree-at (:asm::le (:wat::core::- (:c::codelen o4) (:wat::core::+ jne-tree-at 4)) 4))
      o6 (:c::emit o5 (:c::mov-rm (:c::rax) 0 (:c::r8)))
@@ -5150,18 +5225,21 @@
      ;; owned: spare capacity, recomputed, never stored
      o9 (:c::emit o8 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::word) (:c::rdx)))
      o10 (:c::emit o9 (:c::rt-cap (:c::rdx) (:c::r10) (:c::r9)))
-     o11 (:c::free-tail-emit o10 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))
+     ;; excursus 008 M2 census: kind 4 (owned-flat Vector).
+     o11 (:c::free-tail-emit o10 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9) (:c::Prog/census pg) 4)
      ;; plain flat: the jne above lands here
      o12 (:c::patch o11 jne-own-at (:asm::le (:wat::core::- (:c::codelen o11) (:wat::core::+ jne-own-at 4)) 4))
      o13 (:c::emit o12 (:c::lea (:c::no-reg) (:c::r8) (:c::word) (:c::varr-hdr) (:c::r9)))]
-    (:c::free-tail-emit o13 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9))))
+    ;; excursus 008 M2 census: kind 3 (flat Vector).
+    (:c::free-tail-emit o13 (:wat::core::- 0 (:c::varr-ptr)) (:c::r9) (:c::Prog/census pg) 3)))
 
 ;; `freenode(rax = trie node) -> `. Fixed size, like `:c::rt-node-new`'s own allocation:
 ;; one header word and 32 slots.
 (:wat::core::defn :c::freenode-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
   (:wat::core::let
     [o1 (:c::emit o (:c::mov-ri (:c::r9) (:wat::core::+ (:c::vec-hdr) (:wat::core::* (:c::node-arity) (:c::word)))))]
-    (:c::free-tail-emit o1 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+    ;; excursus 008 M2 census: kind 6 (trie node).
+    (:c::free-tail-emit o1 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9) (:c::Prog/census pg) 6)))
 
 ;; `closize(rax = closure) -> `. `:c::close-form`'s last store overwrites the length word
 ;; with the lifted function's code address, so the one place `ncaps` still exists is the
@@ -5199,13 +5277,30 @@
      o2 (:c::emit (:c::CZ/o cz1) (:c::xor-rr (:c::r11) (:c::r11)))
      o3 (:c::patch-jmps (:c::CZ/jmps cz1) 0 o2)
      o4 (:c::emit o3 (:c::lea (:c::no-reg) (:c::r11) (:c::word) (:c::vec-hdr) (:c::r9)))]
-    (:c::free-tail-emit o4 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9))))
+    ;; excursus 008 M2 census: kind 2 (closure).
+    (:c::free-tail-emit o4 (:wat::core::- 0 (:c::vec-ptr)) (:c::r9) (:c::Prog/census pg) 2)))
 
 ;; the address of a pseudo-glue entry by its exact name, bypassing `:c::glue-target-ty`
 ;; (these five are never a value's TYPE, so that resolution does not apply)
 (:wat::core::defn :c::pseudo-addr [pg <- :c::Prog name <- :wat::core::String] -> :wat::core::i64
   (:wat::core::let [i (:c::index-of-str (:c::Prog/gtys pg) name 0)]
     (:wat::core::if (:wat::core::< i 0) -1 (:wat::core::nth (:c::Prog/gaddrs pg) i))))
+
+;; excursus 008 M2 census: the zero-reached category a RESOLVED type (`:c::glue-target-ty`'s
+;; own answer, same as `:c::free-target` below asks for) falls under -- str/rec-or-henum/vec/fn,
+;; the same four the free side's 7 kinds collapse the Vector split out of (flat/owned/trie is a
+;; RUNTIME tag check, not visible here). Exhaustive over exactly what `:c::free-target` already
+;; proves a drop site's type can resolve to; the `:else` is that same "should never happen"
+;; case, not a guess.
+(:wat::core::defn :c::census-cat-of [t2 <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= t2 "str") 0)
+    ((:wat::string::starts-with? t2 "rec:") 1)
+    ((:wat::string::starts-with? t2 "henum:") 1)
+    ((:wat::string::starts-with? t2 "vec:") 2)
+    ((:wat::string::starts-with? t2 "fn:") 3)
+    (:else (:wat::kernel::assertion-failed!
+             :message (:wat::string::concat "census: no category for " t2)))))
 
 ;; which free routine a drop site's type resolves to -- the SAME resolution `:c::glue-addr`
 ;; already applies (a `penum:` value IS its payload), so a `rec:`/`henum:` share one free
@@ -5538,6 +5633,38 @@
             (:c::drop-loaded name ty (:c::push o (:c::push-rax) 8) env pg rt)
             (:c::pop-rax) 8))))))
 
+;; a pointer-typed operand that is not a name. Since F-188 a read out of a container is
+;; counted, and since R16 an `if` / `let` / `do` / call result that flows on is an owned
+;; reference. The consumer of a temporary therefore holds the only reference it will ever
+;; have. A name is not this: its binding owns it, and the symbol arm below is unchanged.
+(:wat::core::defn :c::owned-temp? [a <- :wat::core::i64 env <- :c::Env pg <- :c::Prog]
+    -> :wat::core::bool
+  (:wat::core::and (:wat::core::not= (:c::kindv a pg) (:rd::Kind.Symbol {}))
+                   (:c::ptr-ty? (:c::type-of a env pg))))
+
+;; the operand is in rax. A temporary's bits are pushed so the read can overwrite rax and
+;; `:c::drop-if-last` can still drop them. A name is left where it is: its drop reloads the
+;; binding, and an extra stack copy would be a second reference.
+(:wat::core::defn :c::save-rax [a <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                pg <- :c::Prog] -> :c::Out
+  (:wat::core::if (:c::owned-temp? a env pg) (:c::push o (:c::push-rax) 8) o))
+
+;; same, for a right-hand operand already in rcx (`:c::cat-fold`).
+(:wat::core::defn :c::save-rcx [a <- :wat::core::i64 o <- :c::Out env <- :c::Env
+                                pg <- :c::Prog] -> :c::Out
+  (:wat::core::if (:c::owned-temp? a env pg) (:c::push o "51" 8) o))
+
+;; entry: the left operand was pushed and rax holds the right.
+;; exit: rax is the left, rcx the right, and each temporary is on the stack again
+;; (left under right) for `:c::drop-if-last` to pop. Names are not pushed back.
+(:wat::core::defn :c::hold-pair [left <- :wat::core::i64 right <- :wat::core::i64
+                                 o <- :c::Out env <- :c::Env pg <- :c::Prog] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-rr (:c::rax) (:c::rcx)))
+     o2 (:c::popn o1 (:c::pop-rax) 8)
+     o3 (:c::save-rax left o2 env pg)]
+    (:c::save-rcx right o3 env pg)))
+
 (:wat::core::defn :c::drop-if-last [a <- :wat::core::i64 o <- :c::Out env <- :c::Env
                                     pg <- :c::Prog rt <- :c::Layout] -> :c::Out
   (:wat::core::if (:wat::core::and (:wat::core::= (:c::kindv a pg) (:rd::Kind.Symbol {}))
@@ -5547,7 +5674,24 @@
                         ;; increment. Dropping one at a nested read frees that pass.
                         (:wat::core::not (:c::ronly? pg (:c::text pg a) 0)))))
     (:c::drop-kept (:c::text pg a) o env pg rt)
-    o))
+    ;; R3: a temporary a reading built-in just read. Its pointer was pushed by
+    ;; `:c::save-rax` / `:c::save-rcx` / `:c::hold-pair`. Pop it, drop it, keep the
+    ;; result in rax. A count-0 literal is skipped by the guard inside the drop.
+    ;; Every reading built-in calls this function, so none of them has its own copy
+    ;; of the rule: `length` (inline, the one that already dropped), `subs` /
+    ;; `byte-subs`, `starts-with?`, `contains?`, `code-point-at` / `byte-at`, `nth`,
+    ;; a field read, `=` / `not=` on strings, `println`, `assert-eq`, and an
+    ;; indirect call's computed head. `:c::cat-fold` drops each later operand the
+    ;; same way. `conj` / `assoc` / the left of `concat` are not reads: they consume,
+    ;; and `:c::drop-saved` is their drop.
+    (:wat::core::if (:c::owned-temp? a env pg)
+      (:wat::core::let
+        [o1 (:c::popn o (:c::pop-rcx) 8)
+         o2 (:c::push o1 (:c::push-rax) 8)
+         o3 (:c::emit o2 (:c::mov-rr (:c::rcx) (:c::rax)))
+         o4 (:c::emit-drop (:c::type-of a env pg) o3 pg rt)]
+        (:c::popn o4 (:c::pop-rax) 8))
+      o)))
 
 (:wat::core::defn :c::used-in? [ks <- :c::Kids i <- :wat::core::i64 name <- :wat::core::String
                                pg <- :c::Prog] -> :wat::core::bool
@@ -5977,9 +6121,11 @@
                            (:wat::core::= (:c::type-of (:wat::core::nth ks 2) env pg) "str"))
      o1 (:c::push (:c::expr (:wat::core::nth ks 1) o env pg rt tb slot (:c::no-tail)) (:c::push-rax) 8)
      o2 (:c::expr (:wat::core::nth ks 2) o1 env pg rt tb slot (:c::no-tail))
-     o3 (:c::popn o2 (:wat::string::concat "4889c1" (:c::pop-rax)) 8)
-     o4 (:wat::core::if str? (:c::call o3 (:c::at-streq rt)) (:c::emit o3 (:c::op-hex "=")))
-     o5 (:c::emit (:c::emit o4 "4885c0") "0f8500000000")      ;; test ; jnz over the diagnostic
+     held (:c::hold-pair (:wat::core::nth ks 1) (:wat::core::nth ks 2) o2 env pg)
+     o4 (:wat::core::if str? (:c::call held (:c::at-streq rt)) (:c::emit held (:c::op-hex "=")))
+     o4d (:c::drop-if-last (:wat::core::nth ks 1)
+           (:c::drop-if-last (:wat::core::nth ks 2) o4 env pg rt) env pg rt)
+     o5 (:c::emit (:c::emit o4d "4885c0") "0f8500000000")      ;; test ; jnz over the diagnostic
      at (:wat::core::- (:c::codelen o5) 4)
      o6 (:c::static-str (:wat::string::concat "assert failed: " (:c::text pg a)) o5 tb
           (:c::rax))
@@ -6766,7 +6912,9 @@
         ((:wat::core::= (:c::kindv arg pg) (:rd::Kind.Str {})) (:c::print-string arg o tb rt pg))
         ((:wat::core::= ty "str")
           (:c::drop-if-last arg
-            (:c::call (:c::expr arg o env pg rt tb slot (:c::no-tail)) (:c::at-str rt))
+            (:c::call (:c::save-rax arg
+                        (:c::expr arg o env pg rt tb slot (:c::no-tail)) env pg)
+              (:c::at-str rt))
             env pg rt))
         ;; `(println (> 3 2))` prints `true`, not `1`. The type pass is the only thing standing
         ;; between the compiler and a SILENT disagreement with the interpreter here, which is why
@@ -7119,19 +7267,36 @@
 ;; The ORDER matters. The arguments are pushed first and the target loaded second, because
 ;; evaluating an argument goes through rax and would destroy a target loaded ahead of it.
 ;;
+;; A temporary head is an owned reference and is dropped after the call. The slot for that
+;; drop is reserved BEFORE the arguments and filled once the head is in rax. A push on top
+;; of the arguments would sit between them and the return address, and the callee would
+;; read the closure pointer as its first parameter (`drop-3b-closure`'s `n`).
+;;
 ;; No tail-call path here on purpose: a self tail call is recognised by NAME (`:c::tail-call?`),
 ;; and a value in a register has no name to recognise. An indirect call is always a real call.
 (:wat::core::defn :c::call-indirect [ks <- :c::Kids o <- :c::Out env <- :c::Env pg <- :c::Prog
                                      rt <- :c::Layout tb <- :wat::core::i64
                                      slot <- :wat::core::i64] -> :c::Out
   (:wat::core::let [n (:wat::core::- (:wat::core::length ks) 1)
-                    o1 (:c::push-args ks 1 o env pg rt tb slot)
-                    o2 (:c::expr (:wat::core::nth ks 0) o1 env pg rt tb slot (:c::no-tail))
-                    o3 (:c::emit o2 "ff10")                          ;; call [rax]
-                    ;; the head ran last. If that was the binding's last use, drop it
-                    ;; now, after the call, without losing the result.
-                    o4 (:c::drop-if-last (:wat::core::nth ks 0) o3 env pg rt)]
-    (:wat::core::if (:wat::core::= n 0) o4
+                    head (:wat::core::nth ks 0)
+                    tmp? (:c::owned-temp? head env pg)
+                    o0 (:wat::core::if tmp? (:c::push o (:c::sub-rsp 8) 8) o)
+                    o1 (:c::push-args ks 1 o0 env pg rt tb slot)
+                    o2 (:c::expr head o1 env pg rt tb slot (:c::no-tail))
+                    ;; the reserved word is past the n arguments. rax still holds the closure,
+                    ;; which `call [rax]` and the callee's prologue both read.
+                    o2b (:wat::core::if tmp?
+                          (:c::emit o2 (:wat::string::concat "48898424"
+                                        (:asm::le (:wat::core::* 8 n) 4)))
+                          o2)
+                    o3 (:c::emit o2b "ff10")                          ;; call [rax]
+                    ;; arguments come off first, so the pop in `:c::drop-if-last` takes the
+                    ;; reserved word and not an argument. A name was never reserved.
+                    o3b (:wat::core::if (:wat::core::and tmp? (:wat::core::> n 0))
+                          (:c::popn o3 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n))
+                          o3)
+                    o4 (:c::drop-if-last head o3b env pg rt)]
+    (:wat::core::if (:wat::core::or (:wat::core::= n 0) tmp?) o4
       (:c::popn o4 (:c::add-rsp (:wat::core::* 8 n)) (:wat::core::* 8 n)))))
 
 ;; **the caller is handed the table INDEX, and everything it needs is one row.** The guard
@@ -8533,7 +8698,11 @@
 ;; two new free-list tables fit between `:c::hdr-limit` and the buffer without moving the
 ;; buffer's own 8176-byte capacity -- `r15`'s start (`:c::stub-arm`'s `lea r14+buf-bytes`) is
 ;; computed FROM this constant, so widening it is the whole change.
-(:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 (:wat::core::+ 8192 1024))
+;;
+;; excursus 008 M2 census: now a function of the switch, same shape -- `:c::hdr-buf`'s own value
+;; moves by exactly `:c::census-size` bytes when `WAT_HEAP_CENSUS=1`, OFF is unchanged.
+(:wat::core::defn :c::buf-bytes [census? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::+ 8192 (:wat::core::- (:c::hdr-buf census?) 16)))
 (:wat::core::defn :c::si-totalram [] -> :wat::core::i64 32)
 (:wat::core::defn :c::si-totalswap [] -> :wat::core::i64 64)
 (:wat::core::defn :c::si-unit [] -> :wat::core::i64 104)
@@ -8556,9 +8725,9 @@
 ;; routines were string literals and is not now that they are expressions (F-137 again, one level
 ;; up): the compiled compiler drifted 509 -> 690 ms over three more conversions before this was
 ;; noticed. One layout, built once, threaded.
-(:wat::core::defn :c::stub-len [lay0 <- :c::Layout] -> :wat::core::i64
-  (:wat::core::let [z (:c::hexlen (:c::stub 0 lay0))
-                    a (:c::hexlen (:c::stub (:asm::base) lay0))]
+(:wat::core::defn :c::stub-len [lay0 <- :c::Layout census? <- :wat::core::bool] -> :wat::core::i64
+  (:wat::core::let [z (:c::hexlen (:c::stub 0 lay0 census? 0 0))
+                    a (:c::hexlen (:c::stub (:asm::base) lay0 census? 0 0))]
     ;; STOP-1: both passes, and a real entry address, must emit the same number of bytes.
     (:wat::core::do (:wat::test::assert-eq z a) z)))
 
@@ -8618,11 +8787,293 @@
     (:c::syscall)
     (:c::cmp-ri (:c::rax) (:c::mmap-bad))))
 
+;; excursus 008 M2 census (BRIEF-M2-census-where-the-heap-goes.md): the exit report. Emitted
+;; ONLY when `:c::Prog/census` is true, into the entry stub, after `call main`/`call flush` and
+;; before `exit0` -- so it is the LAST thing a census-built program does, after everything it
+;; is reporting on has already happened. One line per stored counter plus a handful of derived
+;; totals, each `census <name> <value>\n` to stderr -- `:c::rt-say-stderr`/`:c::rt-say-int-stderr`
+;; (elf/lib/runtime.wat) never touch the buffered stdout path at all, which is the GATES
+;; section's own claim that stdout is unchanged with the switch on.
+;;
+;; **Ordering inside every line matters**: the NAME is written before the VALUE is loaded,
+;; never after -- `:c::rt-say-stderr`'s own `:c::abort-chunks` packing clobbers `rax` (it is a
+;; `movabs`/`mov-ri32` destination), so loading the counter into `rax` and THEN printing the
+;; name would stomp the very value being reported. `:c::rt-say-int-stderr` expects `rax` to
+;; hold the value at the instant it is called and nothing before it in the same line may
+;; touch `rax` again after that load.
+(:wat::core::defn :c::census-say-name [name <- :wat::core::String] -> :wat::core::String
+  (:c::rt-say-stderr (:wat::string::concat "census " (:wat::string::concat name " "))))
+
+;; one stored counter, read from `[r14+disp]` straight into `rax` -- name first, per the ordering
+;; note above.
+(:wat::core::defn :c::census-line [name <- :wat::core::String disp <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::census-say-name name)
+    (:c::mov-rm (:c::r14) disp (:c::rax))
+    (:c::rt-say-int-stderr)))
+
+;; a DERIVED value: `code` is some register arithmetic that leaves its answer in `rax` --
+;; `:c::census-sum`/`:c::census-free-list-remaining`/etc below -- name first again.
+(:wat::core::defn :c::census-say-total [name <- :wat::core::String code <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat (:c::census-say-name name) code (:c::rt-say-int-stderr)))
+
+;; the four name tables, the same `cond`-over-an-index idiom `:c::rt-nth` itself uses. Each is
+;; total, over exactly the range its own table size names -- never asked outside it.
+(:wat::core::defn :c::census-routine-name [rid <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= rid 0) "str_cat") ((:wat::core::= rid 1) "vec_new")
+    ((:wat::core::= rid 2) "vec_conj_own_copy") ((:wat::core::= rid 3) "varr_new")
+    ((:wat::core::= rid 4) "node_new") ((:wat::core::= rid 5) "tree_push")
+    ((:wat::core::= rid 6) "tree_from_arr") ((:wat::core::= rid 7) "vec_conj")
+    ((:wat::core::= rid 8) "slot_set") ((:wat::core::= rid 9) "str_subs")
+    ((:wat::core::= rid 10) "i64_to_str") ((:wat::core::= rid 11) "prim_read_hex")
+    (:else "io_read_file")))
+(:wat::core::defn :c::census-kind-name [kind <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= kind 0) "string") ((:wat::core::= kind 1) "record")
+    ((:wat::core::= kind 2) "closure") ((:wat::core::= kind 3) "flat_vector")
+    ((:wat::core::= kind 4) "owned_vector") ((:wat::core::= kind 5) "trie_vector")
+    (:else "trie_node")))
+(:wat::core::defn :c::census-path-name [path <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= path 0) "youngest") ((:wat::core::= path 1) "pushed")
+    (:else "given_up")))
+(:wat::core::defn :c::census-cat-name [cat <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::cond
+    ((:wat::core::= cat 0) "string") ((:wat::core::= cat 1) "record")
+    ((:wat::core::= cat 2) "vector") (:else "closure")))
+
+;; the per-routine four lines (count, bytes, reuse-count, reuse-bytes), walked over all 13.
+(:wat::core::defn :c::census-alloc-lines1 [rid <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [nm (:wat::string::concat "alloc." (:c::census-routine-name rid))]
+    (:wat::string::concat
+      (:c::census-line (:wat::string::concat nm ".count") (:c::census-alloc-count rid))
+      (:c::census-line (:wat::string::concat nm ".bytes") (:c::census-alloc-bytes rid))
+      (:c::census-line (:wat::string::concat nm ".reuse_count") (:c::census-reuse-count rid))
+      (:c::census-line (:wat::string::concat nm ".reuse_bytes") (:c::census-reuse-bytes rid)))))
+(:wat::core::defn :c::census-alloc-lines [rid <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= rid (:c::census-nroutines)) acc
+    (:c::census-alloc-lines (:wat::core::+ rid 1)
+      (:wat::string::concat acc (:c::census-alloc-lines1 rid)))))
+
+;; the per-kind, per-path two lines (count, bytes), walked over all 7 x 3.
+(:wat::core::defn :c::census-free-lines1 [kind <- :wat::core::i64 path <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [nm (:wat::string::concat "free."
+          (:wat::string::concat (:c::census-kind-name kind)
+            (:wat::string::concat "." (:c::census-path-name path))))]
+    (:wat::string::concat
+      (:c::census-line (:wat::string::concat nm ".count") (:c::census-free-count kind path))
+      (:c::census-line (:wat::string::concat nm ".bytes") (:c::census-free-bytes kind path)))))
+(:wat::core::defn :c::census-free-path-lines [kind <- :wat::core::i64 path <- :wat::core::i64
+                                              acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= path 3) acc
+    (:c::census-free-path-lines kind (:wat::core::+ path 1)
+      (:wat::string::concat acc (:c::census-free-lines1 kind path)))))
+(:wat::core::defn :c::census-free-lines [kind <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= kind (:c::census-nkinds)) acc
+    (:c::census-free-lines (:wat::core::+ kind 1)
+      (:wat::string::concat acc (:c::census-free-path-lines kind 0 "")))))
+
+;; the per-category one line (count), walked over all 4.
+(:wat::core::defn :c::census-zero-lines1 [cat <- :wat::core::i64] -> :wat::core::String
+  (:c::census-line (:wat::string::concat "reached." (:wat::string::concat (:c::census-cat-name cat) ".count"))
+    (:c::census-zero-count cat)))
+(:wat::core::defn :c::census-zero-lines [cat <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= cat (:c::census-ncats)) acc
+    (:c::census-zero-lines (:wat::core::+ cat 1)
+      (:wat::string::concat acc (:c::census-zero-lines1 cat)))))
+
+;; **derived totals, no new storage** -- `n` words at `base`, `stride` bytes apart, summed by
+;; straight-line unrolled `add`s (n is always a compile-time constant here, never a runtime
+;; loop) into `reg`. `:c::census-free-count`/`:c::census-free-bytes`'s own kind-major,
+;; path-minor addressing (`hdr-census-free + kind*48 + path*16 (+8)`) is exactly a stride-16
+;; walk over the combined index `kind*3+path` (0..20), since `kind*48 = (kind*3)*16` -- so one
+;; generic stride walk covers both the per-routine (stride 32) and the per-(kind,path) (stride
+;; 16) tables with no separate code.
+(:wat::core::defn :c::census-sum-stride [n <- :wat::core::i64 base <- :wat::core::i64
+                                         stride <- :wat::core::i64 reg <- :wat::core::i64
+                                         i <- :wat::core::i64 acc <- :wat::core::String] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i n) acc
+    (:c::census-sum-stride n base stride reg (:wat::core::+ i 1)
+      (:wat::string::concat acc
+        (:c::add-rm (:c::r14) (:wat::core::+ base (:wat::core::* i stride)) reg)))))
+(:wat::core::defn :c::census-sum-r [n <- :wat::core::i64 base <- :wat::core::i64
+                                    stride <- :wat::core::i64 reg <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::xor-rr reg reg) (:c::census-sum-stride n base stride reg 0 "")))
+(:wat::core::defn :c::census-sum [n <- :wat::core::i64 base <- :wat::core::i64
+                                  stride <- :wat::core::i64] -> :wat::core::String
+  (:c::census-sum-r n base stride (:c::rax)))
+
+;; free-list bytes still held at exit = pushed bytes (kind x path=1 only, stride 48 over the 7
+;; kinds) minus reused bytes (the 13 routines' own reuse-bytes, stride 32) -- exact by
+;; construction: every pop removes exactly one earlier push, never more, never less (the
+;; CONTRACT's lower-bound rule, read the other way).
+(:wat::core::defn :c::census-free-list-remaining [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::census-sum-r (:c::census-nkinds) (:c::census-free-bytes 0 1) 48 (:c::rax))
+    (:c::census-sum-r (:c::census-nroutines) (:c::census-reuse-bytes 0) 32 (:c::rcx))
+    (:c::sub-rr (:c::rcx) (:c::rax))))
+;; live bytes = total allocated bytes minus total freed bytes (every path, all 7 kinds).
+(:wat::core::defn :c::census-live-bytes [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::census-sum-r (:c::census-nroutines) (:c::census-alloc-bytes 0) 32 (:c::rax))
+    (:c::census-sum-r 21 (:c::census-free-bytes 0 0) 16 (:c::rcx))
+    (:c::sub-rr (:c::rcx) (:c::rax))))
+;; `r15`'s own value, less the heap's start (`r14 + buf-bytes`) -- bytes of heap ever touched.
+;; Post-M2-4 (the region release retired) `r15` only ever grows, so its value AT EXIT already
+;; IS the high-water mark; no running max needs tracking anywhere else.
+(:wat::core::defn :c::census-hiwater [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rr (:c::r15) (:c::rax))
+    (:c::sub-rr (:c::r14) (:c::rax))
+    (:c::sub-ri (:c::rax) (:c::buf-bytes true))))
+
+(:wat::core::defn :c::census-zeros [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::<= n 0) ""
+    (:wat::string::concat "00" (:c::census-zeros (:wat::core::- n 1)))))
+
+(:wat::core::defn :c::census-name-one [nm <- :wat::core::String] -> :wat::core::String
+  (:wat::core::let
+    [n (:wat::string::byte-length nm)
+     pad (:wat::i64::bit-and (:wat::core::- 0 n) 7)]
+    (:wat::string::concat (:asm::le n 8)
+      (:wat::string::concat (:asm::ascii nm 0 "") (:c::census-zeros pad)))))
+
+(:wat::core::defn :c::census-names [fs <- :c::FnV i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length fs)) ""
+    (:wat::string::concat (:c::census-name-one (:c::Fn/name (:wat::core::nth fs i)))
+      (:c::census-names fs (:wat::core::+ i 1)))))
+
+(:wat::core::defn :c::census-addrs [fs <- :c::FnV i <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::if (:wat::core::>= i (:wat::core::length fs)) ""
+    (:wat::string::concat (:asm::le (:c::Fn/addr (:wat::core::nth fs i)) 8)
+      (:c::census-addrs fs (:wat::core::+ i 1)))))
+
+;; `[lo][hi][n][addr...][len][bytes][pad]` in the text tail, after the runtime. The stub copies
+;; the addresses into the header; the report walks the name records in the same order.
+(:wat::core::defn :c::census-blob [fs <- :c::FnV lo <- :wat::core::i64 hi <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [n (:wat::core::length fs)]
+    (:wat::core::do
+      (:wat::core::if (:wat::core::> n (:c::census-unmapped))
+        (:wat::kernel::assertion-failed! :message "compile: more functions than the census site table")
+        nil)
+      (:wat::string::concat (:asm::le lo 8)
+        (:wat::string::concat (:asm::le hi 8)
+          (:wat::string::concat (:asm::le n 8)
+            (:wat::string::concat (:c::census-addrs fs 0) (:c::census-names fs 0))))))))
+
+(:wat::core::defn :c::census-copy-word [src-disp <- :wat::core::i64 dst-disp <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rm (:c::r9) src-disp (:c::r10))
+    (:c::mov-mr (:c::r10) (:c::r14) dst-disp)))
+
+(:wat::core::defn :c::census-load-r11 [] -> :wat::core::String
+  (:c::mov-rm (:c::r11) 0 (:c::r11)))
+
+(:wat::core::defn :c::census-load-n [] -> :wat::core::String
+  (:c::mov-rm (:c::r14) (:c::census-site-n) (:c::r10)))
+
+;; Fixed length: the address is an imm32, so `:c::stub-len`'s placeholder still matches.
+(:wat::core::defn :c::census-fill [blob <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [head (:wat::string::concat
+            (:c::mov-ri (:c::r9) blob)
+            (:c::census-copy-word 0 (:c::census-site-lo))
+            (:c::census-copy-word 8 (:c::census-site-hi))
+            (:c::census-copy-word 16 (:c::census-site-n))
+            (:c::xor-rr (:c::r12) (:c::r12))
+            (:c::census-load-n))
+     cmp (:c::cmp-rr (:c::r10) (:c::r12))
+     body (:wat::string::concat
+            (:c::lea (:c::r9) (:c::r12) 8 24 (:c::r11))
+            (:c::census-load-r11)
+            (:c::lea (:c::r14) (:c::r12) 8 (:c::census-site-atbl) (:c::r13))
+            (:c::mov-mr (:c::r11) (:c::r13) 0)
+            (:c::add-ri (:c::r12) 1))
+     back (:c::jmp-rel32
+            (:wat::core::- 0
+              (:wat::core::+ (:c::hexlen cmp)
+                (:wat::core::+ 6 (:wat::core::+ (:c::hexlen body) 5)))))
+     jae (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below)))
+           (:asm::le (:wat::core::+ (:c::hexlen body) 5) 4))]
+    (:wat::string::concat head cmp jae body back)))
+
+;; Nonzero sites only. rbx holds the name length across the two stderr writes; r13 holds the
+;; live-byte count, which those writes do not touch.
+(:wat::core::defn :c::census-sites [name-addr <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [head (:wat::string::concat
+            (:c::mov-ri (:c::r9) name-addr)
+            (:c::xor-rr (:c::r12) (:c::r12))
+            (:c::census-load-n))
+     cmp (:c::cmp-rr (:c::r10) (:c::r12))
+     print (:wat::string::concat
+             (:c::mov-rr (:c::r11) (:c::r13))
+             (:c::rt-say-stderr "site ")
+             (:c::mov-rr (:c::rbx) (:c::rdx))
+             (:c::mov-ri (:c::rax) (:c::sys-write))
+             (:c::mov-ri (:c::rdi) (:c::fd-stderr))
+             (:c::lea-at (:c::r9) 8 (:c::rsi))
+             (:c::syscall)
+             (:c::rt-say-stderr " ")
+             (:c::mov-rr (:c::r13) (:c::rax))
+             (:c::rt-say-int-stderr))
+     advance (:wat::string::concat
+               (:c::add-ri (:c::rbx) 7)
+               (:c::and-ri (:c::rbx) -8)
+               (:c::add-ri (:c::rbx) 8)
+               (:c::add-rr (:c::rbx) (:c::r9))
+               (:c::add-ri (:c::r12) 1))
+     skip (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero))
+            (:asm::le (:c::hexlen print) 4))
+     body (:wat::string::concat
+            (:c::lea (:c::r14) (:c::r12) 8 (:c::census-site-live) (:c::r11))
+            (:c::census-load-r11)
+            (:c::mov-rm (:c::r9) 0 (:c::rbx))
+            (:c::test-rr (:c::r11) (:c::r11))
+            skip print advance)
+     back (:c::jmp-rel32
+            (:wat::core::- 0
+              (:wat::core::+ (:c::hexlen cmp)
+                (:wat::core::+ 6 (:wat::core::+ (:c::hexlen body) 5)))))
+     jae (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-below)))
+           (:asm::le (:wat::core::+ (:c::hexlen body) 5) 4))
+     un-body (:wat::string::concat
+               (:c::rt-say-stderr "(unmapped) ")
+               (:c::mov-rr (:c::r13) (:c::rax))
+               (:c::rt-say-int-stderr))
+     un-skip (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero))
+               (:asm::le (:c::hexlen un-body) 4))
+     unmapped (:wat::string::concat
+                (:c::mov-rm (:c::r14) (:c::census-unmapped-live) (:c::r13))
+                (:c::test-rr (:c::r13) (:c::r13))
+                un-skip un-body)]
+    (:wat::string::concat head cmp jae body back unmapped)))
+
+(:wat::core::defn :c::census-dump [name-addr <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::census-alloc-lines 0 "")
+    (:c::census-free-lines 0 "")
+    (:c::census-zero-lines 0 "")
+    (:c::census-say-total "total.alloc_count" (:c::census-sum (:c::census-nroutines) (:c::census-alloc-count 0) 32))
+    (:c::census-say-total "total.alloc_bytes" (:c::census-sum (:c::census-nroutines) (:c::census-alloc-bytes 0) 32))
+    (:c::census-say-total "total.reuse_bytes" (:c::census-sum (:c::census-nroutines) (:c::census-reuse-bytes 0) 32))
+    (:c::census-say-total "total.free_count" (:c::census-sum 21 (:c::census-free-count 0 0) 16))
+    (:c::census-say-total "total.free_bytes" (:c::census-sum 21 (:c::census-free-bytes 0 0) 16))
+    (:c::census-say-total "total.pushed_bytes"
+      (:c::census-sum (:c::census-nkinds) (:c::census-free-bytes 0 1) 48))
+    (:c::census-say-total "free_list.remaining_bytes" (:c::census-free-list-remaining))
+    (:c::census-say-total "live_bytes" (:c::census-live-bytes))
+    (:c::census-say-total "heap.hiwater_bytes" (:c::census-hiwater))
+    (:c::census-sites name-addr)))
+
 ;; r14 = base, r15 = base+buffer, [r14+8] = base+reservation, then the frame comes back off.
-(:wat::core::defn :c::stub-arm [] -> :wat::core::String
+(:wat::core::defn :c::stub-arm [census? <- :wat::core::bool] -> :wat::core::String
   (:wat::string::concat
     (:c::mov-rr (:c::rax) (:c::r14))
-    (:c::lea-at (:c::rax) (:c::buf-bytes) (:c::r15))
+    (:c::lea-at (:c::rax) (:c::buf-bytes census?) (:c::r15))
     (:c::mov-rr (:c::rax) (:c::rcx))
     (:c::add-rr (:c::r12) (:c::rcx))
     (:c::mov-mr (:c::rcx) (:c::r14) (:c::hdr-limit))
@@ -8633,11 +9084,19 @@
                         (:c::xor-rr (:c::rdi) (:c::rdi))
                         (:c::syscall)))
 
-(:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout] -> :wat::core::String
+(:wat::core::defn :c::stub [main-addr <- :wat::core::i64 rt <- :c::Layout
+                            census? <- :wat::core::bool
+                            blob-addr <- :wat::core::i64
+                            name-addr <- :wat::core::i64] -> :wat::core::String
   (:wat::core::let
     [stop (:c::stub-stop)
-     arm (:c::stub-arm)
+     arm (:c::stub-arm census?)
      exit0 (:c::stub-exit0)
+     ;; excursus 008 M2 census: the report, between `call flush` and `exit0` -- empty, so
+     ;; byte-identical to today, when the switch is off. The fill is the same kind of empty:
+     ;; a fixed loop, so a real blob address does not change the stub's length.
+     fill (:wat::core::if census? (:c::census-fill blob-addr) "")
+     dump (:wat::core::if census? (:c::census-dump name-addr) "")
      ask (:c::stub-ask)
      size (:c::stub-size)
      try (:c::stub-try)
@@ -8647,9 +9106,12 @@
      one (:c::mov-ri (:c::r12) (:c::heap-floor))
      jlen (:c::rel32-size)
      jplen (:c::call-size)
-     ;; `call main` and `call flush` sit between arm and exit0
+     ;; `call main` and `call flush` sit between arm and exit0, and the census report
+     ;; (empty when off) sits between `call flush` and `exit0`
      tail (:wat::core::+ (:c::hexlen arm)
-            (:wat::core::+ (:wat::core::* jplen 2) (:c::hexlen exit0)))
+            (:wat::core::+ (:c::hexlen fill)
+            (:wat::core::+ (:wat::core::* jplen 2)
+              (:wat::core::+ (:c::hexlen dump) (:c::hexlen exit0)))))
      ;; refused, and this attempt was already the floor: stop
      to-stop (:wat::core::+ (:c::hexlen mid)
                (:wat::core::+ jlen
@@ -8684,10 +9146,10 @@
                 :fnames (:wat::core::Vector :- [:wat::core::String])
                 :faddrs (:wat::core::Vector :- [:wat::core::i64])
                 :caps (:wat::core::Vector :- [:c::Cap]))
-     o1 (:c::emit o (:wat::string::concat ask js size try jb back arm))
+     o1 (:c::emit o (:wat::string::concat ask js size try jb back arm fill))
      o2 (:c::call o1 main-addr)
      o3 (:c::call o2 (:c::at-flush rt))]
-    (:c::buf-str (:c::Out/code (:c::emit o3 (:wat::string::concat exit0 stop))))))
+    (:c::buf-str (:c::Out/code (:c::emit o3 (:wat::string::concat dump exit0 stop))))))
 
 ;; place every function end to end after the stub
 (:wat::core::defn :c::place [pg <- :c::Prog lens <- (:wat::core::Vector :- [:wat::core::i64])
@@ -9765,12 +10227,16 @@
      ;; change any length pass two would disagree with.
      gtys0 (:c::glue-census pg0-bare)
      pg0 (:wat::core::assoc (:wat::core::assoc pg0-bare :gtys gtys0) :gaddrs (:c::zvec (:wat::core::length gtys0) 0 (:wat::core::Vector :- [:wat::core::i64])))
+     ;; excursus 008 M2 census: read once into `pg0-bare` by `:c::empty-prog`, carried
+     ;; unchanged through the two `assoc`s above; bound here once rather than re-read from
+     ;; `pg0`/`pg1` at every one of the sites below that need it.
+     census? (:c::Prog/census pg0)
 
      ;; PASS ONE: nothing has an address yet, and nothing needs one -- but every instruction
      ;; must come out the WIDTH it will have in pass two, so the layout is real and based at 0.
      ;; Built ONCE here and handed to everything that measures (see `:c::stub-len`).
      ;; ONE build of the runtime block, here. Everything else shifts or slices it.
-     lay0 (:c::layout 0)
+     lay0 (:c::layout 0 census?)
      p1 (:c::pass pg0 0 lay0 0 (:c::empty-pass))
      code-total (:c::total (:c::PassR/lens p1) 0 0)
      ;; the glue section's own pass one, at the same base-0 fiction, right after where the user
@@ -9780,20 +10246,27 @@
 
      ;; now every address follows from the lengths
      pg1-fns (:c::place pg0 (:c::PassR/lens p1) 0
-            (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) (:wat::core::Vector :- [:c::Fn]))
+            (:wat::core::+ (:asm::entry) (:c::stub-len lay0 census?)) (:wat::core::Vector :- [:c::Fn]))
      ;; the glue section sits one after the user code and before the runtime block
      gaddrs (:c::glue-place (:c::GPassR/lens gp1) 0
-              (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+              (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0 census?)) code-total)
               (:wat::core::Vector :- [:wat::core::i64]))
      pg1 (:wat::core::assoc pg1-fns :gaddrs gaddrs)
-     rt-addr (:wat::core::+ (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+     rt-addr (:wat::core::+ (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0 census?)) code-total)
                glue-total)
      lvl (:c::rt-level pg0)
      ;; **once, here** -- every `(:c::at-X rt)` downstream is an index into this (F-137), and it
      ;; is the base-0 layout shifted rather than a second build of all thirty-three routines
      rt (:c::rebase lay0 rt-addr)
-     rt-hex (:c::runtime lvl lay0)
-     tail-base (:wat::core::+ rt-addr (:c::hexlen rt-hex))
+     rt-hex (:c::runtime lvl lay0 census?)
+     site-at (:wat::core::+ rt-addr (:c::hexlen rt-hex))
+     nfun (:wat::core::length (:c::Prog/fns pg1))
+     user-lo (:wat::core::+ (:asm::entry) (:c::stub-len lay0 census?))
+     user-hi (:wat::core::+ user-lo code-total)
+     blob (:wat::core::if census?
+            (:c::census-blob (:c::Prog/fns pg1) user-lo user-hi) "")
+     name-at (:wat::core::+ site-at (:wat::core::+ 24 (:wat::core::* nfun 8)))
+     tail-base (:wat::core::+ site-at (:c::hexlen blob))
      ;; either spelling of the entry point, because a program is allowed to be written in
      ;; either -- and this compiler's own source happens to use the keyword one
      main-clj (:c::fn-addr pg1 "user/main" 0)
@@ -9805,11 +10278,12 @@
      p2 (:c::pass (:wat::core::assoc (:wat::core::if exp? (:wat::core::assoc pg1 :exp true) pg1) :final true)
                   0 rt tail-base (:c::empty-pass))
      gp2 (:c::glue-pass gtys0 0
-           (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0)) code-total)
+           (:wat::core::+ (:wat::core::+ (:asm::entry) (:c::stub-len lay0 census?)) code-total)
            pg1 rt (:c::empty-gpass))
      glue-hex (:c::buf-str (:c::GPassR/code gp2))
-     text (:wat::string::concat (:c::stub main-addr rt) (:c::buf-str (:c::PassR/code p2))
-            (:wat::string::concat glue-hex rt-hex))
+     text (:wat::string::concat (:c::stub main-addr rt census? site-at name-at)
+            (:c::buf-str (:c::PassR/code p2))
+            (:wat::string::concat glue-hex (:wat::string::concat rt-hex blob)))
      written (:asm::link out-path text (:c::buf-str (:c::PassR/tail p2)))]
     (:wat::core::do
       (:wat::core::if (:wat::core::< main-addr 0)

@@ -521,6 +521,13 @@
   (:wat::core::let [short? (:c::disp8? n)]
     (:wat::string::concat (:c::dm-at (:wat::core::if short? "83" "81") 7 base disp)
                           (:asm::le n (:wat::core::if short? 1 4)))))
+;; `addq $imm, disp(BASE)` -- `cmp-mi`'s own pair, digit 0 instead of 7: a counter kept in memory
+;; can be bumped by a constant without a load/store pair (excursus 008 M2 census).
+(:wat::core::defn :c::add-mi [base <- :wat::core::i64 disp <- :wat::core::i64
+                              n <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [short? (:c::disp8? n)]
+    (:wat::string::concat (:c::dm-at (:wat::core::if short? "83" "81") 0 base disp)
+                          (:asm::le n (:wat::core::if short? 1 4)))))
 ;; the other direction -- `add %rdx,(%r14)` bumps a counter that lives in memory without loading
 ;; it first. `03` reads memory into a register; `01` adds a register into memory, and `3b`/`39`
 ;; are the same pair for `cmp`. For an equality test either will do; they are not interchangeable
@@ -528,6 +535,11 @@
 (:wat::core::defn :c::add-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "01" src base disp))
+;; `sub %src, disp(BASE)` -- opcode 29, the same shape as `:c::add-mr`. A site's live-byte
+;; counter is subtracted in place when its block is freed.
+(:wat::core::defn :c::sub-mr [src <- :wat::core::i64 base <- :wat::core::i64
+                              disp <- :wat::core::i64] -> :wat::core::String
+  (:c::rm-at "29" src base disp))
 ;; `add disp(BASE), DST` -- opcode 03, the pair of `:c::add-mr`. The memory operand is the source.
 (:wat::core::defn :c::add-rm [base <- :wat::core::i64 disp <- :wat::core::i64
                               dst <- :wat::core::i64] -> :wat::core::String
