@@ -1216,7 +1216,6 @@
    ;; the parameters of this function that are only ever READ -- see `:c::read-only?`. Parallel
    ;; to `linear` and set the same way, once per function, just before its body is compiled.
    ronly <- (:wat::core::Vector :- [:wat::core::String])
-   pokers <- (:wat::core::Vector :- [:wat::core::String])
    ;; parameters represented by one field, in the register the parameter already has.
    ;; parallel to `sfield`: the field index within the record. empty unless scalarised.
    scalar <- (:wat::core::Vector :- [:wat::core::String])
@@ -1313,7 +1312,6 @@
             :bnds (:wat::core::Vector :- [:c::Bnd])
             :linear (:wat::core::Vector :- [:wat::core::String])
             :ronly (:wat::core::Vector :- [:wat::core::String])
-            :pokers (:wat::core::Vector :- [:wat::core::String])
             :scalar (:wat::core::Vector :- [:wat::core::String])
             :sfield (:wat::core::Vector :- [:wat::core::i64])
             :nlr 0 :regbase 0
@@ -4451,36 +4449,53 @@
              "")
      dec (:c::dec-hex)
      ;; the dec above just took this object's count from 1 to 0 -- died right here -- or
-     ;; left it above 0 (still live). Only in the first case does anything else run: freeing
-     ;; (plain build only, F2, BEFORE the glue walks the children -- the CONTRACT's order),
-     ;; the glue call (G1), then the poison (G5, check build only).
+     ;; left it above 0 (still live). Only in the first case does anything else run: the
+     ;; glue call (G1) BEFORE freeing (plain build only, G2) -- excursus 008 M2's STOP-3
+     ;; root, below -- then the poison (G5, check build only).
      zchk (:c::cmp-mi (:c::rax) -8 0)
-     ;; `free-pos` is where `body` -- and so `free-hex`, now its first piece -- begins: right
-     ;; after `zskip`'s own `rel8-size` bytes. None of the five free routines ever touch
-     ;; `rax`, so this call needs no `push`/`pop` of its own, unlike the glue call below.
-     free-pos (:wat::core::+ (:c::here o)
+     ;; excursus 008 M2 (STOP-3): `call-hex` now runs BEFORE `free-hex`, reversed from
+     ;; 3b-2's original "free self, then glue drops what it held" order. `:c::free-tail-emit`
+     ;; pushes a free-list link into the dying block's OWN FIRST WORD (`[r10+0]`), and for
+     ;; every Vector kind that word IS the type-discriminant tag `:c::vec-glue-body` (G1)
+     ;; re-reads from `[rbx-16]` to choose tree vs flat -- freeing first corrupted the tag
+     ;; before the walk that still needed it ran, so a live tree Vector's own drop walked it
+     ;; as flat (or vice versa) off an arbitrary free-list link value, reading garbage past
+     ;; it. Before M2 this order was harmless -- freeing a non-youngest object did nothing at
+     ;; all -- so nothing caught it until a self-compile exercised a `vec:` field whose count
+     ;; reached zero while nested inside another drop (a `gdb` hardware watchpoint on the
+     ;; faulting object's tag word, `[rbx-16]`, caught the exact write: `:c::free-tail-emit`'s
+     ;; `[r10+0] := old-head`, `r10 = rax - :c::varr-ptr`, same address). Every other pointer
+     ;; kind's block start is its own (already-spent) count word, where the swap changes
+     ;; nothing observable, so this is unconditional rather than a Vector-only special case --
+     ;; `body-pos` is where `body` -- and so `call-hex`, now its first piece -- begins: right
+     ;; after `zskip`'s own `rel8-size` bytes.
+     body-pos (:wat::core::+ (:c::here o)
                  (:wat::core::+ prefix
                    (:wat::core::+ (:c::hexlen guard)
                      (:wat::core::+ (:c::hexlen dec)
                        (:wat::core::+ (:c::hexlen zchk) (:c::rel8-size))))))
-     free-hex (:wat::core::if dchk? ""
-                (:wat::string::concat "e8"
-                  (:asm::le (:wat::core::- (:c::free-target t pg) (:wat::core::+ free-pos 5)) 4)))
      ;; a glue routine returns with `rax` holding whatever it last touched (its own last
      ;; field or element), not the dying object -- `:c::rec-glue-fields`/`:c::vec-glue-body`/
      ;; etc. all end their walk with `rax` pointing at the last thing THEY dropped, exactly
-     ;; like every other callee in this compiler leaves `rax` as scratch. The poison write
-     ;; below needs the ORIGINAL object back, so the call is wrapped in `push rax`/`pop rax`
-     ;; here, at the one call site, rather than asking every glue body to preserve it itself.
-     call-pos (:wat::core::+ free-pos (:wat::core::+ (:c::hexlen free-hex) 1))
+     ;; like every other callee in this compiler leaves `rax` as scratch. `free-hex`, running
+     ;; right after, needs the ORIGINAL object back, so the call is wrapped in
+     ;; `push rax`/`pop rax` here, at the one call site, rather than asking every glue body to
+     ;; preserve it itself -- `pop-rax`'s own restore is exactly what `free-hex` depends on.
+     call-pos (:wat::core::+ body-pos 1)
      call-hex (:wat::core::if has-glue?
                 (:wat::string::concat (:c::push-rax)
                   (:wat::string::concat "e8"
                     (:wat::string::concat (:asm::le (:wat::core::- glue (:wat::core::+ call-pos 5)) 4)
                       (:c::pop-rax))))
                 "")
+     ;; `free-pos` is where `free-hex` begins, now right after `call-hex`. None of the five
+     ;; free routines ever touch `rax`, so this call needs no `push`/`pop` of its own.
+     free-pos (:wat::core::+ body-pos (:c::hexlen call-hex))
+     free-hex (:wat::core::if dchk? ""
+                (:wat::string::concat "e8"
+                  (:asm::le (:wat::core::- (:c::free-target t pg) (:wat::core::+ free-pos 5)) 4)))
      poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
-     body (:wat::string::concat free-hex (:wat::string::concat call-hex poison))
+     body (:wat::string::concat call-hex (:wat::string::concat free-hex poison))
      zskip (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) body)]
     (:wat::string::concat guard
       (:wat::string::concat dec
@@ -5018,12 +5033,35 @@
           (:wat::core::conj (:wat::core::conj base "freestr") "freerec") "freevec") "freenode")
       "closize")))
 
-;; the shared tail every free routine ends with: `rax` is the dying object, `startdisp` is
-;; how far its block's START sits before the pointer (`:c::vec-ptr` or `:c::varr-ptr`,
-;; negated), and `sizereg` already holds the block's size. **The one test freeing ever
-;; asks**: does this object's end equal the heap top? A wrong size answers no and the
-;; object simply stays -- a leak, never an overlap (the CONTRACT). `r10`/`r11` are this
-;; tail's own scratch, so no caller may pass either as `sizereg`.
+;; the shared tail every free routine ends with: `rax` is the dying object (a type-specific
+;; POINTER -- `vec-ptr`/`varr-ptr` bytes past the block's own start), `startdisp` is how far
+;; the block's START sits before that pointer (negated), and `sizereg` already holds the
+;; block's size. **The one test freeing ever asks**: does this object's end equal the heap
+;; top? A wrong size answers no, and -- excursus 008 M2 -- the object goes onto its size
+;; class's free list instead of simply staying lost; never an overlap (the CONTRACT). `r10`
+;; holds the block's START throughout (computed once, at `o1`, and never touched again until
+;; the push itself) because that is the ONE address every type agrees on -- the type-specific
+;; POINTER offset (`rax`) is exactly what must NOT leak into the free list, since the
+;; ALLOCATE side (`:c::rt-bump`) hands the popped value back as a BLOCK START too (matching
+;; the youngest path's own `mov-rr r10 r15`, which rewinds to the block start, never to a
+;; type's pointer). `r11` is this tail's own OTHER scratch (the class/slot-address math);
+;; `r8` is a third, transient scratch for the "current head" value in the push itself. No
+;; caller may pass any of `r8`/`r10`/`r11` as `sizereg`; `rax` is never written, matching
+;; `:c::dropchk-hex`'s own comment that none of the five free routines touch it.
+;;
+;; **M2-2, the NOT-youngest path**: the same class decision `:c::rt-bump` makes on the
+;; ALLOCATE side (`elf/lib/runtime.wat`), reached here because `sizereg` still holds the exact
+;; size untouched (the youngest test's own `add-rr` only READ it). `size <= :c::small-max` ->
+;; SMALL, index `(size>>3)-1`, exact. Else, only if `size` is already a power of two (the same
+;; `:c::rt-cap`-shaped allocations `:c::rt-bump`'s LARGE table serves) -> LARGE, index
+;; `bsr(size)`. Anything else (a large, non-power-of-two EXACT shape -- nothing in `elf/`
+;; produces one, see `:c::small-max`'s own comment) gives up, same as before M2: the block
+;; stays dead, a leak but never an overlap. The link lives in the dead block's own first
+;; word, `[r10+0]` -- NOT `[rax-8]`: a Vector's pointer sits `:c::varr-ptr` (16) past its
+;; block start, so its count word (`[rax-8]`) is 8 bytes IN, not at the start, and pushing by
+;; `rax` instead of `r10` is exactly the bug a real run caught (F1 of this strike's SECOND
+;; mistake: the popped value came back 8 bytes short of the block for a String too, since
+;; `:c::rt-bump`'s found path always treats what it pops as a block start).
 (:wat::core::defn :c::free-tail-emit [o <- :c::Out startdisp <- :wat::core::i64
                                       sizereg <- :wat::core::i64] -> :c::Out
   (:wat::core::let
@@ -5033,9 +5071,42 @@
      o4 (:c::emit o3 (:c::cmp-rr (:c::r15) (:c::r11)))
      o5 (:c::emit o4 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
      skip-at (:wat::core::- (:c::codelen o5) 4)
+     ;; YOUNGEST: commit the rewind, return -- byte-identical to before M2
      o6 (:c::emit o5 (:c::mov-rr (:c::r10) (:c::r15)))
-     o7 (:c::patch o6 skip-at (:asm::le (:wat::core::- (:c::codelen o6) (:wat::core::+ skip-at 4)) 4))]
-    (:c::emit o7 (:c::ret))))
+     o7 (:c::emit o6 (:c::ret))
+     o8 (:c::patch o7 skip-at (:asm::le (:wat::core::- (:c::codelen o7) (:wat::core::+ skip-at 4)) 4))
+     ;; NOT YOUNGEST (M2-2 starts here): decide SMALL or LARGE from `sizereg`. `r10` is left
+     ;; completely alone from here to the push -- it still holds the block START from `o1`.
+     o9 (:c::emit o8 (:c::cmp-ri sizereg (:c::small-max)))
+     o10 (:c::emit o9 (:wat::string::concat (:c::jcc-rel32 (:c::cc-greater)) "00000000"))
+     large-at (:wat::core::- (:c::codelen o10) 4)
+     ;; SMALL: index (size>>3)-1 -> r11 holds the table SLOT address
+     o11 (:c::emit o10 (:c::mov-rr sizereg (:c::r11)))
+     o12 (:c::emit o11 (:c::shr-ri (:c::r11) 3))
+     o13 (:c::emit o12 (:c::sub-ri (:c::r11) 1))
+     o14 (:c::emit o13 (:c::lea (:c::r14) (:c::r11) 8 (:c::hdr-small) (:c::r11)))
+     o15 (:c::emit o14 (:c::jmp-unpatched))
+     have-slot-at (:wat::core::- (:c::codelen o15) 4)
+     o16 (:c::patch o15 large-at (:asm::le (:wat::core::- (:c::codelen o15) (:wat::core::+ large-at 4)) 4))
+     ;; LARGE (the `cmp-ri` above landed here): only a power of two participates
+     o17 (:c::emit o16 (:c::mov-rr sizereg (:c::r11)))
+     o18 (:c::emit o17 (:c::sub-ri (:c::r11) 1))
+     o19 (:c::emit o18 (:c::and-rr sizereg (:c::r11)))
+     o20 (:c::emit o19 (:c::test-rr (:c::r11) (:c::r11)))
+     o21 (:c::emit o20 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     giveup-at (:wat::core::- (:c::codelen o21) 4)
+     o22 (:c::emit o21 (:c::bsr-rr sizereg (:c::r11)))
+     o23 (:c::emit o22 (:c::lea (:c::r14) (:c::r11) 8 (:c::hdr-large) (:c::r11)))
+     o24 (:c::patch o23 have-slot-at (:asm::le (:wat::core::- (:c::codelen o23) (:wat::core::+ have-slot-at 4)) 4))
+     ;; HAVE_SLOT (reached from SMALL's unconditional jump, or LARGE's own fallthrough):
+     ;; r11 is the table SLOT address, r10 is STILL the block start -- unlink-and-push by r10
+     o25 (:c::emit o24 (:c::mov-rm (:c::r11) 0 (:c::r8)))
+     o26 (:c::emit o25 (:c::mov-mr (:c::r8) (:c::r10) 0))
+     o27 (:c::emit o26 (:c::mov-mr (:c::r10) (:c::r11) 0))
+     o28 (:c::emit o27 (:c::ret))
+     o29 (:c::patch o28 giveup-at (:asm::le (:wat::core::- (:c::codelen o28) (:wat::core::+ giveup-at 4)) 4))]
+    ;; GIVE UP (a large, non-power-of-two shape): stay dead, exactly as before M2
+    (:c::emit o29 (:c::ret))))
 
 ;; `freestr(rax = String) -> `, free to the bump. The size is `:c::rt-cap(len)` -- the SAME
 ;; function `rt-str-cat`/`rt-str-subs`/`rt-i64-to-str` call to size the allocation, read
@@ -6584,20 +6655,15 @@
 ;; type is not a pointer. The second is the next thing to build and is the same idea one level
 ;; up; the first is a different program.
 
-;; **Which statements can have their allocations released, asked properly.**
-;;
-;; This used to be a substring test for "poke" on the statement's own source. That is wrong in
-;; the direction that matters: a statement calling a function that pokes contains no `poke`
-;; itself, so it was released -- and anything it allocated and handed over was freed underneath
-;; the pointer. No program here did it, but the rule permitted it.
-;;
-;; The compiler has a call graph: `:c::Prog/fns` holds every function and its body. So the set of
-;; functions that transitively reach a `poke` is computed once, as a fixpoint over that graph,
-;; and a statement is releasable when it neither pokes nor calls anything that does.
-;; `clone` is asked of the function ITSELF, not transitively: the child inherits the frame and
-;; the registers that are live at the clone site, which is inside whoever called it. A substring
-;; test used to stand in for this, and it would have been fooled by a name or a string literal
-;; that merely contained the word.
+;; **`clone` is asked of the function ITSELF, not transitively**: the child inherits the frame
+;; and the registers that are live at the clone site, which is inside whoever called it. A
+;; substring test used to stand in for this, and it would have been fooled by a name or a
+;; string literal that merely contained the word. (A transitive, call-graph version of this
+;; same question used to exist for `poke`, to decide which STATEMENTS could have the region
+;; release wrapped around them -- `:c::calls-poke?`/`:c::any-poke?`/`:c::is-poker?`/
+;; `:c::poke-scan`/`:c::poke-fix`/`:c::releasable?`, and `:c::Prog`'s `:pokers` field. Excursus
+;; 008 M2-4 retires the region release itself -- see `:c::seq`'s own comment -- so the whole
+;; poke call-graph retires with it; nothing else ever read it.)
 (:wat::core::defn :c::has-clone? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::cond
     ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) (:c::any-clone? (:c::kidsof pg a) 0 pg))
@@ -6613,29 +6679,6 @@
     (:wat::core::or (:c::has-clone? (:wat::core::nth ks i) pg)
                     (:c::any-clone? ks (:wat::core::+ i 1) pg))))
 
-(:wat::core::defn :c::is-poker? [pg <- :c::Prog name <- :wat::core::String i <- :wat::core::i64] -> :wat::core::bool
-  (:wat::core::cond
-    ((:wat::core::>= i (:wat::core::length (:c::Prog/pokers pg))) false)
-    ((:wat::core::= (:wat::core::nth (:c::Prog/pokers pg) i) name) true)
-    (:else (:c::is-poker? pg name (:wat::core::+ i 1)))))
-
-(:wat::core::defn :c::calls-poke? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::cond
-    ((:wat::core::= (:c::kindv a pg) (:rd::Kind.Vector {})) (:c::any-poke? (:c::kidsof pg a) 0 pg))
-    ((:wat::core::not= (:c::kindv a pg) (:rd::Kind.List {})) false)
-    (:else
-      (:wat::core::let [ks (:c::kidsof pg a)]
-        (:wat::core::if (:wat::core::= (:wat::core::length ks) 0) false
-          (:wat::core::let [h (:c::text pg (:wat::core::nth ks 0))]
-            (:wat::core::or (:c::poke? h)
-              (:wat::core::or (:c::is-poker? pg h 0) (:c::any-poke? ks 0 pg)))))))))
-
-(:wat::core::defn :c::any-poke? [ks <- :c::Kids i <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) false
-    (:wat::core::or (:c::calls-poke? (:wat::core::nth ks i) pg)
-                    (:c::any-poke? ks (:wat::core::+ i 1) pg))))
-
-;; one sweep: any function that reaches a poke, or calls one that does, joins the set
 ;; ---------------------------------------------------------------- resolving the types
 ;;
 ;; Collection is one forward pass, so a type named before it is declared cannot be resolved as it
@@ -6674,55 +6717,42 @@
     (:c::decl-ptys pv (:wat::core::+ i 3) pg
       (:wat::core::conj acc (:c::ty-of-node (:wat::core::nth pv (:wat::core::+ i 2)) pg)))))
 
-(:wat::core::defn :c::poke-scan [pg <- :c::Prog i <- :wat::core::i64] -> :c::Prog
-  (:wat::core::if (:wat::core::>= i (:wat::core::length (:c::Prog/fns pg))) pg
-    (:wat::core::let [f (:wat::core::nth (:c::Prog/fns pg) i)
-                      nm (:c::Fn/name f)]
-      (:c::poke-scan
-        (:wat::core::if (:wat::core::and (:wat::core::not (:c::is-poker? pg nm 0))
-                                         (:c::calls-poke? (:c::Fn/node f) pg))
-          (:wat::core::assoc pg :pokers (:wat::core::conj (:c::Prog/pokers pg) nm))
-          pg)
-        (:wat::core::+ i 1)))))
-
-;; sweep until nothing new joins; the set can only grow, so the function count bounds the rounds
-(:wat::core::defn :c::poke-fix [pg <- :c::Prog rounds <- :wat::core::i64] -> :c::Prog
-  (:wat::core::if (:wat::core::<= rounds 0) pg
-    (:wat::core::let [pg2 (:c::poke-scan pg 0)]
-      (:wat::core::if (:wat::core::= (:wat::core::length (:c::Prog/pokers pg2))
-                                     (:wat::core::length (:c::Prog/pokers pg)))
-        pg2
-        (:c::poke-fix pg2 (:wat::core::- rounds 1))))))
-
-(:wat::core::defn :c::releasable? [a <- :wat::core::i64 pg <- :c::Prog] -> :wat::core::bool
-  (:wat::core::not (:c::calls-poke? a pg)))
-
 ;; a sequence of forms; the last one's value is the value of the whole, and every form before it
-;; gives its allocations back
+;; gives its allocations back.
+;;
+;; excursus 008 M2-4 (retired here, landing WITH M2-2 rather than after it -- see the SCORE's
+;; STOP-2 section for why): this used to wrap every non-last, poke-free statement in
+;; `push r15; push r15` / `pop r15; pop r15` (the "region release", C-120/excursus 001's own
+;; mark-and-rewind), gated by `:c::releasable?`. That is EXACTLY the collision the M1 crawl
+;; named before M2 was ever drawn: a statement's own source drop can push a block onto a free
+;; list (M2-2), and the statement's OWN region release then rewinds `r15` BELOW that block --
+;; so the free list still holds an address the bump allocator is about to hand out again to
+;; the NEXT statement, one block with two owners. The count is now the one and only
+;; reclamation discipline (the CRAWL's own settled call); a region rewind beside it is B, not
+;; C, and B was never going to be honest once the count could free anything. `:c::releasable?`
+;; (which existed ONLY to gate this) and the whole transitive-poke call graph it was built on
+;; (`:c::calls-poke?`, `:c::any-poke?`, `:c::is-poker?`, `:c::poke-scan`, `:c::poke-fix`, and
+;; `:c::Prog`'s `:pokers` field) retire with it -- nothing else read any of them.
 (:wat::core::defn :c::seq [ks <- :c::Kids i <- :wat::core::i64 o <- :c::Out env <- :c::Env pg <- :c::Prog
                            rt <- :c::Layout tb <- :wat::core::i64 slot <- :wat::core::i64 tc <- :c::TC] -> :c::Out
   (:wat::core::if (:wat::core::>= i (:wat::core::length ks)) o
     (:wat::core::let
       [a (:wat::core::nth ks i)
-       drop? (:wat::core::and (:wat::core::< i (:wat::core::- (:wat::core::length ks) 1))
-                              (:c::releasable? a pg))
-       o1 (:wat::core::if drop? (:c::push o "41574157" 16) o)
        last? (:wat::core::= i (:wat::core::- (:wat::core::length ks) 1))
        ;; R16: the last form's value is the value of the whole sequence and flows on to
        ;; whoever compiled this `do`/`let`/`cond`-clause/`match`-arm as their own value
        ;; position -- exactly the class `:c::expr-val` counts. Every earlier form's value
        ;; is discarded (`o2b` below), never shared.
        o2 (:wat::core::if last?
-            (:c::expr-val a o1 env pg rt tb slot tc)
-            (:c::expr a o1 env pg rt tb slot (:c::no-tail)))
-       ;; a discarded value dies here. The region release below still rewinds the bump;
-       ;; this decrement is what it does not do (D6: a rewind alone leaves counts high).
+            (:c::expr-val a o env pg rt tb slot tc)
+            (:c::expr a o env pg rt tb slot (:c::no-tail)))
+       ;; a discarded value dies here -- the count, now the only reclamation discipline, is
+       ;; what frees it (M2's own free-list push, if it is not the youngest allocation).
        ;; a symbol is its binding's drop. Only a discarded allocating form is
-       ;; dropped here; asking an arbitrary statement for its type refuses `poke`.
+       ;; dropped here.
        o2b (:wat::core::if (:wat::core::and (:wat::core::not last?) (:c::discard-ptr? a pg))
-             (:c::emit-drop (:c::type-of a env pg) o2 pg rt) o2)
-       o3 (:wat::core::if drop? (:c::popn o2b "415f415f" 16) o2b)]
-      (:c::seq ks (:wat::core::+ i 1) o3 env pg rt tb slot tc))))
+             (:c::emit-drop (:c::type-of a env pg) o2 pg rt) o2)]
+      (:c::seq ks (:wat::core::+ i 1) o2b env pg rt tb slot tc))))
 
 ;; ---------------------------------------------------------------- println
 
@@ -8499,7 +8529,11 @@
 ;; on stderr and exit 70, before `r14` is set, because `oom()` writes through the buffer that
 ;; does not exist yet. `mmap`'s error range is `[-4095, -1]`; `cmp` against -4096 and `jb`
 ;; takes the success path without trusting the pointer.
-(:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 8192)
+;; excursus 008 M2: widened by 1024 bytes (`:c::hdr-small`'s 512 + `:c::hdr-large`'s 512) so the
+;; two new free-list tables fit between `:c::hdr-limit` and the buffer without moving the
+;; buffer's own 8176-byte capacity -- `r15`'s start (`:c::stub-arm`'s `lea r14+buf-bytes`) is
+;; computed FROM this constant, so widening it is the whole change.
+(:wat::core::defn :c::buf-bytes [] -> :wat::core::i64 (:wat::core::+ 8192 1024))
 (:wat::core::defn :c::si-totalram [] -> :wat::core::i64 32)
 (:wat::core::defn :c::si-totalswap [] -> :wat::core::i64 64)
 (:wat::core::defn :c::si-unit [] -> :wat::core::i64 104)
@@ -9710,15 +9744,16 @@
      ;; node it makes can inherit the position of the one it replaces (`:c::mknode`)
      pg-o (:wat::core::assoc pg-c :obase (:wat::core::length (:rd::St/arena (:c::Prog/src pg-c))))
      pg-x (:wat::core::if exp? (:c::with-locs pg-o) pg-o)
-     ;; which functions reach a `poke`, transitively, before any code is emitted
      ;; every record and alias is known now, so the types can be resolved in any order
      pg-r (:c::fill-recs pg-x 0 (:wat::core::Vector :- [:c::Rec]))
      ;; each `fn` becomes a lifted function plus a closure node, before any pre-pass
      pg-l (:c::lift-fns pg-r)
      pg-f (:c::fill-fns pg-l 0 (:wat::core::Vector :- [:c::Fn]))
-     pg-p (:c::poke-fix pg-f (:wat::core::length (:c::Prog/fns pg-f)))
-     ;; the calls that become `let`s, before either pass sees a node
-     pg-i (:c::inl-fns pg-p 0 (:wat::core::Vector :- [:c::Fn]))
+     ;; the calls that become `let`s, before either pass sees a node -- excursus 008 M2-4: this
+     ;; used to run through `:c::poke-fix` first (the transitive "which functions reach a poke"
+     ;; sweep the retired region release needed); the count is now the only reclamation
+     ;; discipline, so nothing downstream needs that sweep's answer any more.
+     pg-i (:c::inl-fns pg-f 0 (:wat::core::Vector :- [:c::Fn]))
      ;; ...and AFTER them, because inlining is what turns a body's last call into a `let` and
      ;; so decides whether it is `:c::callfree?` at all
      pg0-bare (:c::argreg-fns pg-i)

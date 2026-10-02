@@ -59,6 +59,7 @@ ALLOW=(
   '(:c::mov-rm (:c::rax) 0 (:c::rdx))|1|:c::freestr-glue-body: a String'"'"'s length, read to size `:c::rt-cap` recomputes'
   '(:c::mov-rm (:c::rax) 0 (:c::r8))|2|:c::freerec-glue-body and :c::freevec-glue-body: a record/payload-enum'"'"'s or a flat Vector'"'"'s length, read to size `len*8+16`/`len*8+24`'
   '(:c::mov-rm (:c::rax) 0 (:c::r9))|1|:c::closize-glue-body: a closure'"'"'s code address (its length word, overwritten) -- not a field value, the lookup key for its own creation site'"'"'s capture count'
+  '(:c::mov-rm (:c::r11) 0 (:c::r8))|1|:c::free-tail-emit: a free list'"'"'s head, read from the allocator'"'"'s own table (reached from r14) to link a dead block onto it -- not a read out of a container'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do

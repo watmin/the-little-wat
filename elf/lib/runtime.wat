@@ -158,7 +158,7 @@
       pre
       ;; rcx carries the new top here, not r11 -- r10 and r11 are holding the two sources
       (:c::rt-bump (:wat::core::+ (:c::at-cat lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::rdx) (:c::rcx)) (:c::rcx))
+        (:c::add-rr (:c::rdx) (:c::rcx)) (:c::rcx) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::rdx))
       (:c::mov-mr (:c::rax) (:c::rdx) 0)
@@ -520,20 +520,131 @@
     (:c::mov-ri out 2)
     (:c::shl-cl out)))
 
-;; `grow` is how r11 reaches the new top: `add %rcx,%r11` when the size was computed into rcx,
-;; or `add $imm,%r11` when it is a constant. That is the ONLY difference between the three
-;; allocators, and it was the reason each carried its own copy of the check.
+;; `grow` is how `top` reaches the new top: `add %rcx,top` when the size was computed into rcx,
+;; or `add $imm,top` when it is a constant. That is the ONLY difference between the allocators
+;; that bump at all, and it was the reason each carried its own copy of the check.
+;;
+;; `base` is where the allocation STARTS (`r15` for every ordinary allocator; `r8` for the two
+;; sites that read raw bytes onto the heap top as scratch before deciding where the real object
+;; begins -- `:c::rt-prim-read-hex`, `:c::rt-io-read-file`). `top` is `base`'s own register
+;; before this runs, used BOTH to hold the prospective new top while `grow` computes it AND,
+;; after the caller's own trailing commit (`mov-rr top base-register`), to become the real heap
+;; pointer again -- unchanged by anything below when no reuse happens, exactly as before M2.
+;;
+;; `reuse? = false` is `:c::rt-vec-conj-own`'s path 3 ONLY (`extend`, including its own base-0
+;; measuring twin): growing the YOUNGEST object by one word over the heap top is not allocating a
+;; new block, it is extending a live one, and redirecting it to a free-list hole would silently
+;; relocate live bytes with nothing else told. Every other caller allocates a genuinely new
+;; block and passes `true`.
+;;
+;; excursus 008 M2: when `reuse?` is true, this ALSO tries the free lists FIRST, entirely inside
+;; this one generator so no call site needs auditing -- every register beyond `top`/`base` that
+;; this uses (`r9`, `r10`, `r12`) is pushed at entry and popped before every exit, so the result
+;; is identical to the plain bump-and-check for any caller that happens to be holding something
+;; in them, by construction, not by checking. The SIZE needed to classify the allocation is never
+;; a new parameter: it is `top - base` once `grow` has run (base is untouched by `grow`), which
+;; works whether `grow` added a register or an immediate.
 (:wat::core::defn :c::rt-bump [here <- :wat::core::i64 lay <- :c::Layout
                                grow <- :wat::core::String
-                               top <- :wat::core::i64] -> :wat::core::String
-  (:wat::core::let
-    [chk (:wat::string::concat
-           (:c::mov-rr (:c::r15) top)
-           grow
-           (:c::cmp-rm (:c::r14) (:c::hdr-limit) top))
-     at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
-     to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
-    (:wat::string::concat chk (:c::jbe-over to-oom) to-oom)))
+                               top <- :wat::core::i64 base <- :wat::core::i64
+                               reuse? <- :wat::core::bool] -> :wat::core::String
+  (:wat::core::if (:wat::core::not reuse?)
+    (:wat::core::let
+      [chk (:wat::string::concat
+             (:c::mov-rr base top)
+             grow
+             (:c::cmp-rm (:c::r14) (:c::hdr-limit) top))
+       at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
+       to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
+      (:wat::string::concat chk (:c::jbe-over to-oom) to-oom))
+    (:wat::core::let
+      [head (:wat::string::concat (:c::mov-rr base top) grow)
+       pushes (:wat::string::concat
+                (:c::reg-push (:c::r9)) (:c::reg-push (:c::r10)) (:c::reg-push (:c::r12)))
+       pops (:wat::string::concat
+              (:c::reg-pop (:c::r12)) (:c::reg-pop (:c::r10)) (:c::reg-pop (:c::r9)))
+       ;; r9 := size (top - base; `base` is still the original value, `grow` never touches it)
+       size-calc (:wat::string::concat (:c::mov-rr top (:c::r9)) (:c::sub-rr base (:c::r9)))
+       cmp-small (:c::cmp-ri (:c::r9) (:c::small-max))
+       ;; SMALL class address -> r10, index (size>>3)-1, an EXACT match (0..63 for 8..512)
+       small-calc (:wat::string::concat
+                    (:c::mov-rr (:c::r9) (:c::r10))
+                    (:c::shr-ri (:c::r10) 3)
+                    (:c::sub-ri (:c::r10) 1)
+                    (:c::lea (:c::r14) (:c::r10) 8 (:c::hdr-small) (:c::r10)))
+       ;; LARGE power-of-two test: r10 := (size-1) & size; ZF set iff size is a power of two.
+       ;; `:c::and-rr`'s src/dst are (r9,r10) so r9 (size) survives for `:c::bsr-rr` below.
+       large-test (:wat::string::concat
+                    (:c::mov-rr (:c::r9) (:c::r10))
+                    (:c::sub-ri (:c::r10) 1)
+                    (:c::and-rr (:c::r9) (:c::r10))
+                    (:c::test-rr (:c::r10) (:c::r10)))
+       ;; LARGE class address -> r10, index bsr(size), reusing `:c::rt-cap`'s own rounding
+       large-calc (:wat::string::concat
+                    (:c::bsr-rr (:c::r9) (:c::r10))
+                    (:c::lea (:c::r14) (:c::r10) 8 (:c::hdr-large) (:c::r10)))
+       ;; read the chosen class's head into r9; ZF set iff the list is empty. The head is a
+       ;; BLOCK START (`:c::free-tail-emit` pushes `r10`, never the type-specific pointer
+       ;; `rax` was -- F1 of this strike's second mistake: pushing `rax` put the popped value
+       ;; `:c::vec-ptr`/`:c::varr-ptr` bytes past the real block, corrupting whatever sat
+       ;; just past the allocation).
+       read-head (:wat::string::concat (:c::mov-rm (:c::r10) 0 (:c::r9)) (:c::test-rr (:c::r9) (:c::r9)))
+       ;; FOUND: unlink (the next pointer lives in the dead block's own first word, [r9+0] --
+       ;; NOT [r9-8], matching `:c::free-tail-emit`'s push), hand the block back as the
+       ;; allocation (base := r9), restore the real top (top := the UNCHANGED original base
+       ;; value -- no bump happened, so the caller's own trailing `mov-rr top base-register`
+       ;; must be a no-op), then skip the bump/oom tail entirely.
+       found-body (:wat::string::concat
+                    (:c::mov-rm (:c::r9) 0 (:c::r12))
+                    (:c::mov-mr (:c::r12) (:c::r10) 0)
+                    (:c::mov-rr base top)
+                    (:c::mov-rr (:c::r9) base)
+                    pops)
+       ;; the tail every path that gives up on reuse still runs: byte-identical to the
+       ;; non-reuse branch's own check, computed from `here` plus everything emitted before it
+       tail-chk (:c::cmp-rm (:c::r14) (:c::hdr-limit) top)
+       pre-call-len (:wat::core::+ (:c::hexlen head)
+                      (:wat::core::+ (:c::hexlen pushes)
+                        (:wat::core::+ (:c::hexlen size-calc)
+                          (:wat::core::+ (:c::hexlen cmp-small)
+                            (:wat::core::+ (:c::rel8-size)
+                              (:wat::core::+ (:c::hexlen small-calc)
+                                (:wat::core::+ (:c::rel8-size)
+                                  (:wat::core::+ (:c::hexlen large-test)
+                                    (:wat::core::+ (:c::rel8-size)
+                                      (:wat::core::+ (:c::hexlen large-calc)
+                                        (:wat::core::+ (:c::hexlen read-head)
+                                          (:wat::core::+ (:c::rel8-size)
+                                            (:wat::core::+ (:c::hexlen found-body)
+                                              (:wat::core::+ (:c::rel8-size)
+                                                (:wat::core::+ (:c::hexlen pops)
+                                                  (:c::hexlen tail-chk))))))))))))))))
+       at-call (:wat::core::+ here (:wat::core::+ pre-call-len (:c::rel8-size)))
+       to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))
+       tail (:wat::string::concat tail-chk (:c::jbe-over to-oom) to-oom)
+       ;; what `pop-then-tail` IS -- `found-body`'s own jump has to skip exactly this much
+       ;; (its OWN pops already ran inside `found-body`; this second `pops` is the OTHER two
+       ;; paths' -- empty list, abandoned class -- and `found-exit` must clear both it and
+       ;; `tail` to reach the true end, not just `tail` alone)
+       pop-then-tail (:wat::string::concat pops tail)
+       found-exit (:wat::string::concat found-body (:c::jmp-over pop-then-tail))
+       have-slot (:wat::string::concat read-head
+                   (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) found-exit) found-exit)
+       ;; the LARGE test and class-address calc ALONE, so SMALL's own unconditional jump
+       ;; (below) can skip exactly this much and land on `have-slot` -- NOT also skip
+       ;; `have-slot` itself, which `(:c::jmp-over large-decide)` did (F1 of this strike's
+       ;; third mistake: the SMALL path's own computed class address was always abandoned
+       ;; unread, so a freed small shape could be pushed but never popped).
+       large-only (:wat::string::concat large-test
+                    (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero)))
+                      (:wat::string::concat large-calc have-slot))
+                    large-calc)
+       large-decide (:wat::string::concat large-only have-slot)
+       small-section (:wat::string::concat small-calc (:c::jmp-over large-only))]
+      (:wat::string::concat
+        head pushes size-calc cmp-small
+        (:c::br-over (:c::jcc-rel8 (:c::cc-greater)) small-section)
+        small-section large-decide pop-then-tail))))
 
 ;; `vec_new(rax = len) -> rax` -- a record, whose arm word says which one. The size is
 ;; `hdr + len*8` and `lea` computes it without touching a flag: scale 8, no base at all, which
@@ -544,7 +655,7 @@
     (:wat::string::concat
       size
       (:c::rt-bump (:wat::core::+ (:c::at-vnew lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11))
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::rax) (:c::r10) 0)
@@ -650,7 +761,10 @@
                    (:c::mov-mr (:c::rcx) (:c::r15) 0)
                    (:c::mov-rr (:c::r11) (:c::r15))
                    bump-len)
-     extend-at0 (:wat::string::concat (:c::rt-bump 0 lay extend-grow (:c::r11)) extend-tail)
+     ;; path 3 is an EXTEND, not a new allocation (M2: `reuse?` false) -- the youngest object's
+     ;; block is grown by one word over the heap top, so a free-list hole must never be offered.
+     extend-at0 (:wat::string::concat
+                  (:c::rt-bump 0 lay extend-grow (:c::r11) (:c::r15) false) extend-tail)
      ;; path 2: it has room inside the block it was already given
      grown-test (:wat::string::concat
                   (:c::mov-rm (:c::rax) 0 (:c::r8))
@@ -704,7 +818,7 @@
                     (:wat::core::+ (:c::hexlen tail-test)
                       (:wat::core::+ (:c::rel8-size) (:c::hexlen fallback)))))
      extend (:wat::string::concat
-              (:c::rt-bump (:wat::core::+ P pre-extend) lay extend-grow (:c::r11))
+              (:c::rt-bump (:wat::core::+ P pre-extend) lay extend-grow (:c::r11) (:c::r15) false)
               extend-tail)
      ;; the address `copy` begins at -- `extend`'s real length equals `extend-at0`'s by
      ;; construction (same fixed-width encoding, a different address plugged in), so this is
@@ -720,7 +834,7 @@
      copy (:wat::string::concat
             copy-pre
             (:c::rt-bump (:wat::core::+ P (:wat::core::+ pre-copy (:c::hexlen copy-pre))) lay
-              (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11))
+              (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true)
             (:c::mov-mi (:c::r15) 0 (:c::vec-flat-own))
             (:c::mov-mi (:c::r15) w 1)
             ;; r10 is still the caller's flag; the next lea spends the register
@@ -765,7 +879,7 @@
     (:wat::string::concat
       size
       (:c::rt-bump (:wat::core::+ (:c::at-varr lay) (:c::hexlen size)) lay
-        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11))
+        (:c::add-rr (:c::rcx) (:c::r11)) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 0)
       (:c::mov-mi (:c::r15) (:c::word) 1)
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r10))
@@ -781,7 +895,7 @@
   (:wat::core::let
     [slots (:wat::core::* (:c::node-arity) (:c::word))
      bump (:c::rt-bump (:c::at-nnew lay) lay
-            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)) (:c::r11))]
+            (:c::add-ri (:c::r11) (:wat::core::+ (:c::vec-hdr) slots)) (:c::r11) (:c::r15) true)]
     (:wat::string::concat
       bump
       (:c::mov-mi (:c::r15) 0 1)
@@ -1000,7 +1114,7 @@
       pre
       (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) grow)
       grow mid loop leaf
-      (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11))
+      (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 (:c::vec-tree))
       (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::rax))
@@ -1056,7 +1170,7 @@
 ]
     (:wat::core::let
       [bump (:c::rt-bump (:wat::core::+ at-nn (:c::hexlen mk)) lay
-              (:c::add-ri (:c::r11) obj) (:c::r11))
+              (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true)
        top (:wat::core::+ at-nn
              (:wat::core::+ (:c::hexlen mk)
                (:wat::core::+ (:c::hexlen bump) (:c::hexlen alloc))))
@@ -1114,7 +1228,7 @@
       head to-push test
       (:c::br-over (:c::jcc-rel8 (:c::cc-below)) spill)
       spill pre
-      (:c::rt-bump at-bump lay (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11))
+      (:c::rt-bump at-bump lay (:c::add-rr (:c::rdx) (:c::r11)) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 (:c::vec-flat))
       (:c::mov-mi (:c::r15) (:c::word) (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::varr-ptr) (:c::r9))
@@ -1181,7 +1295,7 @@
             (:c::add-rr (:c::rdx) (:c::r11)))]
     (:wat::string::concat
       pre
-      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow (:c::r11))
+      (:c::rt-bump (:wat::core::+ (:c::at-slot lay) (:c::hexlen pre)) lay grow (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 1)
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r9))
       (:c::mov-mr (:c::r8) (:c::r9) 0)
@@ -1226,7 +1340,7 @@
     (:wat::string::concat
       pre
       (:c::rt-bump (:wat::core::+ (:c::at-subs lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::r9) (:c::r11)) (:c::r11))
+        (:c::add-rr (:c::r9) (:c::r11)) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::r8) (:c::r10) 0)
@@ -1338,7 +1452,7 @@
     (:wat::string::concat
       pre
       (:c::rt-bump (:wat::core::+ (:c::at-tostr lay) (:c::hexlen pre)) lay
-        (:c::add-rr (:c::r10) (:c::r11)) (:c::r11))
+        (:c::add-rr (:c::r10) (:c::r11)) (:c::r11) (:c::r15) true)
       (:c::mov-mi (:c::r15) 0 (:c::heap-arm))
       (:c::lea-at (:c::r15) (:c::vec-ptr) (:c::r10))
       (:c::mov-mr (:c::r9) (:c::r10) 0)
@@ -1588,20 +1702,27 @@
 ;; `prim_read_hex(rax = path) -> rax = a String of hex` -- read a file and render its bytes as
 ;; hex, which is how the compiler reads a binary back to check what it wrote. The same slurp as
 ;; `io_read_file`; the String allocated is TWICE the length, because a byte is two characters.
+;; excursus 008 M2: `base`=r8 (the real allocation start -- the raw bytes were already read
+;; onto the heap top as scratch by `:c::rt-slurp`, so the object begins past them, not at `r15`),
+;; `top`=rsi. `:c::rt-cap`'s OUT moves to r9 (scratch stays rcx -- `:c::rt-cap` hardcodes rcx as
+;; `bsr-rr`'s/`shl-cl`'s own shift-count register internally, so `out` may never BE rcx) so
+;; `grow` is a plain register add, the shape `:c::rt-bump` already expects.
 (:wat::core::defn :c::rt-prim-read-hex [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::rt-slurp)
            (:c::mov-rr (:c::rdx) (:c::rax))
            (:c::add-rr (:c::rax) (:c::rax))           ;; two characters a byte
-           (:c::rt-cap (:c::rax) (:c::rcx) (:c::rsi))
-           (:c::add-rr (:c::r8) (:c::rsi))
-           (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
-     at-oom (:wat::core::+ (:c::at-rdhex lay)
-              (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
-     to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-oom (:c::call-size)))
+           ;; `:c::rt-cap`'s OWN `bsr-rr`/`shl-cl` pair hardcodes rcx as the shift count, so
+           ;; `out` can never BE rcx (F1 of this strike's own mistake, caught by
+           ;; `/tmp/readbig-probe.wat` diverging by exactly the rounding error that bug leaves
+           ;; behind) -- scratch stays rcx (transient, read then immediately overwritten by
+           ;; `bsr-rr` itself), out moves to r9.
+           (:c::rt-cap (:c::rax) (:c::rcx) (:c::r9)))
+     bump (:c::rt-bump (:wat::core::+ (:c::at-rdhex lay) (:c::hexlen pre)) lay
+            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true)
      head (:wat::string::concat
-            pre (:c::jbe-over to-oom) to-oom
+            pre bump
             (:c::mov-rr (:c::rsi) (:c::r15))
             (:c::mov-mi (:c::r8) 0 (:c::heap-arm))
             (:c::lea-at (:c::r8) (:c::vec-ptr) (:c::r10))
@@ -1694,18 +1815,19 @@
 ;; heap top until `read` returns nothing, and only THEN allocates -- the bytes are already where
 ;; they need to be, so the allocation just has to reach past them. `lea 7(r9)` then `and -8`
 ;; rounds the end up to a word, because the String header wants alignment.
+;; excursus 008 M2: `base`=r8, `top`=rsi -- same adaptation as `:c::rt-prim-read-hex` above.
+;; `:c::rt-cap`'s scratch stays rcx (its own `bsr-rr`/`shl-cl` hardcode rcx as the shift count,
+;; so `out` may never be rcx -- F1 of this strike's own first attempt, which put OUT there and
+;; diverged on a real file); OUT moves to r9 (not an output `:c::rt-slurp` documents, so free).
 (:wat::core::defn :c::rt-io-read-file [lay <- :c::Layout] -> :wat::core::String
   (:wat::core::let
     [pre (:wat::string::concat
            (:c::rt-slurp)
-           (:c::rt-cap (:c::rdx) (:c::rcx) (:c::rsi))
-           (:c::add-rr (:c::r8) (:c::rsi))
-           (:c::cmp-rm (:c::r14) (:c::hdr-limit) (:c::rsi)))
-     at-oom (:wat::core::+ (:c::at-rdfile lay)
-              (:wat::core::+ (:c::hexlen pre) (:c::rel8-size)))
-     to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-oom (:c::call-size)))]
+           (:c::rt-cap (:c::rdx) (:c::rcx) (:c::r9)))
+     bump (:c::rt-bump (:wat::core::+ (:c::at-rdfile lay) (:c::hexlen pre)) lay
+            (:c::add-rr (:c::r9) (:c::rsi)) (:c::rsi) (:c::r8) true)]
     (:wat::string::concat
-      pre (:c::jbe-over to-oom) to-oom
+      pre bump
       ;; the bytes are already in place; the allocation only has to reach past them
       (:c::mov-rr (:c::rsi) (:c::r15))
       (:c::mov-mi (:c::r8) 0 (:c::heap-arm))
@@ -1911,11 +2033,36 @@
 ;; three uses are indistinguishable -- and a routine that reads a vector's length with a string's
 ;; offset is right by accident, which is the worst way for a thing to be right.
 (:wat::core::defn :c::word [] -> :wat::core::i64 8)
-;; r14 addresses a three-field header the runtime keeps in front of everything: how many bytes
-;; are waiting to be written, where the heap must stop, and the buffer itself.
+;; r14 addresses a header the runtime keeps in front of everything: how many bytes are waiting
+;; to be written, where the heap must stop, two size-class free-list tables (excursus 008 M2),
+;; and the buffer itself.
 (:wat::core::defn :c::hdr-pending [] -> :wat::core::i64 0)
 (:wat::core::defn :c::hdr-limit [] -> :wat::core::i64 8)
-(:wat::core::defn :c::hdr-buf [] -> :wat::core::i64 16)
+;; **M2: the allocator reuses holes.** Two tables of list-head words, both zero-filled for free
+;; (anonymous `mmap` pages come zeroed, so an empty list needs no explicit init -- `:c::stub-arm`
+;; never touches this range). A list head of 0 means empty; a nonzero head is a dead block's own
+;; pointer, and the dead block's own count word (`[pointer-8]`, already meaningless the instant
+;; the count hits zero -- a poisoned or live object never reaches this path) holds the link to
+;; the next dead block, or 0.
+;;
+;; `SMALL`: one list per EXACT multiple of 8 from 8 through `:c::small-max` (512) -- a trie node's
+;; fixed 272 bytes is the largest FIXED shape in the runtime, and 512 leaves room for a record or
+;; closure of up to 62 fields/captures before a shape stops fitting, comfortably past anything in
+;; `elf/`'s own corpus. Index `(size>>3)-1` (0..63), an EXACT match every time: the table only
+;; ever holds a size it was asked for exactly, so a pop wastes nothing.
+;;
+;; `LARGE`: one list per power of two, index `bsr(size)` (0..63) -- `:c::rt-cap`'s OWN classing
+;; (a String's or an owned Vector's block is already a power of two by construction, from the
+;; same bsr+shift this indexes by), not a second rounding rule. Only reached when `size >
+;; :c::small-max` AND `size` is itself already a power of two (`:c::rt-bump` tests this with
+;; `size & (size-1) == 0`); a large EXACT (non-power-of-two) shape -- nothing in `elf/` ever
+;; produces one, see `:c::small-max` above -- is freed but never listed: filing it under a FLOORED
+;; power-of-two class would make it invisible to a future CEILING-based search for the same size,
+;; and the honest answer is not to pretend reuse works there.
+(:wat::core::defn :c::small-max [] -> :wat::core::i64 512)
+(:wat::core::defn :c::hdr-small [] -> :wat::core::i64 16)
+(:wat::core::defn :c::hdr-large [] -> :wat::core::i64 (:wat::core::+ 16 512))
+(:wat::core::defn :c::hdr-buf [] -> :wat::core::i64 (:wat::core::+ 16 (:wat::core::+ 512 512)))
 ;; the pending count at which the buffer is written out. The allocation (`:c::buf-bytes`) is
 ;; larger, so a single put that crosses this still has somewhere to land before the flush.
 (:wat::core::defn :c::buf-hiwater [] -> :wat::core::i64 4096)
