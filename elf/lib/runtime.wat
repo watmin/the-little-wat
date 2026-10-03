@@ -624,6 +624,85 @@
     (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r10))
     (:c::mov-mr (:c::r10) base -8)))
 
+;; rid → free-kind, or -1 when one routine allocates more than one kind (`vec_new` is a
+;; record, a payload enum, or a closure). The caller stamps those.
+(:wat::core::defn :c::census-rid-kind [rid <- :wat::core::i64] -> :wat::core::i64
+  (:wat::core::cond
+    ((:wat::core::= rid 0) 0) ((:wat::core::= rid 2) 4) ((:wat::core::= rid 3) 3)
+    ((:wat::core::= rid 4) 6) ((:wat::core::= rid 5) 5) ((:wat::core::= rid 6) 5)
+    ((:wat::core::= rid 7) 3) ((:wat::core::= rid 8) 1) ((:wat::core::= rid 9) 0)
+    ((:wat::core::= rid 10) 0) ((:wat::core::= rid 11) 0) ((:wat::core::= rid 12) 0)
+    (:else -1)))
+
+;; r12 holds the site index. One more live object of `kind` at that site.
+(:wat::core::defn :c::census-kind-site [rid <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let [k (:c::census-rid-kind rid)]
+    (:wat::core::if (:wat::core::< k 0) ""
+      (:wat::string::concat
+        (:c::mov-rr (:c::r12) (:c::r10))
+        (:c::imul-rri (:c::r10) 7 (:c::r10))
+        (:c::add-ri (:c::r10) k)
+        (:c::lea (:c::r14) (:c::r10) 8 (:c::census-site-kind) (:c::r10))
+        (:c::add-mi (:c::r10) 0 1)))))
+
+;; rax is a fresh vec_new object. The site index is the low half of [rax-16].
+(:wat::core::defn :c::census-kind-obj [kind <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rm32 (:c::rax) -16 (:c::r10))
+    (:c::imul-rri (:c::r10) 7 (:c::r10))
+    (:c::add-ri (:c::r10) kind)
+    (:c::lea (:c::r14) (:c::r10) 8 (:c::census-site-kind) (:c::r10))
+    (:c::add-mi (:c::r10) 0 1)))
+
+;; rax is a record. Stamp type `ty` (1-based; 0 means unstamped) into the high half and count
+;; it, unless a stamp is already there (an in-place assoc of an object counted at its birth).
+(:wat::core::defn :c::census-type-obj [ty <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [body (:wat::string::concat
+            (:c::movabs (:c::r10) (:wat::i64::bit-shift-left ty 32))
+            (:c::or-mr (:c::r10) (:c::rax) -16)
+            (:c::add-mi (:c::r14) (:wat::core::+ (:c::census-rec-live) (:wat::core::* ty 8)) 1)
+            (:c::mov-mr (:c::rax) (:c::r14)
+              (:wat::core::+ (:c::census-rec-sample) (:wat::core::* ty 8))))
+     head (:wat::string::concat
+            (:c::mov-rm (:c::rax) -16 (:c::r10))
+            (:c::shr-ri (:c::r10) 32)
+            (:c::test-rr (:c::r10) (:c::r10)))
+     skip (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero)))
+            (:asm::le (:c::hexlen body) 4))]
+    (:wat::string::concat head skip body)))
+
+;; r8 holds the site index. One fewer live object of `kind` at that site.
+(:wat::core::defn :c::census-kind-dec [kind <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rr (:c::r8) (:c::r11))
+    (:c::imul-rri (:c::r11) 7 (:c::r11))
+    (:c::add-ri (:c::r11) kind)
+    (:c::lea (:c::r14) (:c::r11) 8 (:c::census-site-kind) (:c::r11))
+    (:c::add-mi (:c::r11) 0 -1)))
+
+;; r10 addresses the count word. A nonzero high half is the record type to release.
+(:wat::core::defn :c::census-type-dec [] -> :wat::core::String
+  (:wat::core::let
+    [body (:wat::string::concat
+            (:c::lea (:c::r14) (:c::r11) 8 (:c::census-rec-live) (:c::r8))
+            (:c::add-mi (:c::r8) 0 -1))
+     head (:wat::string::concat
+            (:c::mov-rm (:c::r10) -8 (:c::r11))
+            (:c::shr-ri (:c::r11) 32)
+            (:c::test-rr (:c::r11) (:c::r11)))
+     skip (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero))
+            (:asm::le (:c::hexlen body) 4))]
+    (:wat::string::concat head skip body)))
+
+;; How many record types the program declared. Fixed width so the stub's length does not
+;; depend on the count.
+(:wat::core::defn :c::census-set-nrecs [n <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat (:c::dm-at "81" 0 (:c::r14) (:c::census-rec-n)) (:asm::le n 4)))
+
+(:wat::core::defn :c::census-load-rn [] -> :wat::core::String
+  (:c::mov-rm (:c::r14) (:c::census-rec-n) (:c::r10)))
+
 ;; Path 3 of `vec_conj_own`: the youngest vector grew by `top-base` and rax still addresses it.
 ;; The site word is 24 bytes before that pointer (varr-ptr + the site). r13 is the caller's.
 (:wat::core::defn :c::census-extend-credit [] -> :wat::core::String
@@ -706,9 +785,10 @@
                         (:c::add-mi (:c::r14) (:c::census-alloc-count rid) 1)
                         (:c::add-mr (:c::r9) (:c::r14) (:c::census-alloc-bytes rid))
                         (:c::mov-rr (:c::r9) (:c::r13))
-                        (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r10))
-                        (:c::lea (:c::r14) (:c::r10) 8 (:c::census-site-live) (:c::r10))
-                        (:c::add-mr (:c::r13) (:c::r10) 0))
+                        (:c::mov-rm (:c::r14) (:c::census-site-idx) (:c::r12))
+                        (:c::lea (:c::r14) (:c::r12) 8 (:c::census-site-live) (:c::r10))
+                        (:c::add-mr (:c::r13) (:c::r10) 0)
+                        (:c::census-kind-site rid))
                       "")
        cmp-small (:c::cmp-ri (:c::r9) (:c::small-max))
        ;; SMALL class address -> r10, index (size>>3)-1, an EXACT match (0..63 for 8..512)
@@ -886,6 +966,38 @@
       (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) span)
       span)))
 
+;; A conditional jump over `body`, long form. `:c::br-over` is a rel8 and the free
+;; sequence below is longer than 127 bytes.
+(:wat::core::defn :c::jcc-over32 [cc <- :wat::core::i64 body <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat (:c::jcc-rel32 cc) (:asm::le (:c::hexlen body) 4)))
+(:wat::core::defn :c::jmp-over32 [body <- :wat::core::String] -> :wat::core::String
+  (:c::jmp-rel32 (:c::hexlen body)))
+
+;; rbx is the free kind (3 plain flat, 4 owned flat). r9 is the block size. r8 is scratch.
+;; Credits one free of that kind on `path` (0 youngest, 1 pushed, 2 given up).
+;; The imul leaves kind*48, a byte offset, so the lea scale is 1.
+(:wat::core::defn :c::census-free-credit [path <- :wat::core::i64] -> :wat::core::String
+  (:wat::string::concat
+    (:c::imul-rri (:c::rbx) 48 (:c::r8))
+    (:c::lea (:c::r14) (:c::r8) 1
+      (:wat::core::+ (:c::hdr-census-free) (:wat::core::* path 16)) (:c::r8))
+    (:c::add-mi (:c::r8) 0 1)
+    (:c::add-mr (:c::r9) (:c::r8) 8)))
+
+;; r10 is the block start, r9 its size, rbx its free kind. Drops the live-byte and
+;; live-kind counters, and counts one vector whose count reached zero.
+(:wat::core::defn :c::census-release-live [] -> :wat::core::String
+  (:wat::string::concat
+    (:c::mov-rm32 (:c::r10) -8 (:c::r8))
+    (:c::lea (:c::r14) (:c::r8) 8 (:c::census-site-live) (:c::r11))
+    (:c::sub-mr (:c::r9) (:c::r11) 0)
+    (:c::mov-rr (:c::r8) (:c::r11))
+    (:c::imul-rri (:c::r11) 7 (:c::r11))
+    (:c::add-rr (:c::rbx) (:c::r11))
+    (:c::lea (:c::r14) (:c::r11) 8 (:c::census-site-kind) (:c::r11))
+    (:c::add-mi (:c::r11) 0 -1)
+    (:c::add-mi (:c::r14) (:c::census-zero-count 2) 1)))
+
 ;; `vec_conj_own(rax = vec, rcx = value) -> rax` -- `conj` where the compiler has PROVED the
 ;; container is a last use (F-127), so the copy may sometimes be skipped entirely.
 ;;
@@ -901,6 +1013,9 @@
 ;;     two -- the COUNT word is left holding a real count, one, same as any other allocation
 ;;     (excursus 008 F2: `:c::arm-own` used to be written there instead, so the ordinary
 ;;     increment/decrement every type's refcounting uses could never bring it back to zero).
+;;     The source was the only reference and the copy now holds every element it held, so the
+;;     element counts stay as they are (no `:c::count-copied`) and the source block goes back
+;;     to the free list. Path 2 and path 3 return that same block and must not free it.
 ;;
 ;; That third test is the whole trick: `lea 0x8(%rax,%r8,8)` is the address just past the last
 ;; element, and comparing it to r15 asks "is this vector the youngest thing on the heap?"
@@ -989,6 +1104,86 @@
      ;; construction (same fixed-width encoding, a different address plugged in), so this is
      ;; exact, not an approximation.
      pre-copy (:wat::core::+ pre-extend (:wat::core::+ (:c::hexlen extend) (:c::hexlen grown)))
+     ;; path 4's source. rax is that vector and r8 is its length. rbx becomes the free
+     ;; kind; the caller's rbx is already on the stack from `copy`. r11 is the heap
+     ;; top the bump just computed (r15 is the new block, not that top) and the tail
+     ;; below used to commit it with `mov r15, r11`. The free keeps the top in rsi,
+     ;; compares the source's end to THAT, and commits rsi itself unless the source
+     ;; is still the youngest block.
+     size-own (:wat::string::concat
+                (:c::lea (:c::no-reg) (:c::r8) w w (:c::rdx))
+                (:c::rt-cap (:c::rdx) (:c::rcx) (:c::r9))
+                (:c::mov-ri (:c::rbx) 4))
+     size-plain (:wat::string::concat
+                  (:c::lea (:c::no-reg) (:c::r8) w (:c::varr-hdr) (:c::r9))
+                  (:c::mov-ri (:c::rbx) 3))
+     size-pick (:wat::string::concat
+                 (:c::cmp-mi (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::vec-flat-own))
+                 (:c::jcc-over32 (:c::negate-cc (:c::cc-zero))
+                   (:wat::string::concat size-own (:c::jmp-over32 size-plain)))
+                 size-own
+                 (:c::jmp-over32 size-plain)
+                 size-plain)
+     block (:c::lea-at (:c::rax) (:wat::core::- 0 (:c::varr-ptr)) (:c::r10))
+     live (:wat::core::if census? (:c::census-release-live) "")
+     giveup (:wat::core::if census? (:c::census-free-credit 2) "")
+     slot-body (:wat::string::concat
+                 (:c::mov-rm (:c::r11) 0 (:c::r8))
+                 (:c::mov-mr (:c::r8) (:c::r10) 0)
+                 (:c::mov-mr (:c::r10) (:c::r11) 0)
+                 (:wat::core::if census? (:c::census-free-credit 1) "")
+                 (:c::jmp-over32 giveup))
+     large-calc (:wat::string::concat
+                  (:c::bsr-rr (:c::r9) (:c::r11))
+                  (:c::lea (:c::r14) (:c::r11) 8 (:c::hdr-large) (:c::r11)))
+     large-head (:wat::string::concat
+                  (:c::mov-rr (:c::r9) (:c::r11))
+                  (:c::sub-ri (:c::r11) 1)
+                  (:c::and-rr (:c::r9) (:c::r11))
+                  (:c::test-rr (:c::r11) (:c::r11)))
+     skip-give (:c::jcc-over32 (:c::negate-cc (:c::cc-zero))
+                 (:wat::string::concat large-calc slot-body))
+     small (:wat::string::concat
+             (:c::mov-rr (:c::r9) (:c::r11))
+             (:c::shr-ri (:c::r11) 3)
+             (:c::sub-ri (:c::r11) 1)
+             (:c::lea (:c::r14) (:c::r11) 8 (:c::hdr-small) (:c::r11))
+             (:c::jmp-over32 (:wat::string::concat large-head skip-give large-calc)))
+     not-young (:wat::string::concat
+                 (:c::cmp-ri (:c::r9) (:c::small-max))
+                 (:c::jcc-over32 (:c::cc-greater) small)
+                 small
+                 large-head
+                 skip-give
+                 large-calc
+                 slot-body
+                 giveup
+                 (:c::mov-rr (:c::rsi) (:c::r15)))
+     young-body (:wat::string::concat
+                  (:c::mov-rr (:c::r10) (:c::r15))
+                  (:wat::core::if census?
+                    (:wat::string::concat
+                      (:c::sub-ri (:c::r15) 8)
+                      (:c::census-free-credit 0))
+                    "")
+                  (:c::jmp-over32 not-young))
+     release (:wat::string::concat
+               (:c::mov-rr (:c::r11) (:c::rsi))
+               (:c::reg-push (:c::r10))
+               (:c::reg-push (:c::r9))
+               (:c::reg-push (:c::rdi))
+               size-pick
+               block
+               live
+               (:c::mov-rr (:c::r10) (:c::r11))
+               (:c::add-rr (:c::r9) (:c::r11))
+               (:c::cmp-rr (:c::rsi) (:c::r11))
+               (:c::jcc-over32 (:c::negate-cc (:c::cc-zero)) young-body)
+               young-body
+               not-young
+               (:c::reg-pop (:c::rdi))
+               (:c::reg-pop (:c::r9))
+               (:c::reg-pop (:c::r10)))
      ;; path 4: copy, and tag the copy so the next conj can take path two
      copy-pre (:wat::string::concat
                 (:c::mov-rm (:c::rax) 0 (:c::r8))
@@ -1013,15 +1208,72 @@
             (:c::lea-at (:c::rax) (:c::vec-data) (:c::rsi))
             (:c::mov-rr (:c::r8) (:c::rcx))
             (:c::rep-movsq)
-            (:c::count-copied)
+            release
             (:c::reg-pop (:c::rbx))
             (:c::mov-mr (:c::r9) (:c::rdi) 0)
-            (:c::mov-rr (:c::r11) (:c::r15))
             (:c::mov-rr (:c::r10) (:c::rax))
-            (:c::ret))]
+            (:c::ret))
+     ;; A trie, or a block whose count is not 1, cannot be updated in place. The
+     ;; copying conj leaves the source alive, and this caller was going to consume
+     ;; its reference, so the copy is followed by that decrement. r8 is the free
+     ;; routine and r11 the element glue (0 when the elements are not pointers);
+     ;; both are set by the conj site and are dead on the in-place paths.
+     ;; `vec_conj` reads them at entry, because promoting a flat array builds one
+     ;; trie per element and has to drop each of those itself. The pushes keep
+     ;; the copies this decrement uses; the reloads put them back in the
+     ;; registers for that call.
+     pushes (:wat::string::concat
+              (:c::reg-push (:c::rax))
+              (:c::reg-push (:c::r11))
+              (:c::reg-push (:c::r8)))
+     reload (:wat::string::concat
+              (:c::mov-rm (:c::rsp) 0 (:c::r8))
+              (:c::mov-rm (:c::rsp) 8 (:c::r11)))
+     pops (:wat::string::concat
+            (:c::reg-pop (:c::r8))
+            (:c::reg-pop (:c::r11))
+            (:c::reg-pop (:c::rcx)))
+     glue-call (:c::rd "ff" 2 (:c::r11))
+     free-call (:c::rd "ff" 2 (:c::r8))
+     ;; glue scribbles r8, which still holds the free routine
+     free-body (:wat::string::concat
+                 (:c::reg-push (:c::rax))
+                 (:c::reg-push (:c::r8))
+                 (:c::test-rr (:c::r11) (:c::r11))
+                 (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) glue-call)
+                 glue-call
+                 (:c::reg-pop (:c::r8))
+                 (:c::reg-pop (:c::rax))
+                 free-call)
+     after (:wat::string::concat
+             (:c::reg-push (:c::rax))
+             (:c::mov-rr (:c::rcx) (:c::rax))
+             (:c::dec-hex)
+             (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) free-body)
+             free-body
+             (:c::reg-pop (:c::rax))
+             (:c::ret))
+     pre (:wat::core::+
+           (:wat::core::+ (:c::hexlen head) (:c::rel32-size))
+           (:wat::core::+ (:c::hexlen own-test) (:c::rel8-size))
+           (:wat::core::+ (:c::hexlen flat-test) (:c::rel32-size))
+           (:wat::core::+ (:c::hexlen tail-test) (:c::rel8-size))
+           (:wat::core::+ (:c::hexlen fallback)
+             (:wat::core::+ (:c::hexlen extend)
+               (:wat::core::+ (:c::hexlen grown) (:c::hexlen copy)))))
+     consume-at (:wat::core::+ P pre)
+     call-end (:wat::core::+ consume-at
+                (:wat::core::+ (:c::hexlen pushes)
+                  (:wat::core::+ (:c::hexlen reload) (:c::call-size))))
+     consume (:wat::string::concat
+               pushes
+               reload
+               (:c::rt-call (:c::at-vconj lay) call-end)
+               pops
+               after)]
     (:wat::string::concat
       head
-      (:c::rt-branch (:c::cc-zero) (:c::at-vconj lay)
+      (:c::rt-branch (:c::cc-zero) consume-at
         (:wat::core::+ a-j1 (:c::rel32-size)))
       own-test
       (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
@@ -1031,11 +1283,11 @@
               (:wat::core::+ (:c::rel8-size)
                 (:wat::core::+ (:c::hexlen fallback) (:c::hexlen extend)))))))
       flat-test
-      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) (:c::at-vconj lay)
+      (:c::rt-branch (:c::negate-cc (:c::cc-zero)) consume-at
         (:wat::core::+ a-j2 (:c::rel32-size)))
       tail-test
       (:c::br-len (:c::jcc-rel8 (:c::cc-zero)) (:c::hexlen fallback))
-      fallback extend grown copy)))
+      fallback extend grown copy consume)))
 
 ;; `varr_new(rax = len) -> rax` -- a Vector's leaf array, which carries one more header word
 ;; than a record does and is otherwise the same allocation
@@ -1198,7 +1450,16 @@
             (:c::reg-pop (:c::rax))
             (:c::mov-rr (:c::rax) (:c::r9))
             (:c::add-ri (:c::rdx) bits))
-     a-mid (:wat::core::+ a-grow (:c::hexlen grow))
+     ;; grow's root is brand new: the old trie does not point at it, so the
+     ;; descent can fill it in place. Copying it here abandoned that root and
+     ;; left the old root's count one higher than any live trie.
+     born (:wat::string::concat
+            (:c::reg-push (:c::rdx))
+            (:c::mov-rr (:c::r9) (:c::r8))
+            (:c::mov-rr (:c::r9) (:c::rbx)))
+     a-mid (:wat::core::+ a-grow
+             (:wat::core::+ (:c::hexlen grow)
+               (:wat::core::+ (:c::hexlen born) (:c::rel8-size))))
      mid-head (:wat::string::concat
                 (:c::reg-push (:c::rdx)) (:c::mov-rr (:c::r9) (:c::rax))
                 ;; a shift of 0 means this root is a leaf: its slots are elements
@@ -1231,16 +1492,46 @@
            (:c::cmp-ri (:c::rdx) bits)
            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) one)
            one)
+     ;; the parent copy counted this child, and the store replaces that slot. Two
+     ;; pushes keep node_copy's call aligned; the second pop discards the pad.
+     save (:wat::string::concat
+            (:c::reg-push (:c::rax))
+            (:c::reg-push (:c::rax)))
+     ;; rcx is the child the copy incremented and the store is about to drop.
+     ;; The predicate is inc-if-ptr's: a null, a fixnum, or a zero count was not
+     ;; incremented, so it is not decremented either.
+     counted (:wat::string::concat
+               "488379f800"
+               (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) "48ff49f8")
+               "48ff49f8")
+     big (:wat::string::concat
+           (:c::cmp-ri (:c::rcx) 4096)
+           (:c::br-over (:c::jcc-rel8 (:c::cc-below)) counted)
+           counted)
+     undo (:wat::string::concat
+            (:c::reg-pop (:c::rcx))
+            (:c::reg-pop (:c::r10))
+            (:c::test-rr (:c::rcx) (:c::rcx))
+            (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) big)
+            big)
      a-new (:wat::core::+ a-copy
              (:wat::core::+ (:c::hexlen kid)
-               (:wat::core::+ (:c::call-size) (:c::rel8-size))))
+               (:wat::core::+ (:c::hexlen save)
+                 (:wat::core::+ (:c::call-size)
+                   (:wat::core::+ (:c::hexlen undo) (:c::rel8-size))))))
      child (:wat::string::concat
              (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
                (:wat::core::+ (:c::hexlen kid)
-                 (:wat::core::+ (:c::call-size) (:c::rel8-size))))
+                 (:wat::core::+ (:c::hexlen save)
+                   (:wat::core::+ (:c::call-size)
+                     (:wat::core::+ (:c::hexlen undo) (:c::rel8-size))))))
              kid
+             save
              (:c::rt-call (:c::at-ncopy lay)
-               (:wat::core::+ a-copy (:wat::core::+ (:c::hexlen kid) (:c::call-size))))
+               (:wat::core::+ a-copy
+                 (:wat::core::+ (:c::hexlen kid)
+                   (:wat::core::+ (:c::hexlen save) (:c::call-size)))))
+             undo
              ;; skip the "make one" call; a call is a call-size, not a string to measure
              (:c::br-len "eb" (:c::call-size))
              (:c::rt-call (:c::at-nnew lay) (:wat::core::+ a-new (:c::call-size))))
@@ -1281,8 +1572,11 @@
                 (:wat::core::+ (:c::hexlen loop) (:c::hexlen leaf))))]
     (:wat::string::concat
       pre
-      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) grow)
-      grow mid loop leaf
+      (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero)))
+        (:wat::string::concat grow born (:c::br-len "eb" (:c::hexlen mid))))
+      grow born
+      (:c::br-len "eb" (:c::hexlen mid))
+      mid loop leaf
       ;; excursus 008 M2 census: rid 5.
       (:c::rt-bump a-bump lay (:c::add-ri (:c::r11) obj) (:c::r11) (:c::r15) true census? 5)
       (:c::mov-mi (:c::r15) 0 (:c::vec-tree))
@@ -1305,8 +1599,12 @@
   (:wat::core::let
     [pre (:wat::string::concat
            ;; the caller's element-kind flag (r10) has to survive node_new and the bump,
-           ;; which clobber it, and the five pushes keep the call aligned. The pad is
-           ;; the extra one: three callee-saves plus r10 is an even count.
+           ;; which clobber it. r8 is freevec and r11 is vec-glue, saved deepest so the
+           ;; offsets below stay put. Seven pushes keep the call aligned. The pad is
+           ;; the extra one: three callee-saves plus r10 is an even count, and the
+           ;; free/glue pair is another even count.
+           (:c::reg-push (:c::r8))
+           (:c::reg-push (:c::r11))
            (:c::reg-push (:c::rax))
            (:c::reg-push (:c::r10))
            (:c::reg-push (:c::rbx)) (:c::reg-push 1) (:c::reg-push 2)
@@ -1328,15 +1626,60 @@
              (:c::mov-mi (:c::rax) (:c::vec-shift) 0)
              (:c::mov-mr (:c::r9) (:c::rax) (:c::vec-root))
              (:c::mov-rr (:c::r11) (:c::r15)))
-     ;; the pad comes off into r11, not rax: rax is the tree this function returns
+     ;; the pad comes off into r11, not rax: rax is the tree this function returns.
+     ;; The two beneath it are the glue and free the loop used.
      exit (:wat::string::concat
             (:c::reg-pop 2) (:c::reg-pop 1) (:c::reg-pop (:c::rbx))
-            (:c::reg-pop (:c::r10)) (:c::reg-pop (:c::r11)) (:c::ret))
+            (:c::reg-pop (:c::r10)) (:c::reg-pop (:c::r11))
+            (:c::reg-pop (:c::r11))
+            (:c::reg-pop (:c::r8))
+            (:c::ret))
      ;; one element: fetch it, and put the saved flag back in r10. After the three
      ;; callee-saves the flag sits at [rsp+24]; the pad is at [rsp+32].
      step0 (:wat::string::concat
              (:c::rm "8b" (:c::rcx) (:c::rbx) 1 (:c::word) (:c::vec-data))
              (:c::mov-rm (:c::rsp) 24 (:c::r10)))
+     ;; These elements are not the conj site's new value: that site incremented only
+     ;; the value it pushes after promotion. `tree_push` counts the copied siblings
+     ;; and skips the slot it is about to fill, so the element pushed here would
+     ;; otherwise stay at the source's one reference. The source drop then frees the
+     ;; last slot of every full leaf, and the trie keeps the dangling pointer.
+     ;; i64 elements (r10 = 0) are not pointers. The push/pop pair is balanced, so
+     ;; the call stays on the alignment the seven entry pushes established.
+     counted (:wat::string::concat
+               (:c::reg-push (:c::rax))
+               (:c::mov-rr (:c::rcx) (:c::rax))
+               (:c::test-rr (:c::r10) (:c::r10))
+               (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) (:c::inc-if-ptr))
+               (:c::inc-if-ptr)
+               (:c::mov-rr (:c::rax) (:c::rcx))
+               (:c::reg-pop (:c::rax)))
+     ;; each push returns a new trie and used to abandon the previous one. That
+     ;; trie is the only reference to its root, so glue it, then free the header.
+     ;; The pad slot holds it across the call. Glue and free sit at [rsp+40] and
+     ;; [rsp+48] in the seven-push frame; the drop's own push of the new trie
+     ;; shifts those by one word.
+     save (:c::mov-mr (:c::rax) (:c::rsp) 32)
+     glue-call (:c::rd "ff" 2 (:c::r11))
+     free-call (:c::rd "ff" 2 (:c::r8))
+     free-body (:wat::string::concat
+                 (:c::mov-rm (:c::rsp) 48 (:c::r11))
+                 (:c::reg-push (:c::rax))
+                 (:c::test-rr (:c::r11) (:c::r11))
+                 (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) glue-call)
+                 glue-call
+                 (:c::reg-pop (:c::rax))
+                 (:c::mov-rm (:c::rsp) 56 (:c::r8))
+                 (:c::reg-push (:c::r11))
+                 free-call
+                 (:c::reg-pop (:c::r11)))
+     drop (:wat::string::concat
+            (:c::reg-push (:c::rax))
+            (:c::mov-rm (:c::rsp) 40 (:c::rax))
+            (:c::dec-hex)
+            (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) free-body)
+            free-body
+            (:c::reg-pop (:c::rax)))
 ]
     (:wat::core::let
       ;; excursus 008 M2 census: rid 6.
@@ -1348,11 +1691,18 @@
        guard (:wat::string::concat (:c::cmp-rr 2 1)
                (:c::br-len (:c::jcc-rel8 (:c::negate-cc (:c::cc-below)))
                  (:wat::core::+ (:c::hexlen step0)
-                   (:wat::core::+ (:c::call-size)
-                     (:wat::core::+ (:c::hexlen (:c::inc-r 1)) (:c::rel8-size))))))
-       at-push (:wat::core::+ top (:wat::core::+ (:c::hexlen guard) (:c::hexlen step0)))
-       body (:wat::string::concat guard step0
+                   (:wat::core::+ (:c::hexlen counted)
+                     (:wat::core::+ (:c::hexlen save)
+                       (:wat::core::+ (:c::call-size)
+                         (:wat::core::+ (:c::hexlen drop)
+                           (:wat::core::+ (:c::hexlen (:c::inc-r 1)) (:c::rel8-size)))))))))
+       at-push (:wat::core::+ top
+                 (:wat::core::+ (:c::hexlen guard)
+                   (:wat::core::+ (:c::hexlen step0)
+                     (:wat::core::+ (:c::hexlen counted) (:c::hexlen save)))))
+       body (:wat::string::concat guard step0 counted save
               (:c::rt-call (:c::at-tpush lay) (:wat::core::+ at-push (:c::call-size)))
+              drop
               (:c::inc-r 1))]
       (:wat::string::concat pre mk bump alloc body (:c::jmp-back body) exit))))
 
@@ -1370,26 +1720,67 @@
      ;; a trie already: jump on EQUAL (the discriminant is `:c::vec-tree`)
      to-push (:c::rt-branch (:c::cc-zero) (:c::at-tpush lay)
                (:wat::core::+ at-je (:c::rel32-size)))
+     ;; length goes in r9, not r8. r8 is freevec, and the promote path has to
+     ;; hand it to `tree_from_arr` still intact. The flat path puts it back in r8.
      test (:wat::string::concat
-            (:c::mov-rm (:c::rax) 0 (:c::r8))
-            (:c::cmp-ri (:c::r8) (:c::arr-max)))
+            (:c::mov-rm (:c::rax) 0 (:c::r9))
+            (:c::cmp-ri (:c::r9) (:c::arr-max)))
      at-promote (:wat::core::+ at-je
                   (:wat::core::+ (:c::rel32-size)
                     (:wat::core::+ (:c::hexlen test) (:c::rel8-size))))
-     ;; full: promote to a tree, then push into it
+     ;; full: promote to a tree, then push into it. The trie `tree_from_arr`
+     ;; returns is the only reference to that header. `tree_push` copies it and
+     ;; does not drop it, and the caller drops the flat source, not this trie.
+     ;; Leaving it kept one leaf and every element it still pointed at.
      promote (:wat::string::concat
                (:c::reg-push (:c::rcx))
                (:c::rt-call (:c::at-tfa lay)
                  (:wat::core::+ at-promote
                    (:wat::core::+ (:c::hexlen (:c::reg-push (:c::rcx))) (:c::call-size))))
                (:c::reg-pop (:c::rcx)))
-     at-jmp (:wat::core::+ at-promote (:c::hexlen promote))
-     spill (:wat::string::concat promote
-             (:c::jmp-rel32 (:wat::core::- (:c::at-tpush lay)
-                              (:wat::core::+ at-jmp (:c::call-size)))))
+     ;; r8 is freevec and r11 is glue. `tree_push` spends both. Three pushes
+     ;; keep the call aligned: entry is 8 mod 16, and an odd count brings it
+     ;; back to 0. The trie sits on top so the drop can load it.
+     saves (:wat::string::concat
+             (:c::reg-push (:c::r8))
+             (:c::reg-push (:c::r11))
+             (:c::reg-push (:c::rax)))
+     at-call (:wat::core::+ at-promote
+               (:wat::core::+ (:c::hexlen promote) (:c::hexlen saves)))
+     glue-call (:c::rd "ff" 2 (:c::r11))
+     free-call (:c::rd "ff" 2 (:c::r8))
+     ;; after the drop's push of the new trie: glue at [rsp+16], free at [rsp+24]
+     free-body (:wat::string::concat
+                 (:c::mov-rm (:c::rsp) 16 (:c::r11))
+                 (:c::reg-push (:c::rax))
+                 (:c::test-rr (:c::r11) (:c::r11))
+                 (:c::br-over (:c::jcc-rel8 (:c::cc-zero)) glue-call)
+                 glue-call
+                 (:c::reg-pop (:c::rax))
+                 (:c::mov-rm (:c::rsp) 24 (:c::r8))
+                 (:c::reg-push (:c::r11))
+                 free-call
+                 (:c::reg-pop (:c::r11)))
+     drop (:wat::string::concat
+            (:c::reg-push (:c::rax))
+            (:c::mov-rm (:c::rsp) 8 (:c::rax))
+            (:c::dec-hex)
+            (:c::br-over (:c::jcc-rel8 (:c::negate-cc (:c::cc-zero))) free-body)
+            free-body
+            (:c::reg-pop (:c::rax))
+            (:c::reg-pop (:c::rcx))
+            (:c::reg-pop (:c::r11))
+            (:c::reg-pop (:c::r8))
+            (:c::ret))
+     spill (:wat::string::concat
+             promote
+             saves
+             (:c::rt-call (:c::at-tpush lay) (:wat::core::+ at-call (:c::call-size)))
+             drop)
      size (:c::lea (:c::no-reg) (:c::r8) (:c::word)
             (:wat::core::+ (:c::varr-hdr) (:c::word)) (:c::rdx))
      pre (:wat::string::concat
+           (:c::mov-rr (:c::r9) (:c::r8))
            (:c::reg-push (:c::rbx))
            (:c::mov-rr (:c::r10) (:c::rbx))
            (:c::mov-rr (:c::rcx) (:c::r10)) size)
@@ -2366,8 +2757,21 @@
   (:wat::core::+ (:c::census-site-atbl) (:wat::core::* (:c::census-nsites-max) 8)))
 (:wat::core::defn :c::census-unmapped-live [] -> :wat::core::i64
   (:wat::core::+ (:c::census-site-live) (:wat::core::* (:c::census-unmapped) 8)))
+;; Live object counts, site-major then kind (the seven free kinds). Then one live count and
+;; one sample payload address per record type. Type 0 is "unstamped" and is never reported.
+(:wat::core::defn :c::census-nrecs-max [] -> :wat::core::i64 512)
+(:wat::core::defn :c::census-site-kind [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-site-live) (:wat::core::* (:c::census-nsites-max) 8)))
+(:wat::core::defn :c::census-rec-n [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-site-kind)
+    (:wat::core::* (:c::census-nsites-max) (:wat::core::* 7 8))))
+(:wat::core::defn :c::census-rec-live [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-rec-n) 8))
+(:wat::core::defn :c::census-rec-sample [] -> :wat::core::i64
+  (:wat::core::+ (:c::census-rec-live) (:wat::core::* (:c::census-nrecs-max) 8)))
 (:wat::core::defn :c::census-sites-size [] -> :wat::core::i64
-  (:wat::core::+ 32 (:wat::core::* (:c::census-nsites-max) 16)))
+  (:wat::core::+ (:wat::core::- (:c::census-rec-sample) (:c::hdr-census-meta))
+    (:wat::core::* (:c::census-nrecs-max) 8)))
 
 (:wat::core::defn :c::census-size [] -> :wat::core::i64
   (:wat::core::+ (:c::census-alloc-size)

@@ -32,7 +32,7 @@ inside () { [ "$1" -ge "$start" ] && [ "$1" -le "$end" ]; }
 
 # ---- 1. heap-load spellings outside :c::read-out
 # `:c::load` (no -at) is a FRAME slot and `480fb6c0` is movzx rax,al -- neither reads the heap.
-LOADS=':c::load-at|:c::mov-rm|:c::movzb|"4[89cd]8b|0fb6[0-9a-b]'
+LOADS=':c::load-at|:c::mov-rm|:c::movzb|:c::rm "8b"|"4[89cd]8b|0fb6[0-9a-b]'
 # pattern | how many times it may appear outside read-out | why it is not a counted read
 ALLOW=(
   '"488b00"|2|`peek` (a raw machine word) and `length` (the header): both answer i64'
@@ -69,9 +69,14 @@ ALLOW=(
   '(:c::mov-rm (:c::r9) src-disp (:c::r10))|1|:c::census-copy-word: one word of the site blob, an i64, into the allocator header'
   '(:c::mov-rm (:c::r11) 0 (:c::r11))|1|:c::census-load-r11: a site address or a live-byte count, an i64'
   '(:c::mov-rm (:c::r14) (:c::census-site-n) (:c::r10))|1|:c::census-load-n: how many functions the site table holds, an i64'
-  '(:c::mov-rm (:c::r10) -8 (:c::r8))|1|:c::free-tail-emit: the allocating function index stored ahead of a dead block, an i64'
-  '(:c::mov-rm (:c::r9) 0 (:c::rbx))|1|:c::census-sites: the byte length of a function name in the site blob, an i64'
+  '(:c::mov-rm32 (:c::r10) -8 (:c::r8))|1|:c::free-tail-emit: the allocating function index, the low 32 bits of the site word, an i64'
+  '(:c::mov-rm (:c::r9) 0 (:c::rbx))|2|:c::census-sites and :c::census-holds: the byte length of a name in the census blob, an i64'
   '(:c::mov-rm (:c::r14) (:c::census-unmapped-live) (:c::r13))|1|:c::census-sites: bytes still charged to an unnamed caller, an i64'
+  # `:c::rm "8b"` is a scaled heap load. The two in the vector glue read an element of the
+  # vector being freed; the one in the owning assoc reads the field it is about to overwrite.
+  # None of them keeps a new reference while the container still holds its own.
+  '(:c::rm "8b" (:c::rax) (:c::rbx) (:c::r12)|2|:c::vec-glue-body: an element of the vector being freed, read to be dropped'
+  '(:c::rm "8b" (:c::rax) (:c::rax) (:c::rcx)|1|:c::assoc-form owning path: the old pointer field, read to be dropped as the slot is overwritten'
 )
 hits=$(echo "$code" | grep -E "$LOADS" | grep -vE '0fb6c0')
 while IFS= read -r h; do

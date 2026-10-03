@@ -535,6 +535,11 @@
 (:wat::core::defn :c::add-mr [src <- :wat::core::i64 base <- :wat::core::i64
                               disp <- :wat::core::i64] -> :wat::core::String
   (:c::rm-at "01" src base disp))
+;; `or %src, disp(BASE)` -- opcode 09, the same shape as `:c::add-mr`. The census stamps a
+;; record type into the high half of a site word without disturbing the index in the low half.
+(:wat::core::defn :c::or-mr [src <- :wat::core::i64 base <- :wat::core::i64
+                             disp <- :wat::core::i64] -> :wat::core::String
+  (:c::rm-at "09" src base disp))
 ;; `sub %src, disp(BASE)` -- opcode 29, the same shape as `:c::add-mr`. A site's live-byte
 ;; counter is subtracted in place when its block is freed.
 (:wat::core::defn :c::sub-mr [src <- :wat::core::i64 base <- :wat::core::i64

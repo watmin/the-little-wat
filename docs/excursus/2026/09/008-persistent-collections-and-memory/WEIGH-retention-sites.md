@@ -88,3 +88,23 @@ in sequence, on the final source; then the same-input measurement (main's `956b4
 Another unexpected reboot, during round 3 (`elf/compile.wat` last written 00:00). The tree is intact; anything under
 `/tmp` is gone, `/var/tmp` survived. Continue round 3 from the tree as it is: R1 the check build catching a decrement of
 a dead object, R2 the clause drop over every pointer kind, R3 both verifies and the same-input measurement.
+
+---
+
+## Round 3 — landed (2026-10-03)
+
+**Credited, on my own runs.** The check build's guard compares the count word with poison (−1) for equality before the
+`dec`, so a second decrement of a dead object stops (Grok's mutant: `wat: reference count underflow`). The clause drop
+covers every pointer kind (`:c::ptr-ty?`); the widened compiler self-hosts under the check with no stop.
+`tools/verify.sh` → `verify: ok` (603,509 bytes); `WAT_DROP_CHECK=1 tools/verify.sh` → `verify: ok` (798,499); the plain
+again → ok. Same input as `NOTE-M2-landed.md` (main's `956b4bb` tree), the plain 603,509 compiler, `taskset -c 2`:
+
+| | old main | M2 | this |
+|---|---:|---:|---:|
+| peak RSS (KB) | 446,156 – 446,324 | 298,232 – 298,460 | **56,332 – 57,220** |
+| user instructions | 6.233 – 6.237 B | 8.416 – 8.417 B | 12.737 – 12.744 B |
+| user cycles | 2.849 – 2.889 B | 3.400 – 3.421 B | 4.871 – 4.884 B |
+
+The instructions are the drops and frees (round 2's cost map: every `:c::emit-drop` ~1.8 B; clause drops ~0.3 B). Noted,
+not blocking: `:c::and-name-dead?` still requires `rec:` — the same reasoning that widened the clause drop should widen it;
+the performance stone takes it with the cost map.

@@ -13,6 +13,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 
 # byte copies: the payload is characters or digits, never a wat pointer
 BYTE="rt-str-cat rt-str-cat-own rt-str-subs rt-i64-to-str rt-buf-put rt-print-str rt-cpath rt-io-read-file"
+# path 4 of vec_conj_own copies the slots and then frees the source without
+# walking them. The copy keeps every element, so the counts stay where they are.
+INHERIT="rt-vec-conj-own"
 # cpath copies a path's bytes onto the heap top so a syscall can see a C string.
 # It is not a pointer slot; the brief's line number landed on this rep movsb.
 
@@ -40,14 +43,14 @@ while IFS= read -r line; do
   case "$line" in
     *':c::rep-movsq'*|*':c::rep-movsb'*)
       ok=0
-      for b in $BYTE; do [ "$cur" = "$b" ] && ok=1; done
+      for b in $BYTE $INHERIT; do [ "$cur" = "$b" ] && ok=1; done
       printf '%s\n' "$line" | grep -q 'count-span\|count-copied\|count-masked' && ok=1
       # the count may be the next forms in the same routine; accept the routine if
       # its text, from this defn to the next, mentions a counter
       if [ "$ok" -eq 0 ] && [ -n "$cur" ]; then
         awk -v fn="$cur" '
-          $0 ~ "defn :c::" fn {on=1}
-          on && $0 ~ "defn :c::" && $0 !~ ("defn :c::" fn) {exit}
+          $0 ~ ("defn :c::" fn "[^A-Za-z0-9-]") {on=1}
+          on && $0 ~ "defn :c::" && $0 !~ ("defn :c::" fn "[^A-Za-z0-9-]") {exit}
           on && /count-span|count-copied|count-masked/ {found=1}
           END {exit !found}
         ' "$src" && ok=1
