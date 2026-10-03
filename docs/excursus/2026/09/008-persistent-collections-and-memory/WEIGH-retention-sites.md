@@ -82,3 +82,9 @@ kind under the check chain: it now stops where the plain build faults. Root it, 
 
 Both rounds changed the compiler after round 1's `verify: ok`. `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`,
 in sequence, on the final source; then the same-input measurement (main's `956b4bb` tree) once more.
+
+## After the second reboot (2026-10-03, 01:02)
+
+Another unexpected reboot, during round 3 (`elf/compile.wat` last written 00:00). The tree is intact; anything under
+`/tmp` is gone, `/var/tmp` survived. Continue round 3 from the tree as it is: R1 the check build catching a decrement of
+a dead object, R2 the clause drop over every pointer kind, R3 both verifies and the same-input measurement.
