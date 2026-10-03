@@ -7,29 +7,32 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-10-02, HEAD ad001c4)
+## elf/ — the live queue (2026-10-03, HEAD 2b9a572)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`ad001c4`** (freeing + reuse landed on main). `git log --oneline -1` must show it
-(or a later commit that only adds notes), and `git status --short` must be EMPTY. Anything else: trust the log.
+**Freshness probe:** written against **`2b9a572`** (the retention sites landed). `git log --oneline -1` must show it
+(or a later commit that only adds notes), and `git status --short` must be EMPTY. The wat-rs it runs against is
+`the-little-wat` at **`e67f9da99`** (persistent Vector/List, F-197 fixed; the floor 5405/5405). Anything else: trust the log.
 
-### NEXT STRIKE — excursus 008: the two retention sites (`:c::buf-add`, `rd/add`), with Grok via pulsare
+### NEXT — excursus 008 3b-3 (closure glue; the iterative worklist for recursive types), DRAW IT
 
-**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `NOTE-M2-landed.md` (what landed, the
-measurement, what is still never freed), `WEIGH-M2.md` (the census rounds), `SCORE-M2-census.md` (R2's attribution
-table; R3), `SCOPE.md`.
+**Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `NOTE-M2-landed.md`, `WEIGH-retention-sites.md`
+(three rounds; the measurement table; round 2's cost map), `CRAWL-stone-3b-drop-glue-and-freeing.md` §2-§3 (closures by
+creation site; the intrusive worklist), `SCOPE.md`.
 
-**On waking:** excursus 008, MEMORY FIRST. LANDED: grow to demand (stone 1); every count true and placed (2, 3a,
-F-208/F-210); glue per type and the poison check (3b-1); freeing to the bump and to size-class free lists, one
-allocation door, the region release retired (3b-2, M2); `WAT_HEAP_CENSUS=1`; R3 (temporaries a built-in reads are
-dropped). The compiler's peak RSS is a third below the old main's, for +19% cycles (the builder accepts it: "we are
-doing more stuff"). **Order (the builder's):** the retention sites `buf-add` (~115 MB) and `rd/add` (~76 MB) → 3b-3
-(closure glue; the worklist for recursive types) → M4 (pages back to the OS) → a performance stone. Rulings: memory
-"very close to what rust feels like", no GC pauses; discovered defects are fixed before building on them; measure a
-memory claim before designing on it.
+**On waking:** excursus 008, MEMORY FIRST. LANDED: grow to demand; every count true and placed per path; glue per type and
+the poison check (which now stops a second decrement of a dead object); freeing to the bump and size-class free lists, one
+allocation door, the region release retired; `WAT_HEAP_CENSUS=1`; the retention sites. On main's `956b4bb` tree the
+compiler peaks at ~56 MB (old main ~446 MB) for 12.74 B instructions (old 6.23 B) — the builder accepts the cost ("we are
+doing more stuff"). **Order (the builder's):** 3b-3 (closures never freed; recursive types leak — `drop-3b-list` ~80 MB) →
+M4 (pages back to the OS) → a performance stone (round 2's cost map; `:c::and-name-dead?` still `rec:`-only). Separately,
+not drawn and not ruled: the wat-rs interpreter's name resolution (~25–35% of stage 0) — a long-term lowering arc like
+rete's (fallback per function, then forced totality). **Rulings:** memory "very close to what rust feels like"; discovered
+defects are fixed before building on them; measure a memory claim before designing on it; a red test is never "baseline";
+**the-little-wat is Grok's territory — a second executor never touches it.**
 
 **Executors:** Grok via pulsare (`holon:grok.1`); Claude Sonnet agents (Agent tool, `model: sonnet`, background) when Grok is out — they get cut off
 mid-run: briefs say "write the SCORE AS YOU GO", and resume a cut-off executor with SendMessage (context kept). Weigh
