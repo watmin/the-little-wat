@@ -50,3 +50,35 @@ tree is intact and shows round 2 under way: `elf/probe/drop-shadow.wat` is resto
 `elf/probe/drop-let-rebind.wat` exists. Continue round 2 (R1 the `cond` drop's crash, R2 confirmed, R3 the cost
 table) from the tree as it is; rebuild any seed you need from `elf/out/compiler.elf` (check its stamp first) or by a
 full `tools/bootstrap.sh`. Put sandboxes you want to survive a reboot under `/var/tmp`, not `/tmp`.
+
+---
+
+## Round 2, weighed (2026-10-03)
+
+**Credited.** The three-name gate is gone; the clause drop covers every `rec:`. R1's root — a last use in an EARLIER
+clause's test, then this clause's body drop: two decrements, the second writing `link-1` into a freed block's count word,
+popped by the next allocation — fixed with `:c::earlier-test-last?`. `drop-shadow.wat` restored; the rebind is
+`drop-let-rebind.wat`. R3's table is the cost map the performance stone needs: every `:c::emit-drop` is 1.816 B of
+11.354 B instructions; clause drops 307.6 M (and the only named piece that moves RSS, +12 MB without it); `and`/`or`
+88.8 M; `assoc` 38.4 M. Peak RSS 64,108 – 65,244 KB on main's tree.
+
+**Not landable — the safety net has a hole, and the gate moved instead of closing:**
+
+## R1 — the check build must catch a decrement of a dead object
+
+Grok's own finding: poison is −1, and the decrement guard is `cmp [rax-8], 1; jb` — UNSIGNED, so −1 is far above 1 and a
+second decrement of a dead object passes. That is why `WAT_DROP_CHECK=1` compiled the double drop clean. The check is the
+one gate for "a drop placed too early"; it must stop on EVERY decrement or increment of a poisoned object. Fix the guard
+(say how — a signed compare, or an explicit poison test — and why no dead object can pass it), and prove it with a mutant:
+an extra drop of a dead record stops under the check with `wat: reference count underflow`.
+
+## R2 — then let the check find the string / vector fault
+
+"Strings, vectors, and functions stay out: `(length (conj v 99))` faults when a clause drop meets the temporary `conj`
+already consumed." That is a kind gate around a known double drop. With R1's guard, run the clause drop over EVERY pointer
+kind under the check chain: it now stops where the plain build faults. Root it, fix it, remove the `rec:` restriction.
+
+## R3 — the gates, re-run
+
+Both rounds changed the compiler after round 1's `verify: ok`. `tools/verify.sh` and `WAT_DROP_CHECK=1 tools/verify.sh`,
+in sequence, on the final source; then the same-input measurement (main's `956b4bb` tree) once more.
