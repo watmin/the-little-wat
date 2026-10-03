@@ -15677,3 +15677,19 @@ The class: liveness is path-INsensitive. A use is the last when no read of the n
 the two arms of an `if` do not follow each other. The fix is a backward liveness walk over the one evaluation
 order (`:c::eval-seq`), with an `if`'s / `cond`'s / `match`'s arms as alternatives — the set of last uses, not one
 node — computed once per function as `:c::Prog/lasts` is today.
+
+### F-211: a mutual tail call is not a loop natively -- `even?`/`odd?` at 10,000,000 segfaults where wat answers
+
+**Open.** Found 2026-10-03 drawing excursus 008 stone 3b-3 (`CRAWL-stone-3b-3.md`). The program
+`docs/excursus/2026/09/008-persistent-collections-and-memory/probe-f211-mutual-tail.wat` is two top-level functions,
+each calling the other in tail position, run to 10,000,000. The interpreter prints `even`. `tools/probe.sh` reports
+`CRASH`. Run directly with core dumps off, the native binary segfaults in 1.4 s, exit 139.
+
+The compiler eliminates SELF tail calls only. `:c::tail-call?` (`elf/compile.wat:2443`) is true when the head is the
+function being compiled, with the same arity, and the call becomes a `jmp` back to the top of the body. Any other call
+in tail position is a `call`, so mutual recursion grows the stack once per call. wat eliminates mutual tail calls to
+10,000,000 (EOPL, F-105's row), and the section's own premise reads *"wat eliminates tail calls, so a compiler for wat
+has to"*. A valid program crashes natively. `elf/src/deep.wat` covers only the self case.
+
+Not traced further. The general fix is a jump to another function's body with the caller's frame replaced, and it
+interacts with the register convention (`:c::TC/nregs`, `:c::param-reg`) and with the drops placed before a tail call.

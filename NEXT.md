@@ -17,7 +17,11 @@ grows long enough to feel like sufficient orientation, prune it — that feeling
 (or a later commit that only adds notes), and `git status --short` must be EMPTY. The wat-rs it runs against is
 `the-little-wat` at **`e67f9da99`** (persistent Vector/List, F-197 fixed; the floor 5405/5405). Anything else: trust the log.
 
-### NEXT — excursus 008 3b-3 (closure glue; the iterative worklist for recursive types), DRAW IT
+### NEXT — excursus 008 3b-3a (the worklist; glue for recursive types), BRIEFED to Grok 2026-10-03
+
+**Drawn:** `CRAWL-stone-3b-3.md` (probe table; closures need the worklist too -- a chain at ONE creation site is as
+deep as the data; one signed check guard), `BRIEF-`/`EXPECTATIONS-stone-3b-3a-the-worklist.md`. Weigh 3a on your own
+runs, then draw 3b-3b (closure glue on the worklist) against the mechanism as built.
 
 **Read `docs/excursus/2026/09/008-persistent-collections-and-memory/` first**: `NOTE-M2-landed.md`, `WEIGH-retention-sites.md`
 (three rounds; the measurement table; round 2's cost map), `CRAWL-stone-3b-drop-glue-and-freeing.md` §2-§3 (closures by
@@ -90,7 +94,8 @@ compile-time refusal. Two rete gates -- self-agreement and agreement with wat's 
 3. Inside that excursus: stone 1 of excursus 001 (caller-side release, branch `excursus-001-stone-1`): it needs a
    rebase onto this typer, an `allocates?` gate, and a real §7 gate before it is struck.
 
-**Open, recorded:** F-201 (a variant as a type argument, `Opt.Some<Color.Red>`, refused where
+**Open, recorded:** F-211 (a mutual tail call is not a loop natively -- a valid program segfaults; found drawing 3b-3)
+· F-201 (a variant as a type argument, `Opt.Some<Color.Red>`, refused where
 `Opt<Color>` is wanted -- a valid program, not traced) · F-007 (bare unknown heads pass `--check`) · F-191 (a valid program segfaults, not
 yet traced) · F-198 (`eval-step!`: namespaced quoted
 heads; an empty capture called a closure — four-questions answer: "a captured environment that binds
