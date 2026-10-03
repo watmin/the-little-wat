@@ -15326,7 +15326,13 @@ normalised. `--check` itself is unchanged.
 
 ### F-197: the wat-rs floor has been red on `the-little-wat` since this repo's own 09-20 stones
 
-**Fix, and the failure is ours.** Excursus 002 stone 2 ran the wat-rs floor as the gate for touching
+**Fixed 2026-10-03** (wat-rs `e67f9da99`, pushed to `the-little-wat`): the floor is 5405/5405. Both lints' offenders were
+ours — `tests/resolve/probe_little_wat_bits_and_code_point.rs` (one inlined-wat false positive from `'e'` in an assert
+message; six `.contains` checks, now `.edn` goldens pinning the whole error) and `src/macros/tests.rs:1446,1463` (from
+`365ebc014`; now exact `assert_eq!`). Nothing weakened. It was carried two weeks as "the known lint reds" — the
+builder: *"why are we propagating failures?"*
+
+**Was: Fix, and the failure is ours.** Excursus 002 stone 2 ran the wat-rs floor as the gate for touching
 `src/check.rs` (`NEXTEST_TEST_THREADS=4`): `5397 run: 5394 passed, 2 failed, 1 timed out`. Both
 failures are content lints — `no_inlined_wat_in_tests`, `no_loose_string_assert` — and both name one
 file, `tests/resolve/probe_little_wat_bits_and_code_point.rs`, written by `0a04c0512` and
