@@ -42,3 +42,11 @@ rebinding shape in its own file (`drop-let-rebind.wat`). Both agree both ways.
 
 +32% instructions over M2 on the same input. Name what was added per drop site and per free (the owning `assoc`'s
 save/load/drop/restore, the clause drops, list traffic), so the performance stone starts from a cost table.
+
+## After the reboot (2026-10-02, 22:52)
+
+An unexpected reboot. `/tmp` is a tmpfs: every sandbox and seed binary under `/tmp` is gone (`/tmp/ret-*`). The
+tree is intact and shows round 2 under way: `elf/probe/drop-shadow.wat` is restored (no longer modified) and
+`elf/probe/drop-let-rebind.wat` exists. Continue round 2 (R1 the `cond` drop's crash, R2 confirmed, R3 the cost
+table) from the tree as it is; rebuild any seed you need from `elf/out/compiler.elf` (check its stamp first) or by a
+full `tools/bootstrap.sh`. Put sandboxes you want to survive a reboot under `/var/tmp`, not `/tmp`.
