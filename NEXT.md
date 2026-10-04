@@ -7,17 +7,22 @@ own, not copied from the sources.
 
 Ordered by how directly each tests what wat claims to be.
 
-## elf/ — the live queue (2026-10-03, HEAD 2b9a572)
+## elf/ — the live queue (2026-10-04, 3b-3a landed)
 
 **This section is a MAP, not the truth.** The truth is `FINDINGS.md` and the git log; every line
 below names where to read and is deliberately too short to stand in for the reading. If it ever
 grows long enough to feel like sufficient orientation, prune it — that feeling is the failure.
 
-**Freshness probe:** written against **`2b9a572`** (the retention sites landed). `git log --oneline -1` must show it
-(or a later commit that only adds notes), and `git status --short` must be EMPTY. The wat-rs it runs against is
-`the-little-wat` at **`e67f9da99`** (persistent Vector/List, F-197 fixed; the floor 5405/5405). Anything else: trust the log.
+**Freshness probe:** written at the landing of excursus 008 3b-3a (the commit that adds `WEIGH-stone-3b-3a.md`'s "LANDED"
+round). `git status --short` must be EMPTY. The wat-rs it runs against is `the-little-wat` at **`89e3d49cd`** or later
+(FxHash name maps, the deftest deadline stopgap; floor 5405/5405). Anything else: trust the log.
 
-### NEXT — excursus 008 3b-3a (the worklist; glue for recursive types), BRIEFED to Grok 2026-10-03
+### NEXT — excursus 008 3b-3b (closure glue on the worklist), TO DRAW
+
+**The builder's direction moved on 2026-10-03/04.** Native, Rust-free wat now lives in **watmin/wat**
+(`~/Work/holon/wat`): a full-source bootstrap ladder, starting with the hex0 seed. Grok builds there, and
+the-little-wat "stays where it is" as reference material. Ask the builder whether 3b-3b proceeds here or waits.
+
 
 **Drawn:** `CRAWL-stone-3b-3.md` (probe table; closures need the worklist too -- a chain at ONE creation site is as
 deep as the data; one signed check guard), `BRIEF-`/`EXPECTATIONS-stone-3b-3a-the-worklist.md`. Weigh 3a on your own

@@ -759,6 +759,9 @@
 (:wat::core::defn :c::cc-above [] -> :wat::core::i64 7)
 ;; `js` -- the sign flag, so a subtraction that went negative is tested without a second compare
 (:wat::core::defn :c::cc-sign [] -> :wat::core::i64 8)
+;; `jl` -- signed less. Poison is −1 and a pending word has bit 63 set, so both are
+;; negative and one `jl` refuses either sentinel. 12 is the low nibble; `jge` is 13.
+(:wat::core::defn :c::cc-less [] -> :wat::core::i64 12)
 ;; `jge` -- signed greater-or-equal, the pair of `jl`
 (:wat::core::defn :c::cc-ge [] -> :wat::core::i64 13)
 ;; `jle` -- signed less-or-equal, which is how a `read` returning 0 or -1 ends a loop

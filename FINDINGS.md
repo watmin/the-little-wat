@@ -15696,7 +15696,9 @@ interacts with the register convention (`:c::TC/nregs`, `:c::param-reg`) and wit
 
 ### F-212: the census's `heap.hiwater_bytes` is the heap top at EXIT, not the high-water mark
 
-**Open.** Found 2026-10-03 weighing excursus 008 stone 3b-3a. A census build of `elf/probe/drop-3b-list.wat` allocates
+**Closed** 2026-10-03. The census keeps the name and a running maximum; `drop-3b-list` printed `heap.hiwater_bytes 4800000`. See `SCORE-stone-3b-3a-the-worklist.md`, round 2.
+
+Found 2026-10-03 weighing excursus 008 stone 3b-3a. A census build of `elf/probe/drop-3b-list.wat` allocates
 and frees 2,000,000 records (80,000,000 bytes, every one freed as the youngest) and peaks at about 4 MB of RSS. It prints
 `heap.hiwater_bytes 0`.
 

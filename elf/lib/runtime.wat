@@ -615,6 +615,22 @@
       scan prelude bsearch store
       (:c::reg-pop (:c::r9)))))
 
+;; F-212: `top` is the heap pointer a bump is about to commit. Keep the greater of it and the
+;; word at `:c::hdr-census-hiwater`. `r10` is restored; `top` is not written. Unsigned: a
+;; pointer above the stored mark is above, not negative.
+(:wat::core::defn :c::census-note-top [top <- :wat::core::i64] -> :wat::core::String
+  (:wat::core::let
+    [load (:c::mov-rm (:c::r14) (:c::hdr-census-hiwater) (:c::r10))
+     cmp (:c::cmp-rr (:c::r10) top)
+     store (:c::mov-mr top (:c::r14) (:c::hdr-census-hiwater))
+     skip (:c::br-over (:c::jcc-rel8 (:c::cc-below-eq)) store)]
+    ;; `:c::br-over` emits the branch only. The store follows it, which is the seven
+    ;; bytes `skip` measured; without it the branch falls into the pop and the mark never moves.
+    (:wat::string::concat
+      (:c::reg-push (:c::r10))
+      load cmp skip store
+      (:c::reg-pop (:c::r10)))))
+
 ;; A fresh block's site word sits 8 bytes before the count word, so the payload end -- what
 ;; the youngest test and the extend compare against r15 -- does not move relative to the block.
 (:wat::core::defn :c::census-fresh-slide [base <- :wat::core::i64 top <- :wat::core::i64] -> :wat::core::String
@@ -756,7 +772,8 @@
              (:c::cmp-rm (:c::r14) (:c::hdr-limit) top))
        at-call (:wat::core::+ here (:wat::core::+ (:c::hexlen chk) (:c::rel8-size)))
        to-oom (:c::rt-call (:c::at-oom lay) (:wat::core::+ at-call (:c::call-size)))]
-      (:wat::string::concat chk (:c::jbe-over to-oom) to-oom))
+      (:wat::string::concat chk (:c::jbe-over to-oom) to-oom
+        (:wat::core::if census? (:c::census-note-top top) "")))
     (:wat::core::let
       [head (:wat::string::concat (:c::mov-rr base top) grow)
        ;; excursus 008 M2 census: `r13` joins the self-contained push/pop set ONLY when
@@ -887,7 +904,8 @@
       (:wat::string::concat
         head pushes size-calc resolve census-total cmp-small
         (:c::br-over (:c::jcc-rel8 (:c::cc-greater)) small-section)
-        small-section large-decide pop-then-tail))))
+        small-section large-decide pop-then-tail
+        (:wat::core::if census? (:c::census-note-top top) "")))))
 
 ;; `vec_new(rax = len) -> rax` -- a record, whose arm word says which one. The size is
 ;; `hdr + len*8` and `lea` computes it without touching a flag: scale 8, no base at all, which
@@ -1081,14 +1099,31 @@
                  (:c::mov-rm (:c::rax) 0 (:c::r8))
                  (:c::rm "8d" (:c::rdx) (:c::rax) (:c::r8) w (:c::vec-data))
                  (:c::cmp-rr (:c::r15) (:c::rdx)))
+     ;; Path 3's skip is the extend plus path 2. The census high-water note sits at the end of
+     ;; a non-reusing bump, so the distance fits `eb` without the note and does not fit with it.
+     ;; Plain keeps the short jump: the note is absent, and `disp8?` is false only when it is
+     ;; present. Later addresses take `hexlen` of the form actually emitted.
+     fall-n (:wat::core::+ (:c::hexlen extend-at0) (:c::hexlen grown))
      fallback (:wat::string::concat
                 (:c::mov-rr (:c::rcx) (:c::r9))
-                (:c::br-len "eb" (:wat::core::+ (:c::hexlen extend-at0) (:c::hexlen grown))))
+                (:wat::core::if (:c::disp8? fall-n)
+                  (:c::br-len "eb" fall-n)
+                  (:c::jmp-rel32 fall-n)))
+     ;; This jump skips `extend` itself (same length as `extend-at0`: the bump's encoding width
+     ;; does not depend on the address plugged into it). Same rule as `fallback`.
+     own-skip (:wat::core::+ (:c::hexlen flat-test)
+                (:wat::core::+ (:c::rel32-size)
+                  (:wat::core::+ (:c::hexlen tail-test)
+                    (:wat::core::+ (:c::rel8-size)
+                      (:wat::core::+ (:c::hexlen fallback) (:c::hexlen extend-at0))))))
+     own-br (:wat::core::if (:c::disp8? own-skip)
+              (:c::br-len (:c::jcc-rel8 (:c::cc-zero)) own-skip)
+              (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero)) (:asm::le own-skip 4)))
      a-j1 (:wat::core::+ P (:c::hexlen head))
      a-j2 (:wat::core::+ a-j1
             (:wat::core::+ (:c::rel32-size)
               (:wat::core::+ (:c::hexlen own-test)
-                (:wat::core::+ (:c::rel8-size) (:c::hexlen flat-test)))))
+                (:wat::core::+ (:c::hexlen own-br) (:c::hexlen flat-test)))))
      ;; the address `extend` begins at, as a sum of the pieces that precede it -- not a
      ;; remembered number: own-test's length changed under F2, and a literal here (as it used
      ;; to be, "56") would have gone stale silently instead of moving with it.
@@ -1255,7 +1290,7 @@
              (:c::ret))
      pre (:wat::core::+
            (:wat::core::+ (:c::hexlen head) (:c::rel32-size))
-           (:wat::core::+ (:c::hexlen own-test) (:c::rel8-size))
+           (:wat::core::+ (:c::hexlen own-test) (:c::hexlen own-br))
            (:wat::core::+ (:c::hexlen flat-test) (:c::rel32-size))
            (:wat::core::+ (:c::hexlen tail-test) (:c::rel8-size))
            (:wat::core::+ (:c::hexlen fallback)
@@ -1276,12 +1311,7 @@
       (:c::rt-branch (:c::cc-zero) consume-at
         (:wat::core::+ a-j1 (:c::rel32-size)))
       own-test
-      (:c::br-len (:c::jcc-rel8 (:c::cc-zero))
-        (:wat::core::+ (:c::hexlen flat-test)
-          (:wat::core::+ (:c::rel32-size)
-            (:wat::core::+ (:c::hexlen tail-test)
-              (:wat::core::+ (:c::rel8-size)
-                (:wat::core::+ (:c::hexlen fallback) (:c::hexlen extend)))))))
+      own-br
       flat-test
       (:c::rt-branch (:c::negate-cc (:c::cc-zero)) consume-at
         (:wat::core::+ a-j2 (:c::rel32-size)))
@@ -2494,7 +2524,13 @@
 (:wat::core::defn :c::rt-uflow [lay <- :c::Layout] -> :wat::core::String
   (:c::rt-abort "wat: reference count underflow" lay (:c::at-uflow lay)))
 
-(:wat::core::defn :c::rt-count [] -> :wat::core::i64 35)
+;; excursus 008 stone 3b-3a round 2 (R1): a heap pointer at or above `2^47` is not an underflow.
+;; The worklist packs `k` into those bits, so the address no longer round-trips. The stop names
+;; that fact and exits 70, the same shape as `:c::rt-oom`.
+(:wat::core::defn :c::rt-range [lay <- :c::Layout] -> :wat::core::String
+  (:c::rt-abort "wat: heap address beyond the worklist's 47 bits" lay (:c::at-range lay)))
+
+(:wat::core::defn :c::rt-count [] -> :wat::core::i64 36)
 
 ;; **the one place the routine order is written.** It used to be in three: this list, the
 ;; `rt-at lvl N` table inside `:c::runtime`, and the recursion in the `at-*` chain. The other two
@@ -2537,6 +2573,7 @@
     ((:wat::core::= i 31) (:c::rt-prim-write-hex lay))
     ((:wat::core::= i 32) (:c::rt-prim-read-hex lay census?))
     ((:wat::core::= i 33) (:c::rt-io-read-file lay census?))
+    ((:wat::core::= i 34) (:c::rt-range lay))
     (:else (:c::rt-uflow lay))))
 
 (:wat::core::defn :c::rt-cat [lvl <- :wat::core::i64 i <- :wat::core::i64 lay <- :c::Layout
@@ -2652,10 +2689,13 @@
 (:wat::core::defn :c::at-wrhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 31))
 (:wat::core::defn :c::at-rdhex [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 32))
 (:wat::core::defn :c::at-rdfile [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 33))
+;; R1 (stone 3b-3a round 2): the worklist's range stop. Index 34, immediately before underflow,
+;; which stays the `:else` so it remains `(:c::rt-count) - 1`.
+(:wat::core::defn :c::at-range [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 34))
 ;; R17: the check build's underflow abort -- see `:c::rt-uflow` above and `:c::dropchk-hex`.
-;; G6 (stone 3b): index 34 used to be `:c::rt-drop1`, retired -- this is the `:c::rt-nth`
-;; `:else` fallthrough now, one index earlier than before.
-(:wat::core::defn :c::at-uflow [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 34))
+;; G6 (stone 3b): this used to be index 34, `:c::rt-drop1` before that. It is the `:c::rt-nth`
+;; `:else` fallthrough, one past the last explicit index.
+(:wat::core::defn :c::at-uflow [lay <- :c::Layout] -> :wat::core::i64 (:wat::core::nth lay 35))
 
 ;; ---------------------------------------------------------------- what the heap looks like
 ;;
@@ -2696,17 +2736,23 @@
 (:wat::core::defn :c::hdr-small [] -> :wat::core::i64 16)
 (:wat::core::defn :c::hdr-large [] -> :wat::core::i64 (:wat::core::+ 16 512))
 
+;; excursus 008 stone 3b-3a: two worklist words, always present, sitting where the free-list
+;; tables end. Anonymous mmap pages come zeroed, so head 0 and busy 0 need no init. A head of 0
+;; means nothing is waiting; a nonzero head is a dead object's user pointer, and that object's
+;; count word holds the pending link. Census tables, when the switch is on, still begin at
+;; `:c::hdr-census-alloc`, which is now one pair of words later. The free-list tables do not move.
+(:wat::core::defn :c::hdr-wl-head [] -> :wat::core::i64 (:wat::core::+ 16 (:wat::core::+ 512 512)))
+(:wat::core::defn :c::hdr-wl-busy [] -> :wat::core::i64 (:wat::core::+ (:c::hdr-wl-head) 8))
+
 ;; excursus 008 M2 census (BRIEF-M2-census-where-the-heap-goes.md): three more fixed tables,
-;; present ONLY when `WAT_HEAP_CENSUS=1` widens the header -- byte-identical to today when it does
-;; not, the same technique M2 used for the small/large tables above. `:c::hdr-census-alloc` is
-;; where the small/large tables END, i.e. today's `hdr-buf` value (1040) -- so the OFF case is
-;; exactly today's layout, unchanged.
+;; present ONLY when `WAT_HEAP_CENSUS=1` widens the header further. `:c::hdr-census-alloc` is
+;; the first byte after the worklist words.
 ;;
 ;; `:c::census-nroutines` allocating routines (every `:c::rt-bump` call site with `reuse?=true` --
 ;; the brief's "each `:c::rt-bump` call site is one routine"), 4 words each: count, bytes,
 ;; reuse-count, reuse-bytes (how many/how much of the above were TAKEN from a free list).
 (:wat::core::defn :c::census-nroutines [] -> :wat::core::i64 13)
-(:wat::core::defn :c::hdr-census-alloc [] -> :wat::core::i64 (:wat::core::+ 16 (:wat::core::+ 512 512)))
+(:wat::core::defn :c::hdr-census-alloc [] -> :wat::core::i64 (:wat::core::+ (:c::hdr-wl-busy) 8))
 (:wat::core::defn :c::census-alloc-size [] -> :wat::core::i64 (:wat::core::* (:c::census-nroutines) 32))
 (:wat::core::defn :c::census-alloc-count [rid <- :wat::core::i64] -> :wat::core::i64
   (:wat::core::+ (:c::hdr-census-alloc) (:wat::core::* rid 32)))
@@ -2773,10 +2819,19 @@
   (:wat::core::+ (:wat::core::- (:c::census-rec-sample) (:c::hdr-census-meta))
     (:wat::core::* (:c::census-nrecs-max) 8)))
 
+;; F-212: the high-water word. One word after the census tables, present only when those
+;; tables are (it is inside `:c::census-size`, so `:c::hdr-buf` OFF does not move). It holds
+;; the greatest `r15` a bump has committed. Anonymous mmap leaves it 0; the census stub stores
+;; the heap start into it before any bump, and a bump raises it. Youngest-free rewinds `r15`
+;; and does not touch this word.
+(:wat::core::defn :c::hdr-census-hiwater [] -> :wat::core::i64
+  (:wat::core::+ (:c::hdr-census-alloc)
+    (:wat::core::+ (:c::census-alloc-size)
+      (:wat::core::+ (:c::census-free-size)
+        (:wat::core::+ (:c::census-zero-size) (:c::census-sites-size))))))
+
 (:wat::core::defn :c::census-size [] -> :wat::core::i64
-  (:wat::core::+ (:c::census-alloc-size)
-    (:wat::core::+ (:c::census-free-size)
-      (:wat::core::+ (:c::census-zero-size) (:c::census-sites-size)))))
+  (:wat::core::+ (:wat::core::- (:c::hdr-census-hiwater) (:c::hdr-census-alloc)) 8))
 
 ;; `:c::hdr-buf` now takes the switch: OFF, this is `:c::hdr-census-alloc` -- today's value,
 ;; unchanged. ON, the three census tables sit between the large table and the buffer.

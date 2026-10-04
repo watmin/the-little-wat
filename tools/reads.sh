@@ -64,6 +64,15 @@ ALLOW=(
   # header at r14. Those words are i64s the program stored about itself, not a reference
   # taken out of a Vector, a record, or a payload variant.
   '(:c::mov-rm (:c::r14) disp (:c::rax))|1|:c::census-line: one census counter from the allocator header, an i64, not a container field'
+  # excursus 008 stone 3b-3a: pend reads the worklist head out of the allocator header, and the
+  # pending word out of a dead object'"'"'s count slot, to learn which body to run. Neither is a
+  # reference taken from a container that still holds it.
+  '(:c::mov-rm (:c::r14) (:c::hdr-wl-head) (:c::r8))|1|:c::pend-glue-body: the worklist head, an address in the allocator header'
+  '(:c::mov-rm (:c::r14) (:c::hdr-wl-head) (:c::rax))|1|:c::pend-glue-body: the worklist head again, popped so the drain can walk it'
+  '(:c::mov-rm (:c::rax) -8 (:c::r9))|1|:c::pend-glue-body: the pending word in the dead object count slot, decoded into k and next'
+  # F-212: the census report reads the high-water word out of the allocator header. It is the
+  # greatest bump pointer, not a reference taken from a container.
+  '(:c::mov-rm (:c::r14) (:c::hdr-census-hiwater) (:c::rax))|1|:c::census-hiwater: the stored high-water bump pointer'
   # excursus 008 M2 census R2: the site table is the allocator header too. Each load is an
   # i64 the program stored about itself (a function address, a byte count, a name length).
   '(:c::mov-rm (:c::r9) src-disp (:c::r10))|1|:c::census-copy-word: one word of the site blob, an i64, into the allocator header'
@@ -102,6 +111,9 @@ NOTREAD+='cat cat-own slot slot-own varr vnew str bool put i64 drop1 '
 # uflow (excursus 008 stone 3a round 8, R18): the check build's underflow abort -- it answers
 # nothing a container holds; it is reached instead of `ud2` and ends the process. Not a read.
 NOTREAD+='uflow '
+# range (excursus 008 stone 3b-3a round 2): the worklist's 2^47 stop. It answers nothing a
+# container holds; it names the address and exits 70.
+NOTREAD+='range '
 while IFS= read -r h; do
   [ -z "$h" ] && continue
   n=${h%%:*}

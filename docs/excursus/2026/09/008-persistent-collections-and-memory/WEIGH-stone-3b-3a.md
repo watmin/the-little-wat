@@ -56,3 +56,22 @@ FxHash for the interpreter's name maps, the lookup without its discarded provena
 stopgap; it is −13% instructions on wat-rs's `call-heavy` and unobservable by contract. Its first stage 0 is a test
 of that contract: every binary must come out byte-identical. Record stage 0's milliseconds in the SCORE as a data
 point; the last plain stage 0 was 2,885,078 ms on a shared machine.
+
+## Round 2, weighed — LANDED (2026-10-04)
+
+**Read.** Both refusals in `pend` jump to `:c::at-range`, and an unknown `k` still jumps to underflow. The census's
+`:c::census-note-top` compares unsigned and only raises the stored mark; it is emitted only in census builds. No bump
+site passes `r10` as `top` (all 17 checked: `r11`, `rcx` or `rsi`).
+
+**My runs** on this tree, wat-rs `89e3d49cd`:
+- 36 fixtures × plain and check: 72 / 72 agree.
+- `tools/verify.sh`: `verify: ok`, at a fixpoint of 612,458 bytes.
+- `WAT_DROP_CHECK=1 tools/verify.sh`: `verify: ok`, at a fixpoint of 740,885 bytes, matching Grok's. Rules: 0
+  conflicts in 16,903 pairs. Types: 0 in 32,296 nodes.
+
+Stage 0 on the FxHash wat-rs build was 2,891,543 ms (Grok's run) and 2,310,572 ms (mine, check build). The machine was
+shared both times, so the speedup is not established by wall time.
+
+**3b-3a lands.** Recursive types drop in a loop with a flat stack: list 79 MB → 4–6 MB, tree 141 → 8 MB, mutual 79 → 5
+MB. One signed guard refuses both poison and a pending link. F-212 is closed. Next in this excursus is 3b-3b (closure
+glue on the worklist).

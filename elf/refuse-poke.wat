@@ -4390,24 +4390,24 @@
 (:wat::core::defn :c::tag-needed? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
   (:wat::core::and (:c::maybe-unit? t) (:wat::core::< (:c::variant-of t pg) 0)))
 
-;; excursus 008 stone 3b-1 (G5): the increment's half of the poison check. A poisoned object's
-;; count word (`:c::poison-count`) cannot equal any live count, so one equality test in front
-;; of the ordinary increment is enough -- and it reuses the SAME named stop the decrement side
-;; reaches (`:c::rt-uflow`), not a second message: "a poisoned object was touched" is one fact,
-;; whichever direction touched it. `tag?` is the same convention `:c::dropchk-hex`'s `prefix`
-;; is: whether an outer `:c::tag-then` sits between `:c::here o` and these bytes, asked of the
-;; guard itself with an empty body rather than copied by hand.
+;; excursus 008 stone 3b-3a: the increment guard. A count word that is not live is negative:
+;; poison is −1, and a pending word has bit 63 set. `cmp [rax-8], 0; jl` refuses both, and it
+;; reuses `:c::rt-uflow`. A literal's count is exactly 0. Signed less-than against 0 does not
+;; take that, so execution falls through to the literal guard (`:c::lit-then`), which still sees
+;; 0 and skips the increment. An owned-flat marker (`2^32+1`) is positive, so it is not refused.
+;; `tag?` is the same convention `:c::dropchk-hex`'s `prefix` is: whether an outer `:c::tag-then`
+;; sits between `:c::here o` and these bytes, asked of the guard itself with an empty body.
 (:wat::core::defn :c::countchk-hex [o <- :c::Out rt <- :c::Layout pg <- :c::Prog
                                     tag? <- :wat::core::bool] -> :wat::core::String
   (:wat::core::if (:wat::core::not (:c::Prog/dchk pg)) ""
     (:wat::core::let
       [tag-pfx (:wat::core::if tag? (:c::hexlen (:c::tag-then "")) 0)
-       chk (:c::cmp-mi (:c::rax) -8 (:c::poison-count))
+       chk (:c::cmp-mi (:c::rax) -8 0)
        jcc-end (:wat::core::+ (:c::here o)
                   (:wat::core::+ tag-pfx (:wat::core::+ (:c::hexlen chk) (:c::rel32-size))))
        rel (:wat::core::- (:c::at-uflow rt) jcc-end)]
       (:wat::string::concat chk
-        (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero)) (:asm::le rel 4))))))
+        (:wat::string::concat (:c::jcc-rel32 (:c::cc-less)) (:asm::le rel 4))))))
 
 (:wat::core::defn :c::count-hex [t <- :wat::core::String pg <- :c::Prog o <- :c::Out
                                  rt <- :c::Layout] -> :wat::core::String
@@ -4443,8 +4443,9 @@
 ;; that already reads this compiler's own source, and `:c::rt-slurp` behind it loops on `read`
 ;; until it returns nothing rather than trusting `stat` -- which a procfs file reports as size
 ;; zero -- so the real content comes back on the interpreter and on every compiled stage alike.
-;; Every decrement then refuses a poisoned count, and a count already below one, before the
-;; `dec` (a literal's zero is skipped first) and aborts through `:c::rt-uflow`.
+;; Every decrement then refuses a count that is not live — poison or a pending word, both
+;; negative — before the `dec` (a literal's zero is skipped first, outside this guard) and
+;; aborts through `:c::rt-uflow`.
 ;; R11 (round 5): called ONCE, from `:c::empty-prog`, and carried in `:c::Prog/dchk` -- not
 ;; called again per drop. See `:c::drop-hex` below.
 (:wat::core::defn :c::drop-check? [] -> :wat::core::bool
@@ -4505,31 +4506,22 @@
      tag-pfx (:c::hexlen (:c::tag-then ""))
      lit-pfx (:c::hexlen (:c::lit-then ""))
      prefix (:wat::core::+ (:wat::core::if tag? tag-pfx 0) (:wat::core::if lit? lit-pfx 0))
-     ;; check build only. Poison is −1 (`:c::poison-count`): the check build writes it
-     ;; when a count reaches zero and does not free, so the word stays −1. The old guard
-     ;; was only `cmp [rax-8], 1; jb`, and `jb` is unsigned, so −1 is above 1 and a second
-     ;; decrement passed. The equality test is the one `:c::countchk-hex` already emits on
-     ;; an increment (`cmp` against poison, `je` to `:c::rt-uflow`) and it runs BEFORE `dec`.
-     ;; −1 equals poison, so that `je` stops. A non-literal 0 is still below 1 unsigned, so
-     ;; the `jb` stops. The literal skip outside this guard matches exactly 0; −1 is not 0,
-     ;; so a poisoned object is not skipped as a literal. No live count equals poison.
+     ;; check build only. One signed compare. Poison is −1 and a pending word has bit 63 set,
+     ;; so both are negative: `cmp [rax-8], 1; jl` stops 0, poison and pending, and a live
+     ;; count that reached this guard is at least 1 (the literal skip below matches exactly 0
+     ;; and jumps over this whole decrement, so a literal never gets here). The increment side
+     ;; compares with 0, where a literal's exact 0 does not take `jl` and does reach its skip.
+     member? (:c::member? t pg)
      guard (:wat::core::if dchk?
              (:wat::core::let
-               [poison (:c::cmp-mi (:c::rax) -8 (:c::poison-count))
-                je-end (:wat::core::+ (:c::here o)
+               [below "488378f801"
+                jl-end (:wat::core::+ (:c::here o)
                          (:wat::core::+ prefix
-                           (:wat::core::+ (:c::hexlen poison) (:c::rel32-size))))
-                je-rel (:wat::core::- (:c::at-uflow rt) je-end)
-                below "488378f801"
-                jb-end (:wat::core::+ je-end
-                         (:wat::core::+ (:c::hexlen below) (:c::rel32-size)))
-                jb-rel (:wat::core::- (:c::at-uflow rt) jb-end)]
-               (:wat::string::concat poison
-                 (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero))
-                   (:wat::string::concat (:asm::le je-rel 4)
-                     (:wat::string::concat below
-                       (:wat::string::concat (:c::jcc-rel32 (:c::cc-below))
-                         (:asm::le jb-rel 4)))))))
+                           (:wat::core::+ (:c::hexlen below) (:c::rel32-size))))
+                jl-rel (:wat::core::- (:c::at-uflow rt) jl-end)]
+               (:wat::string::concat below
+                 (:wat::string::concat (:c::jcc-rel32 (:c::cc-less))
+                   (:asm::le jl-rel 4))))
              "")
      dec (:c::dec-hex)
      ;; the dec above just took this object's count from 1 to 0 -- died right here -- or
@@ -4575,10 +4567,12 @@
      ;; `free-pos` is where `free-hex` begins, now right after `call-hex`. None of the five
      ;; free routines ever touch `rax`, so this call needs no `push`/`pop` of its own.
      free-pos (:wat::core::+ body-pos (:c::hexlen call-hex))
-     free-hex (:wat::core::if dchk? ""
+     ;; a member's drain owns the free and the poison. Every other type keeps this call.
+     free-hex (:wat::core::if (:wat::core::or dchk? member?) ""
                 (:wat::string::concat "e8"
                   (:asm::le (:wat::core::- (:c::free-target t pg) (:wat::core::+ free-pos 5)) 4)))
-     poison (:wat::core::if dchk? (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
+     poison (:wat::core::if (:wat::core::and dchk? (:wat::core::not member?))
+              (:c::mov-mi (:c::rax) -8 (:c::poison-count)) "")
      ;; excursus 008 M2 census: every count that reaches zero, by category. The free above
      ;; has already run; the old "no free" name was the position of this add, not its meaning.
      ;; Placed LAST, not first: `call-pos`/`free-pos` above are
@@ -4586,7 +4580,8 @@
      ;; = body-pos + 1`, the one `push-rax` byte) -- putting anything before it would be silently
      ;; wrong. Appending after `poison` touches none of that arithmetic, since nothing downstream
      ;; depends on where `body` ENDS (`zskip`'s own skip-length is `hexlen(body)`, read generically).
-     zero-hex (:wat::core::if (:c::Prog/census pg)
+     ;; A member is counted in `pend`, once, when the drain frees or poisons it.
+     zero-hex (:wat::core::if (:wat::core::and (:c::Prog/census pg) (:wat::core::not member?))
                 (:c::add-mi (:c::r14) (:c::census-zero-count (:c::census-cat-of (:c::glue-target-ty t pg))) 1)
                 "")
      body (:wat::string::concat call-hex (:wat::string::concat free-hex (:wat::string::concat poison zero-hex)))
@@ -4595,9 +4590,10 @@
       (:wat::string::concat dec
         (:wat::string::concat zchk (:wat::string::concat zskip body)))))))
 
-;; Same guards as `:c::count-hex`, then the decrement. A literal (count 0) is skipped.
-;; A check build compares the count with poison and then with 1, and jumps to
-;; `:c::rt-uflow` on either, before the decrement. That is a double drop.
+;; Same guards as `:c::count-hex`, then the decrement. A literal (count 0) is skipped
+;; by `:c::lit-then` before the decrement guard runs, which is why that guard may compare
+;; against 1 and still not see a literal. A check build compares the count with 1 and jumps
+;; to `:c::rt-uflow` on signed less — 0, poison −1, or a pending word — before the decrement.
 (:wat::core::defn :c::drop-hex [t <- :wat::core::String pg <- :c::Prog o <- :c::Out
                                 rt <- :c::Layout] -> :wat::core::String
   (:wat::core::let
@@ -5127,10 +5123,10 @@
     ;; **excursus 008 F3: `vec:T` is an edge to `T`.** The trie bounds a Vector's OWN levels
     ;; (`:c::node-arity`, `:c::node-glue-body`), not recursion through its ELEMENTS: a type
     ;; recursive through a Vector field (`:user::Val`'s `:Vec` here; a tree of nodes with a
-    ;; Vector of children) is recursive, the same as through a record or a payload enum field,
-    ;; and must get no glue until 3b-3's worklist -- its own glue would otherwise call itself
-    ;; once per level of the user's DATA, unbounded, against the ruling that drops are
-    ;; iterative. This used to fall to the `:else` below (no children at all), which is why
+    ;; Vector of children) is recursive, the same as through a record or a payload enum field.
+    ;; Stone 3b-3a makes that cycle a member: the stub enqueues and `pend` runs the body in a
+    ;; loop. A nested `call` per level of the user's data would grow the stack with the data.
+    ;; This used to fall to the `:else` below (no children at all), which is why
     ;; `:c::cyclic?` missed it.
     ((:wat::string::starts-with? t "vec:")
       (:wat::core::conj (:wat::core::Vector :- [:wat::core::String]) (:c::elem-ty t)))
@@ -5170,38 +5166,102 @@
           (:wat::core::conj acc t) acc)))))
 
 ;; every `vec:X` needing glue is paired with its own trie-node helper, `node:X` -- never excluded
-;; by the cycle graph, because the trie's own recursion is bounded regardless of `X`
+;; by the cycle graph, because the trie's own recursion is bounded regardless of `X`. A cyclic
+;; `vec:X` is a member (stub plus body, appended below), not an ordinary glue target: its body
+;; would otherwise call `X`'s stub from outside the drain.
 (:wat::core::defn :c::gtys-from-vecs [vecs <- (:wat::core::Vector :- [:wat::core::String])
-                                      i <- :wat::core::i64
+                                      i <- :wat::core::i64 pg <- :c::Prog
                                       acc <- (:wat::core::Vector :- [:wat::core::String])]
     -> (:wat::core::Vector :- [:wat::core::String])
   (:wat::core::if (:wat::core::>= i (:wat::core::length vecs)) acc
     (:wat::core::let
       [v (:wat::core::nth vecs i)
        nd (:wat::string::concat "node:" (:c::elem-ty v))
-       acc1 (:wat::core::conj acc v)
+       acc1 (:wat::core::if (:c::cyclic? v pg) acc (:wat::core::conj acc v))
        acc2 (:wat::core::if (:wat::core::>= (:c::index-of-str acc1 nd 0) 0) acc1
               (:wat::core::conj acc1 nd))]
-      (:c::gtys-from-vecs vecs (:wat::core::+ i 1) acc2))))
+      (:c::gtys-from-vecs vecs (:wat::core::+ i 1) pg acc2))))
 
-;; excursus 008 stone 3b-2 (F1/F2): five pseudo-types, ALWAYS present (unconditionally
-;; appended, never found by `:c::census-walk`) so the five free routines they name are
-;; always placed and always addressable: `freestr` (a String's bytes), `freerec` (a
-;; record's OR a payload enum's, the same `len*8+16` shape), `freevec` (a flat, owned-flat,
-;; or trie Vector's own header -- the tag word says which), `freenode` (a trie node's fixed
-;; shape, called only from `:c::vec-glue-body`'s root and `:c::node-glue-body`'s child, not
-;; from a drop site directly), and `closize` (a closure's size, which cannot be read from
-;; the object -- see `:c::Fn/ncaps`).
+;; every cyclic shape or vector, in census order. That order is the member index `k`.
+(:wat::core::defn :c::cyclic-into [ts <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 pg <- :c::Prog
+                                   acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ts)) acc
+    (:wat::core::let [t (:wat::core::nth ts i)]
+      (:c::cyclic-into ts (:wat::core::+ i 1) pg
+        (:wat::core::if (:c::cyclic? t pg) (:wat::core::conj acc t) acc)))))
+
+(:wat::core::defn :c::mbody-name [t <- :wat::core::String] -> :wat::core::String
+  (:wat::string::concat "mbody:" t))
+
+(:wat::core::defn :c::mbody? [s <- :wat::core::String] -> :wat::core::bool
+  (:wat::string::starts-with? s "mbody:"))
+
+(:wat::core::defn :c::mbody-ty [s <- :wat::core::String] -> :wat::core::String
+  (:wat::string::subs s 6 (:wat::string::length s)))
+
+(:wat::core::defn :c::conj-mbodies [acc <- (:wat::core::Vector :- [:wat::core::String])
+                                    ms <- (:wat::core::Vector :- [:wat::core::String])
+                                    i <- :wat::core::i64]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ms)) acc
+    (:c::conj-mbodies (:wat::core::conj acc (:c::mbody-name (:wat::core::nth ms i)))
+      ms (:wat::core::+ i 1))))
+
+;; `k` of a member type: how many `mbody:` entries precede its own. −1 when it is not a member.
+(:wat::core::defn :c::member-k-at [gtys <- (:wat::core::Vector :- [:wat::core::String])
+                                   i <- :wat::core::i64 seen <- :wat::core::i64
+                                   want <- :wat::core::String] -> :wat::core::i64
+  (:wat::core::if (:wat::core::>= i (:wat::core::length gtys)) -1
+    (:wat::core::let [s (:wat::core::nth gtys i)]
+      (:wat::core::if (:wat::core::= s want) seen
+        (:c::member-k-at gtys (:wat::core::+ i 1)
+          (:wat::core::if (:c::mbody? s) (:wat::core::+ seen 1) seen) want)))))
+
+(:wat::core::defn :c::member-k [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::i64
+  (:c::member-k-at (:c::Prog/gtys pg) 0 0 (:c::mbody-name t)))
+
+(:wat::core::defn :c::member? [t <- :wat::core::String pg <- :c::Prog] -> :wat::core::bool
+  (:wat::core::>= (:c::member-k (:c::glue-target-ty t pg) pg) 0))
+
+(:wat::core::defn :c::members-of [gtys <- (:wat::core::Vector :- [:wat::core::String])
+                                  i <- :wat::core::i64
+                                  acc <- (:wat::core::Vector :- [:wat::core::String])]
+    -> (:wat::core::Vector :- [:wat::core::String])
+  (:wat::core::if (:wat::core::>= i (:wat::core::length gtys)) acc
+    (:wat::core::let [s (:wat::core::nth gtys i)]
+      (:c::members-of gtys (:wat::core::+ i 1)
+        (:wat::core::if (:c::mbody? s) (:wat::core::conj acc (:c::mbody-ty s)) acc)))))
+
+;; excursus 008 stone 3b-2 (F1/F2) plus stone 3b-3a: six pseudo-types, ALWAYS present
+;; (unconditionally appended, never found by `:c::census-walk`). The five free routines:
+;; `freestr` (a String's bytes), `freerec` (a record's OR a payload enum's, the same
+;; `len*8+16` shape), `freevec` (a flat, owned-flat, or trie Vector's own header -- the tag
+;; word says which), `freenode` (a trie node's fixed shape, called only from
+;; `:c::vec-glue-body`'s root and `:c::node-glue-body`'s child, not from a drop site
+;; directly), and `closize` (a closure's size, which cannot be read from the object -- see
+;; `:c::Fn/ncaps`). `pend` is the worklist drain. Each member is two entries in front of
+;; these: the type string, which is the stub `:c::glue-addr` answers, and `mbody:` plus that
+;; string, which is today's glue body and which only `pend` calls.
 (:wat::core::defn :c::glue-census [pg <- :c::Prog] -> (:wat::core::Vector :- [:wat::core::String])
   (:wat::core::let [c (:c::census-run pg)
-                    base (:c::gtys-from-vecs (:c::Census/vecs c) 0
+                    base (:c::gtys-from-vecs (:c::Census/vecs c) 0 pg
                            (:c::gtys-from-shapes (:c::Census/shapes c) 0 pg
-                             (:wat::core::Vector :- [:wat::core::String])))]
+                             (:wat::core::Vector :- [:wat::core::String])))
+                    ms (:c::cyclic-into (:c::Census/vecs c) 0 pg
+                         (:c::cyclic-into (:c::Census/shapes c) 0 pg
+                           (:wat::core::Vector :- [:wat::core::String])))
+                    stubbed (:c::vcat base ms 0)
+                    bodied (:c::conj-mbodies stubbed ms 0)]
     (:wat::core::conj
       (:wat::core::conj
         (:wat::core::conj
-          (:wat::core::conj (:wat::core::conj base "freestr") "freerec") "freevec") "freenode")
-      "closize")))
+          (:wat::core::conj
+            (:wat::core::conj (:wat::core::conj bodied "freestr") "freerec") "freevec")
+          "freenode")
+        "closize")
+      "pend")))
 
 ;; the shared tail every free routine ends with: `rax` is the dying object (a type-specific
 ;; POINTER -- `vec-ptr`/`varr-ptr` bytes past the block's own start), `startdisp` is how far
@@ -5574,13 +5634,14 @@
      ;; persistent structure, so another Vector version may still hold this exact root. Drop
      ;; it once; walk its children only when that was the last reference, the same
      ;; zero-check-then-recurse shape every other glue call already uses.
+     ;; same signed test as `:c::dropchk-hex`: poison −1 is less than 1, a live count is not.
      root-guard (:wat::core::if dchk?
                   (:wat::core::let
                     [chk (:c::cmp-mi (:c::rax) -8 1)
-                     jb-end (:wat::core::+ (:c::here o6) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
-                     rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+                     jl-end (:wat::core::+ (:c::here o6) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
+                     rel (:wat::core::- (:c::at-uflow rt) jl-end)]
                     (:wat::string::concat chk
-                      (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+                      (:wat::string::concat (:c::jcc-rel32 (:c::cc-less)) (:asm::le rel 4))))
                   "")
      o6a (:c::emit o6 root-guard)
      o6b (:c::emit o6a (:c::dec-hex))
@@ -5657,13 +5718,14 @@
      ;; Vector versions), so it is dropped once here and its own children are walked only
      ;; when that reaches zero, never unconditionally.
      o16 (:c::patch o15 interior-at (:asm::le (:wat::core::- (:c::codelen o15) (:wat::core::+ interior-at 4)) 4))
+     ;; same signed test as the root's guard above.
      child-guard (:wat::core::if dchk?
                    (:wat::core::let
                      [chk (:c::cmp-mi (:c::rax) -8 1)
-                      jb-end (:wat::core::+ (:c::here o16) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
-                      rel (:wat::core::- (:c::at-uflow rt) jb-end)]
+                      jl-end (:wat::core::+ (:c::here o16) (:wat::core::+ (:c::hexlen chk) (:c::rel32-size)))
+                      rel (:wat::core::- (:c::at-uflow rt) jl-end)]
                      (:wat::string::concat chk
-                       (:wat::string::concat (:c::jcc-rel32 (:c::cc-below)) (:asm::le rel 4))))
+                       (:wat::string::concat (:c::jcc-rel32 (:c::cc-less)) (:asm::le rel 4))))
                    "")
      o16a (:c::emit o16 child-guard)
      o16b (:c::emit o16a (:c::dec-hex))
@@ -5693,20 +5755,142 @@
      o27 (:c::emit o26 (:c::reg-pop (:c::rbx)))]
     (:c::emit o27 (:c::ret))))
 
+;; `k` into r11, then jump to `pend`. The drop site's `call` returns when `pend` does.
+(:wat::core::defn :c::member-stub [k <- :wat::core::i64 pg <- :c::Prog o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-ri (:c::r11) k))
+     pend (:c::pseudo-addr pg "pend")
+     rel (:wat::core::- pend (:wat::core::+ (:c::here o1) 5))]
+    (:c::emit o1 (:c::jmp-rel32 rel))))
+
+(:wat::core::defn :c::emit-jcc-at [o <- :c::Out cc <- :wat::core::i64 at <- :wat::core::i64] -> :c::Out
+  (:wat::core::let
+    [end (:wat::core::+ (:c::here o) (:c::rel32-size))
+     rel (:wat::core::- at end)]
+    (:c::emit o (:wat::string::concat (:c::jcc-rel32 cc) (:asm::le rel 4)))))
+
+(:wat::core::defn :c::emit-jcc-uflow [o <- :c::Out cc <- :wat::core::i64 rt <- :c::Layout] -> :c::Out
+  (:c::emit-jcc-at o cc (:c::at-uflow rt)))
+
+;; one arm of `pend`'s cascade: compare `k`, and on a hit run that member's body, then free
+;; or poison. The body is `mbody:` plus the type. Children inside it reach other members
+;; through their stubs (`:c::emit-drop`), never through this cascade.
+(:wat::core::defn :c::pend-arms [ms <- (:wat::core::Vector :- [:wat::core::String])
+                                 i <- :wat::core::i64 pg <- :c::Prog rt <- :c::Layout
+                                 o <- :c::Out loop-at <- :wat::core::i64] -> :c::Out
+  (:wat::core::if (:wat::core::>= i (:wat::core::length ms)) o
+    (:wat::core::let
+      [t (:wat::core::nth ms i)
+       o1 (:c::emit o (:c::cmp-ri (:c::r11) i))
+       o2 (:c::emit o1 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+       jne-at (:wat::core::- (:c::codelen o2) 4)
+       o3 (:c::emit o2 (:c::push-rax))
+       o4 (:c::call o3 (:c::glue-addr (:c::mbody-name t) pg))
+       o5 (:c::emit o4 (:c::pop-rax))
+       o6 (:wat::core::if (:c::Prog/dchk pg)
+            (:c::emit o5 (:c::mov-mi (:c::rax) -8 (:c::poison-count)))
+            (:c::call o5 (:c::free-target t pg)))
+       o7 (:wat::core::if (:c::Prog/census pg)
+            (:c::emit o6 (:c::add-mi (:c::r14)
+                          (:c::census-zero-count (:c::census-cat-of t)) 1))
+            o6)
+       back (:wat::core::- loop-at (:wat::core::+ (:c::here o7) 5))
+       o8 (:c::emit o7 (:c::jmp-rel32 back))
+       o9 (:c::patch-jmp o8 jne-at)]
+      (:c::pend-arms ms (:wat::core::+ i 1) pg rt o9 loop-at))))
+
+;; `pend(rax = dead object, r11 = k)`. Link a pending word `(1<<63)|(k<<47)|next` through the
+;; count word and make `rax` the head. If busy, return: a body is already draining, and this
+;; object will be seen when that loop pops. Otherwise set busy and drain. The object is
+;; unlinked before its body runs, so a nested stub pushes onto a list that no longer contains
+;; it. Clobbers `rax`, `rdx`, `r8`–`r11` and nothing else. A pointer at or above `2^47`
+;; jumps to `:c::rt-range`: the low 47 bits would no longer be a pointer, and that is not
+;; an underflow. An unknown `k` still jumps to `:c::rt-uflow` (a broken encoding).
+(:wat::core::defn :c::pend-glue-body [pg <- :c::Prog rt <- :c::Layout o <- :c::Out] -> :c::Out
+  (:wat::core::let
+    [o1 (:c::emit o (:c::mov-rm (:c::r14) (:c::hdr-wl-head) (:c::r8)))
+     o2 (:c::emit o1 (:c::mov-ri (:c::r10) 1))
+     o3 (:c::emit o2 (:c::shl-ri (:c::r10) 47))
+     o4 (:c::emit-jcc-at
+          (:c::emit o3 (:c::cmp-rr (:c::r10) (:c::rax)))
+          (:c::negate-cc (:c::cc-below)) (:c::at-range rt))
+     o5 (:c::emit-jcc-at
+          (:c::emit o4 (:c::cmp-rr (:c::r10) (:c::r8)))
+          (:c::negate-cc (:c::cc-below)) (:c::at-range rt))
+     o6 (:c::emit o5 (:c::mov-rr (:c::r11) (:c::r9)))
+     o7 (:c::emit o6 (:c::shl-ri (:c::r9) 47))
+     o8 (:c::emit o7 (:c::mov-ri (:c::r10) 1))
+     o9 (:c::emit o8 (:c::shl-ri (:c::r10) 63))
+     o10 (:c::emit o9 (:c::or-rr (:c::r10) (:c::r9)))
+     o11 (:c::emit o10 (:c::or-rr (:c::r8) (:c::r9)))
+     o12 (:c::emit o11 (:c::mov-mr (:c::r9) (:c::rax) -8))
+     o13 (:c::emit o12 (:c::mov-mr (:c::rax) (:c::r14) (:c::hdr-wl-head)))
+     o14 (:c::emit o13 (:c::cmp-mi (:c::r14) (:c::hdr-wl-busy) 0))
+     o15 (:c::emit o14 (:wat::string::concat (:c::jcc-rel32 (:c::negate-cc (:c::cc-zero))) "00000000"))
+     busy-at (:wat::core::- (:c::codelen o15) 4)
+     o16 (:c::emit o15 (:c::mov-mi (:c::r14) (:c::hdr-wl-busy) 1))
+     loop-at (:c::here o16)
+     o17 (:c::emit o16 (:c::mov-rm (:c::r14) (:c::hdr-wl-head) (:c::rax)))
+     o18 (:c::emit o17 (:c::test-rr (:c::rax) (:c::rax)))
+     o19 (:c::emit o18 (:wat::string::concat (:c::jcc-rel32 (:c::cc-zero)) "00000000"))
+     idle-at (:wat::core::- (:c::codelen o19) 4)
+     o20 (:c::emit o19 (:c::mov-rm (:c::rax) -8 (:c::r9)))
+     o21 (:c::emit o20 (:c::mov-rr (:c::r9) (:c::r8)))
+     o22 (:c::emit o21 (:c::mov-ri (:c::r10) 1))
+     o23 (:c::emit o22 (:c::shl-ri (:c::r10) 47))
+     o24 (:c::emit o23 (:c::sub-ri (:c::r10) 1))
+     o25 (:c::emit o24 (:c::and-rr (:c::r10) (:c::r8)))
+     o26 (:c::emit o25 (:c::mov-mr (:c::r8) (:c::r14) (:c::hdr-wl-head)))
+     o27 (:c::emit o26 (:c::mov-rr (:c::r9) (:c::r11)))
+     o28 (:c::emit o27 (:c::shr-ri (:c::r11) 47))
+     o29 (:c::emit o28 (:c::and-ri (:c::r11) 65535))
+     ms (:c::members-of (:c::Prog/gtys pg) 0 (:wat::core::Vector :- [:wat::core::String]))
+     o30 (:c::pend-arms ms 0 pg rt o29 loop-at)
+     o31 (:c::emit o30 (:c::jmp-rel32
+           (:wat::core::- (:c::at-uflow rt) (:wat::core::+ (:c::here o30) 5))))
+     o32 (:c::patch-jmp o31 idle-at)
+     o33 (:c::emit o32 (:c::mov-mi (:c::r14) (:c::hdr-wl-busy) 0))
+     o34 (:c::patch-jmp o33 busy-at)]
+    (:c::emit o34 (:c::ret))))
+
 (:wat::core::defn :c::glue-body [t <- :wat::core::String pg <- :c::Prog rt <- :c::Layout
                                  o <- :c::Out] -> :c::Out
   (:wat::core::cond
-    ((:wat::string::starts-with? t "rec:") (:c::rec-glue-body t pg rt o))
-    ((:wat::string::starts-with? t "henum:") (:c::henum-glue-body t pg rt o))
-    ((:wat::string::starts-with? t "vec:") (:c::vec-glue-body t pg rt o))
-    ((:wat::string::starts-with? t "node:")
-      (:c::node-glue-body (:wat::string::subs t 5 (:wat::string::length t)) pg rt o))
+    ;; the body entry. The type under the prefix is cyclic, so it must not fall through to
+    ;; the stub clause below: that would make the drain call the stub.
+    ((:c::mbody? t)
+      (:wat::core::let [u (:c::mbody-ty t)]
+        (:wat::core::cond
+          ((:wat::string::starts-with? u "rec:") (:c::rec-glue-body u pg rt o))
+          ((:wat::string::starts-with? u "henum:") (:c::henum-glue-body u pg rt o))
+          ((:wat::string::starts-with? u "vec:") (:c::vec-glue-body u pg rt o))
+          (:else (:wat::kernel::assertion-failed!
+                   :message (:wat::string::concat "compile: no member body for " u))))))
+    ((:wat::core::= t "pend") (:c::pend-glue-body pg rt o))
     ;; excursus 008 stone 3b-2 (F1/F2): the five free routines, always present
     ((:wat::core::= t "freestr") (:c::freestr-glue-body pg rt o))
     ((:wat::core::= t "freerec") (:c::freerec-glue-body pg rt o))
     ((:wat::core::= t "freevec") (:c::freevec-glue-body pg rt o))
     ((:wat::core::= t "freenode") (:c::freenode-glue-body pg rt o))
     ((:wat::core::= t "closize") (:c::closize-glue-body pg rt o))
+    ((:wat::core::and
+       (:wat::core::or (:wat::string::starts-with? t "rec:")
+         (:wat::core::or (:wat::string::starts-with? t "henum:")
+                         (:wat::string::starts-with? t "vec:")))
+       (:c::cyclic? t pg))
+      (:wat::core::let [k (:c::member-k t pg)]
+        (:wat::core::if (:wat::core::< k 0)
+          (:wat::kernel::assertion-failed!
+            :message (:wat::string::concat "compile: cyclic type is not a member: " t))
+          (:wat::core::if (:wat::core::>= k 65536)
+            (:wat::kernel::assertion-failed!
+              :message "compile: more than 65536 members")
+            (:c::member-stub k pg o)))))
+    ((:wat::string::starts-with? t "rec:") (:c::rec-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "henum:") (:c::henum-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "vec:") (:c::vec-glue-body t pg rt o))
+    ((:wat::string::starts-with? t "node:")
+      (:c::node-glue-body (:wat::string::subs t 5 (:wat::string::length t)) pg rt o))
     (:else (:wat::kernel::assertion-failed!
              :message (:wat::string::concat "compile: no glue shape for " t)))))
 
@@ -9184,7 +9368,8 @@
 ;; computed FROM this constant, so widening it is the whole change.
 ;;
 ;; excursus 008 M2 census: now a function of the switch, same shape -- `:c::hdr-buf`'s own value
-;; moves by exactly `:c::census-size` bytes when `WAT_HEAP_CENSUS=1`, OFF is unchanged.
+;; moves by exactly `:c::census-size` bytes when `WAT_HEAP_CENSUS=1`. Stone 3b-3a adds the two
+;; worklist words in front of that, so both switches sit 16 bytes higher than before the worklist.
 (:wat::core::defn :c::buf-bytes [census? <- :wat::core::bool] -> :wat::core::i64
   (:wat::core::+ 8192 (:wat::core::- (:c::hdr-buf census?) 16)))
 (:wat::core::defn :c::si-totalram [] -> :wat::core::i64 32)
@@ -9405,12 +9590,12 @@
     (:c::census-sum-r (:c::census-nroutines) (:c::census-alloc-bytes 0) 32 (:c::rax))
     (:c::census-sum-r 21 (:c::census-free-bytes 0 0) 16 (:c::rcx))
     (:c::sub-rr (:c::rcx) (:c::rax))))
-;; `r15`'s own value, less the heap's start (`r14 + buf-bytes`) -- bytes of heap ever touched.
-;; Post-M2-4 (the region release retired) `r15` only ever grows, so its value AT EXIT already
-;; IS the high-water mark; no running max needs tracking anywhere else.
+;; Bytes between the heap start and the greatest `r15` a bump committed. Youngest-free rewinds
+;; `r15` (stone 3b-2), so the value at exit is the top, not the high water. The mark is the
+;; word `:c::census-note-top` keeps, census builds only; a plain build does not emit it.
 (:wat::core::defn :c::census-hiwater [] -> :wat::core::String
   (:wat::string::concat
-    (:c::mov-rr (:c::r15) (:c::rax))
+    (:c::mov-rm (:c::r14) (:c::hdr-census-hiwater) (:c::rax))
     (:c::sub-rr (:c::r14) (:c::rax))
     (:c::sub-ri (:c::rax) (:c::buf-bytes true))))
 
@@ -9644,6 +9829,9 @@
   (:wat::string::concat
     (:c::mov-rr (:c::rax) (:c::r14))
     (:c::lea-at (:c::rax) (:c::buf-bytes census?) (:c::r15))
+    ;; F-212: the mark starts at the heap start, so a program that never bumps reports 0.
+    (:wat::core::if census?
+      (:c::mov-mr (:c::r15) (:c::r14) (:c::hdr-census-hiwater)) "")
     (:c::mov-rr (:c::rax) (:c::rcx))
     (:c::add-rr (:c::r12) (:c::rcx))
     (:c::mov-mr (:c::rcx) (:c::r14) (:c::hdr-limit))
@@ -10215,12 +10403,13 @@
     ;; spells, so nothing above ever named it. Every drop site in a check build needs the
     ;; stub reachable, whatever the program otherwise uses.
     ;; R19 (round 8): `:c::at-uflow` is `:c::rt-nth`'s `:else` fallthrough -- the LAST entry
-    ;; in that order, one past the last explicit index -- so its place is `(:c::rt-count) - 1`,
-    ;; not a second hand-copied `35` that a routine added to (or removed from) `:c::rt-nth`
-    ;; could leave stale independently of `:c::rt-count` itself.
-    (:wat::core::if (:c::Prog/dchk pg)
-      (:c::imax scanned (:wat::core::- (:c::rt-count) 1))
-      scanned)))
+    ;; in that order, one past the last explicit index -- so its place is `(:c::rt-count) - 1`.
+    ;; Round 2: `:c::at-range` is the entry before it. `pend` is in every binary and jumps
+    ;; there, so the plain block reaches it too. A check build reaches one further, underflow.
+    (:wat::core::let [with-range (:c::imax scanned (:wat::core::- (:c::rt-count) 2))]
+      (:wat::core::if (:c::Prog/dchk pg)
+        (:c::imax with-range (:wat::core::- (:c::rt-count) 1))
+        with-range))))
 
 ;; ---------------------------------------------------------------- what it decided, said out loud
 ;;
