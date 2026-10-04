@@ -15693,3 +15693,19 @@ has to"*. A valid program crashes natively. `elf/src/deep.wat` covers only the s
 
 Not traced further. The general fix is a jump to another function's body with the caller's frame replaced, and it
 interacts with the register convention (`:c::TC/nregs`, `:c::param-reg`) and with the drops placed before a tail call.
+
+### F-212: the census's `heap.hiwater_bytes` is the heap top at EXIT, not the high-water mark
+
+**Open.** Found 2026-10-03 weighing excursus 008 stone 3b-3a. A census build of `elf/probe/drop-3b-list.wat` allocates
+and frees 2,000,000 records (80,000,000 bytes, every one freed as the youngest) and peaks at about 4 MB of RSS. It prints
+`heap.hiwater_bytes 0`.
+
+`:c::census-hiwater` (`elf/compile.wat`, ~9585) reports `r15 - r14 - buf-bytes` at exit. Its comment's premise is
+"`r15` only ever grows, so its value AT EXIT already IS the high-water mark". That has been false since stone 3b-2:
+freeing the youngest object rewinds `r15` (`:c::free-tail-emit`, the YOUNGEST path). So the figure is the heap top at
+exit, a LOWER bound on the peak, and it falls further the better freeing works.
+
+What it touched: `WEIGH-M2.md` and `SCORE-retention-sites.md` quote "hiwater" figures as high water. No landing
+decision rested on them. The retention landing table and `NOTE-M2-landed.md` use peak RSS from `maxrss`, which is
+correct. The fix is a running maximum of `r15`, kept in the census build only, so the plain build stays byte-identical,
+or else a rename that says what the number is.
